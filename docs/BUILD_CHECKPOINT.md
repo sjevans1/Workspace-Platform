@@ -6,15 +6,16 @@ Updated 29 September 2026. Repository: https://github.com/sjevans1/Workspace-Pla
 
 Build the self-hosted OpenJM Workspace first pass from the Astra handoff. The user authorized implementation and GitHub commits/pushes, and requested incremental checkpoints to preserve continuity. Keep working without unnecessary confirmation. This is an executable alpha; see ACCEPTANCE.md for unfinished MVP requirements. Do not use Sites or connect a production Intelligence deployment without its configuration.
 
-## Published baseline and evidence
+## Verified baseline and evidence
 
-Code baseline: `c311936800e97891481db08b17bfeeb6170ba91a`.
-CI: https://github.com/sjevans1/Workspace-Platform/actions/runs/36574350190
+Runtime and tests: `e10d5676795f94a13a831989be3ace1e4b2c76fe`.
+Successful CI: https://github.com/sjevans1/Workspace-Platform/actions/runs/36611129995
 
 - Backend job passed: 23 native PostgreSQL tests, TypeScript and production build.
-- Docker image built; migrations, PostgreSQL, Valkey, API, collaboration, worker, web and Caddy started; readiness passed.
-- Browser scenario passed setup, page creation, typed content persisted to the API, two independent browser sessions, shared edits, reload, comments, history, Markdown export, table editing and board movement.
-- The final mobile check stopped because the desktop sidebar remained open after viewport resize and covered the header toggle. This checkpoint changes the test to close the visible sidebar using its own close button, then reopen it with the header toggle before navigating Home. Full browser acceptance is still pending the next run.
+- Deployment job passed: Docker image, migrations, full Compose startup and readiness.
+- Complete deployed Chromium scenario passed: setup, page creation, canonical server persistence, two independent browser sessions, shared edits, reload, comments, history, Markdown export, table editing, board movement and mobile navigation/layout.
+- Desktop and mobile screenshots were inspected. Successful-run screenshots remain in the CI browser-results artifact; precise boundaries are in ACCEPTANCE.md. Automatic approval review blocked committing screenshots to the public repository because they contain workspace/user labels. Do not retry that upload without resolving the approval requirement.
+- The earlier mobile test failure was corrected by closing the visible sidebar with its own button before reopening it through the header toggle.
 
 ## Fixes already persisted
 
@@ -24,12 +25,11 @@ CI: https://github.com/sjevans1/Workspace-Platform/actions/runs/36574350190
 - Trash traversal skips already-deleted descendants; numeric filters use numeric comparisons; record title limits match resource limits.
 - Docker excludes generated Next.js type references and defaults host bindings to loopback. HTTPS instructions include an explicit public bind address.
 
-## Next actions
+## First-pass completion and future work
 
-1. Inspect the CI run triggered by this commit; fix remaining browser failures if any.
-2. Download browser artifacts and visually inspect home, editor, table, board and mobile screenshots.
-3. Update ACCEPTANCE.md with observed results and the successful run link; save selected screenshots in the repository.
-4. Commit/push the report and verify repository state. Report the usable alpha and remaining MVP boundaries honestly.
+This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
+
+The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, retention, operational hardening and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 

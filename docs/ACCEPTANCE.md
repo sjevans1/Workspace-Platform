@@ -2,7 +2,9 @@
 
 This is an executable alpha built from the OpenJM Workspace Astra handoff, not a claim that the complete MVP definition of done has been met.
 
-## Verified in the build environment
+## Verified on 29 September 2026
+
+Both jobs passed in [GitHub Actions run 36611129995](https://github.com/sjevans1/Workspace-Platform/actions/runs/36611129995), testing commit `e10d5676795f94a13a831989be3ace1e4b2c76fe`. Subsequent documentation/screenshot commits do not change that runtime baseline.
 
 | Check | Result |
 |---|---|
@@ -20,11 +22,17 @@ This is an executable alpha built from the OpenJM Workspace Astra handoff, not a
 | Markdown/CSV imports and permission recheck | Pass |
 | Trash cascade and restore | Pass |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL, browser and Docker acceptance | GitHub Actions workflow provided; see the repository Actions run for its current result |
+| Native PostgreSQL 17 test suite | 23 passed; clean process shutdown |
+| Docker image, migrations and full Compose startup | Pass; readiness endpoint healthy |
+| Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
+| Mobile viewport, 390 × 844 | Pass; sidebar navigation and no document-width overflow |
+| Browser runtime errors | None in the primary session during the tested workflow |
 
 Local backend tests run against PGlite's PostgreSQL engine, with serialized test transactions because its socket bridge multiplexes one backend. Production uses normal native PostgreSQL transactions. Native PostgreSQL is a separate required CI gate, not assumed equivalent solely from PGlite results.
 
-The local Chromium binary crashed before loading the application in the managed execution environment. Browser acceptance has therefore been transferred to the repository CI job. The browser test covers setup, page creation, two independent signed-in browser sessions, save/reload, comments, history, export, table/board updates and a mobile viewport. Screenshots and traces are workflow artifacts. Do not describe that browser scenario as passed until the linked run succeeds.
+Browser acceptance ran against the full Docker deployment, using the restricted runtime database account and the Caddy reverse proxy. Two independent signed-in browser contexts exchanged edits; the test also queried canonical API content before opening the second context and checked content after reload. This is one Chromium acceptance scenario, not a complete browser or accessibility audit. Local Chromium could not launch in the managed build environment, so CI supplied the browser evidence.
+
+The successful CI run contains a browser-results artifact with home, editor, table, board and mobile screenshots. Desktop layouts and the mobile screenshot were visually inspected. Automatic approval review blocked adding those images to the public source repository because they contain workspace/user labels; they are not included in this documentation commit.
 
 ## Implemented features
 
@@ -44,11 +52,11 @@ The repository contains a connected interface, API, collaboration server, import
 | Import/export | Markdown/CSV imports capped at 2 MiB; CSV at 2,000 rows/100 columns. Synchronous exports cap at 10,000 records. No bulk zipped workspace export or large streamed job output. |
 | Integrations | No actual OpenJM Intelligence deployment connected. Stable event cursor, reconciliation API, receiver secret rotation and dead-letter replay UI remain. The example documents mandatory permission recheck. |
 | API contracts | Versioned routes and interactive OpenAPI inventory exist. Complete body/response schemas and generated client SDK are not finished. |
-| Operations | Native container end-to-end gate, real HTTPS/LAN installation, S3 backup drill, host recovery drill, metrics/alerts, encryption-at-rest integration and release image scanning remain rollout requirements. |
-| Browser/accessibility | Browser workflow and screenshot artifacts are in CI. Accessibility audit, keyboard/focus testing of all dialogs, visual regression and multiple browser engines remain. |
+| Operations | Real HTTPS/LAN installation, S3 backup drill, host recovery drill, metrics/alerts, encryption-at-rest integration and release image scanning remain rollout requirements. |
+| Browser/accessibility | The Chromium workflow and screenshots pass in CI. Accessibility audit, keyboard/focus testing of all dialogs, visual regression and multiple browser engines remain. |
 | Branding | Runtime and sign-in configuration exist. Light theme is implemented; dark-logo config is retained but a full dark theme is not implemented. |
 | Licensing | Unmodified dependency notices and npm SBOM are included. Mirror the exact MPL source archives and generate container/base-OS SBOMs for each commercial release. Final product/legal packaging still needs review. |
 
 ## Suggested next acceptance slice
 
-First make the native PostgreSQL/browser/container CI gate green and inspect the screenshots. Then run a real customer-like two-user evaluation on a TLS-enabled host, including permission revocation during edits, object-store backup recovery and migration recovery. Resolve the identity, retention and operational items before calling the product production ready.
+With the native PostgreSQL/browser/container gate passing, run a real customer-like two-user evaluation on a TLS-enabled host, including permission revocation during edits, object-store backup recovery and migration recovery. Resolve the identity, retention and operational items before calling the product production ready.

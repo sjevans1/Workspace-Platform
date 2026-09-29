@@ -4,6 +4,8 @@ A self-hosted, white-label workspace for shared knowledge, collaborative pages a
 
 **Status: working alpha, not the completed production MVP.** The backend, collaboration protocol, tenant isolation and backup round trip have automated coverage. See [acceptance status and remaining work](docs/ACCEPTANCE.md) for the exact verification boundary.
 
+[Verified CI run](https://github.com/sjevans1/Workspace-Platform/actions/runs/36611129995): 23 native PostgreSQL tests, production build, Docker startup and the complete desktop/mobile Chromium workflow passed. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff.
+
 ## Start locally
 
 Use Node.js 24 and npm 11. On Windows, WSL2 is a convenient development environment.
