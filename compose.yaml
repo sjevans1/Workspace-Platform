@@ -106,7 +106,9 @@ services:
     image: caddy:2.11.4-alpine
     environment:
       CADDY_ADDRESS: ${CADDY_ADDRESS:-:80}
-    ports: ["${HTTP_PORT:-8080}:80", "${HTTPS_PORT:-8443}:443"]
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTPS_PORT:-8443}:443"
     volumes:
       [
         "./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro",

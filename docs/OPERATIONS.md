@@ -30,6 +30,7 @@ Point your domain at the host, permit TCP 80 and 443, and edit `.env`:
 ```dotenv
 APP_URL=https://workspace.example.com
 CADDY_ADDRESS=workspace.example.com
+BIND_ADDRESS=0.0.0.0
 HTTP_PORT=80
 HTTPS_PORT=443
 COOKIE_SECURE=true

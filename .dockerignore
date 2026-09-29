@@ -10,3 +10,5 @@ test-results
 playwright-report
 *.log
 **/*.tsbuildinfo
+
+**/next-env.d.ts

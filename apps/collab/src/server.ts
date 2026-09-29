@@ -13,6 +13,8 @@ import { project } from "../../../packages/editor/server.ts";
 import { emit } from "../../../packages/events/index.ts";
 type Context = { ticket: Ticket; actor: Actor };
 export async function createCollab(db: Database, port = 1234) {
+  const documents = new Set<Document>();
+  let closing = false;
   const lease = await db.pool.connect();
   if (
     !(await lease.query("SELECT pg_try_advisory_lock(8974434) acquired"))
@@ -75,22 +77,34 @@ export async function createCollab(db: Database, port = 1234) {
     maxDebounce: 2000,
     timeout: 15000,
     async onAuthenticate({ token, documentName, connectionConfig }) {
+      assert(!closing, 503, "Collaboration server is stopping");
       const ticket = verifyTicket(token),
         v = await authorize(ticket, documentName);
       connectionConfig.readOnly = v.level < 3;
       return { ticket, actor: v.actor };
     },
     async onLoadDocument({ document, context }) {
-      const t = context.ticket;
-      const d = await db.tenant(t.tenant, (q) =>
-        one(
-          q,
-          "SELECT y_state FROM page_documents WHERE resource_id=$1 AND epoch=$2",
-          [t.resource, t.epoch],
-        ),
-      );
-      assert(d, 409, "Document changed");
-      Y.applyUpdate(document, d.y_state);
+      documents.add(document);
+      document.on("destroy", () => documents.delete(document));
+      try {
+        assert(!closing, 503, "Collaboration server is stopping");
+        const t = context.ticket;
+        const d = await db.tenant(t.tenant, (q) =>
+          one(
+            q,
+            "SELECT y_state FROM page_documents WHERE resource_id=$1 AND epoch=$2",
+            [t.resource, t.epoch],
+          ),
+        );
+        assert(d, 409, "Document changed");
+        assert(!closing, 503, "Collaboration server is stopping");
+        Y.applyUpdate(document, d.y_state);
+      } catch (error) {
+        // Failed loads are not registered in Hocuspocus's document map yet.
+        // Explicitly release their awareness timer before propagating failure.
+        document.destroy();
+        throw error;
+      }
     },
     async beforeHandleMessage({ context, documentName, update, connection }) {
       assert(update.byteLength <= 1048576, 413, "Update too large");
@@ -240,8 +254,20 @@ export async function createCollab(db: Database, port = 1234) {
   return {
     server,
     close: async () => {
+      closing = true;
       clearInterval(timer);
+      await Promise.allSettled(server.hocuspocus.loadingDocuments.values());
       await server.destroy();
+      // A document detached during a concurrent reconnect can outlive the
+      // server registry. Dispose only idle documents after pending stores drain.
+      for (const document of documents) {
+        assert(
+          server.hocuspocus.shouldUnloadDocument(document),
+          500,
+          "Collaboration document still has pending work during shutdown",
+        );
+        document.destroy();
+      }
       await lease.query("SELECT pg_advisory_unlock(8974434)");
       lease.release();
     },

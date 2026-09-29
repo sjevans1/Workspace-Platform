@@ -12,7 +12,7 @@ async function login(page: Page) {
   ) {
     await page
       .getByLabel("Setup token", { exact: true })
-      .fill("e2e-setup-token");
+      .fill(process.env.E2E_SETUP_TOKEN || "e2e-setup-token");
     await page.getByLabel("Organisation", { exact: true }).fill("OpenJM");
     await page.getByLabel("Workspace", { exact: true }).fill("Team workspace");
     await page.getByLabel("Your name", { exact: true }).fill("Shane Evans");

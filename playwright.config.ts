@@ -7,7 +7,7 @@ export default defineConfig({
   expect: { timeout: 20000 },
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: process.env.E2E_BASE_URL || "http://localhost:3000",
     headless: true,
     viewport: { width: 1440, height: 1000 },
     trace: "retain-on-failure",
@@ -19,17 +19,19 @@ export default defineConfig({
         }
       : {},
   },
-  webServer: {
-    command: "node --import tsx scripts/dev.ts",
-    url: "http://localhost:3000",
-    timeout: 120000,
-    reuseExistingServer: false,
-    env: {
-      SETUP_TOKEN: "e2e-setup-token",
-      ENCRYPTION_KEY: "e".repeat(64),
-      DEV_DATABASE_PATH: ".data/e2e-postgres",
-      E2E_PRODUCTION: "true",
-      NEXT_TELEMETRY_DISABLED: "1",
-    },
-  },
+  webServer: process.env.E2E_BASE_URL
+    ? undefined
+    : {
+        command: "node --import tsx scripts/dev.ts",
+        url: "http://localhost:3000",
+        timeout: 120000,
+        reuseExistingServer: false,
+        env: {
+          SETUP_TOKEN: "e2e-setup-token",
+          ENCRYPTION_KEY: "e".repeat(64),
+          DEV_DATABASE_PATH: ".data/e2e-postgres",
+          E2E_PRODUCTION: "true",
+          NEXT_TELEMETRY_DISABLED: "1",
+        },
+      },
 });
