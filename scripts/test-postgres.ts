@@ -17,8 +17,11 @@ export async function testPostgres(port = 55432, persistent = false) {
       url: url.toString(),
       emulated: false,
       close: async () => {
-        await owner.query(`DROP DATABASE ${name} WITH (FORCE)`);
-        await owner.end();
+        try {
+          await owner.query(`DROP DATABASE ${name}`);
+        } finally {
+          await owner.end();
+        }
       },
     };
   }

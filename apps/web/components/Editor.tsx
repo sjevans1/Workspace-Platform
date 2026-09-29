@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
 import { useCreateBlockNote } from "@blocknote/react";
+import { withCollaboration } from "@blocknote/core/yjs";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { api, notify } from "../lib/api";
@@ -19,18 +20,21 @@ function Body({
   id: string;
   readOnly: boolean;
 }) {
-  const editor = useCreateBlockNote({
-    collaboration: {
-      provider,
-      fragment: doc.getXmlFragment("document"),
-      user: { name: user.name, color: "#287661" },
-    },
-    uploadFile: async (file) => {
-      const data = new FormData();
-      data.append("file", file);
-      return (await api(`/resources/${id}/files`, "POST", data)).url;
-    },
-  });
+  const editor = useCreateBlockNote(
+    withCollaboration({
+      collaboration: {
+        provider: { awareness: provider.awareness || undefined },
+        fragment: doc.getXmlFragment("document"),
+        user: { name: user.name, color: "#287661" },
+      },
+      uploadFile: async (file: File) => {
+        const data = new FormData();
+        data.append("file", file);
+        return (await api(`/resources/${id}/files`, "POST", data)).url;
+      },
+    }),
+    [doc, provider],
+  );
   return <BlockNoteView editor={editor} editable={!readOnly} theme="light" />;
 }
 export default function Editor({ id, user }: { id: string; user: any }) {

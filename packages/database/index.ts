@@ -9,6 +9,7 @@ export const one = async (q: Query, sql: string, params: any[] = []) =>
   (await q.query(sql, params)).rows[0];
 export class Database {
   pool: pg.Pool;
+  private clients = new Set<pg.PoolClient>();
   private queue: Promise<unknown> = Promise.resolve();
   constructor(
     url = process.env.DATABASE_URL,
@@ -16,6 +17,10 @@ export class Database {
   ) {
     if (!url) throw new Error("DATABASE_URL required");
     this.pool = new pg.Pool({ connectionString: url, max: 12 });
+    this.pool.on("connect", (client) => {
+      this.clients.add(client);
+      client.once("end", () => this.clients.delete(client));
+    });
   }
   private guard<T>(fn: () => Promise<T>): Promise<T> {
     if (!this.options.serialize) return fn();
@@ -45,6 +50,14 @@ export class Database {
     });
   }
   async close() {
+    await this.queue;
     await this.pool.end();
+    // pg-pool can resolve end() before idle clients finish closing their TCP
+    // connections. Wait for those ends before teardown or database removal.
+    await Promise.all(
+      [...this.clients].map(
+        (client) => new Promise<void>((resolve) => client.once("end", resolve)),
+      ),
+    );
   }
 }

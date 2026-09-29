@@ -54,12 +54,21 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   await expect(editor).toBeVisible();
   await editor.click();
   await page.keyboard.type("Shared context survives a reload.");
+  await expect(editor).toContainText("Shared context survives a reload.");
   await expect(
     page
       .getByRole("status", { name: "", exact: true })
       .filter({ hasText: "Saved" }),
   ).toBeVisible();
   const url = page.url();
+  const id = new URL(url).searchParams.get("page");
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(`/api/v1/pages/${id}/content`);
+      expect(response.ok()).toBeTruthy();
+      return (await response.json()).plain_text;
+    })
+    .toContain("Shared context survives a reload.");
   const second = await browser.newContext();
   const other = await second.newPage();
   await login(other);
@@ -105,7 +114,6 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
       .getByText("Revision 1", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
-  const id = new URL(page.url()).searchParams.get("page");
   const exported = await page.request.get(
     `/api/v1/resources/${id}/export?format=markdown`,
   );
