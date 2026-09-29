@@ -646,7 +646,7 @@ export async function buildApp(
       );
       const all = (
         await q.query(
-          "WITH RECURSIVE subtree AS(SELECT id,kind FROM resources WHERE id=$1 UNION ALL SELECT r.id,r.kind FROM resources r JOIN subtree s ON r.parent_id=s.id) SELECT * FROM subtree",
+          "WITH RECURSIVE subtree AS(SELECT id,kind FROM resources WHERE id=$1 UNION ALL SELECT r.id,r.kind FROM resources r JOIN subtree s ON r.parent_id=s.id WHERE r.deleted_at IS NULL) SELECT * FROM subtree",
           [n.id],
         )
       ).rows;

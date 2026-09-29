@@ -25,6 +25,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:test-only-password@localhost:5432/workspace
       NEXT_TELEMETRY_DISABLED: "1"
+      TEST_SHUTDOWN_DIAGNOSTICS: "true"
       PGOPTIONS: "-c statement_timeout=30000 -c lock_timeout=10000"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -63,8 +64,8 @@ jobs:
             test-results
             docs/screenshots
       - name: Deployment logs
-        if: failure()
+        if: failure() && hashFiles('.env') != ''
         run: docker compose logs --tail=100
       - name: Stop deployment
-        if: always()
+        if: always() && hashFiles('.env') != ''
         run: docker compose down

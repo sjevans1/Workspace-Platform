@@ -1,4 +1,5 @@
 import { test, before, after } from "node:test";
+import { shutdownDiagnostics } from "./shutdown-diagnostics.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -148,12 +149,17 @@ before(async () => {
   collab = await createCollab(db, 1235);
 });
 after(async () => {
-  providers.forEach((p) => p.destroy());
+  const done = shutdownDiagnostics();
+  providers.forEach((p) => {
+    p.destroy();
+    p.document.destroy();
+  });
   await collab?.close();
   await app?.close();
   await db?.close();
   await pg?.close();
   await rm(dir, { recursive: true, force: true });
+  done();
 });
 test("setup is one-time and writes require CSRF", async () => {
   assert.equal(
@@ -584,6 +590,8 @@ test("exports have canonical text and formula-safe CSV", async () => {
   );
 });
 test("trash cascade is atomic and restore preserves content", async () => {
+  const children = await ok("GET", `/resources?parent_id=${page.id}`);
+  await ok("DELETE", `/resources/${children[0].id}`);
   await ok("DELETE", `/resources/${space.id}`);
   assert.equal((await req("GET", `/pages/${page.id}/content`)).statusCode, 404);
   assert.equal(
