@@ -1,0 +1,1 @@
+import {Database} from '../../../packages/database/index.ts';import {startWorker} from './worker.ts';const db=new Database(),stop=startWorker(db);for(const sig of ['SIGTERM','SIGINT'])process.on(sig,async()=>{await stop();await db.close();process.exit(0);});
