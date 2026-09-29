@@ -888,7 +888,11 @@ export async function buildApp(
   );
   dataRoutes(route, storage);
   app.addHook("onClose", async () => {
-    await redis?.quit();
+    try {
+      await redis?.quit();
+    } finally {
+      storage.close?.();
+    }
   });
   return app;
 }

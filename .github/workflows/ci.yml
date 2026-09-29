@@ -14,6 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
+      seaweedfs:
+        image: chrislusf/seaweedfs:4.47
+        env:
+          AWS_ACCESS_KEY_ID: workspace-ci
+          AWS_SECRET_ACCESS_KEY: workspace-ci-secret
+          S3_BUCKET: workspace-ci
+        ports: ["8333:8333"]
       postgres:
         image: postgres:17.11-bookworm
         env:
@@ -24,6 +31,9 @@ jobs:
         options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 20
     env:
       TEST_DATABASE_URL: postgres://postgres:test-only-password@localhost:5432/workspace
+      TEST_S3_ENDPOINT: http://127.0.0.1:8333
+      TEST_S3_ACCESS_KEY: workspace-ci
+      TEST_S3_SECRET_KEY: workspace-ci-secret
       NEXT_TELEMETRY_DISABLED: "1"
       TEST_SHUTDOWN_DIAGNOSTICS: "true"
       PGOPTIONS: "-c statement_timeout=30000 -c lock_timeout=10000"

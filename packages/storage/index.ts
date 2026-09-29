@@ -12,30 +12,37 @@ export interface Storage {
   get(key: string): Promise<Buffer>;
   delete(key: string): Promise<void>;
   health(): Promise<void>;
+  close?(): void;
 }
-function local(key: string) {
+function local(root: string, key: string) {
   if (!/^[a-f0-9-]+\/[a-f0-9-]+\/[a-f0-9-]+$/.test(key))
     throw new Error("Invalid object key");
-  return path.join(process.env.STORAGE_LOCAL_PATH || ".data/files", key);
+  return path.join(root, key);
 }
-export function createStorage(): Storage {
-  if (process.env.STORAGE_PROVIDER === "s3") {
+export function createStorage(env: NodeJS.ProcessEnv = process.env): Storage {
+  if (env.STORAGE_PROVIDER === "s3") {
     const client = new S3Client({
-        endpoint: process.env.S3_ENDPOINT || undefined,
-        region: process.env.S3_REGION || "us-east-1",
-        forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== "false",
-        credentials: process.env.S3_ACCESS_KEY
+        endpoint: env.S3_ENDPOINT || undefined,
+        region: env.S3_REGION || "us-east-1",
+        forcePathStyle: env.S3_FORCE_PATH_STYLE !== "false",
+        credentials: env.S3_ACCESS_KEY
           ? {
-              accessKeyId: process.env.S3_ACCESS_KEY,
-              secretAccessKey: process.env.S3_SECRET_KEY || "",
+              accessKeyId: env.S3_ACCESS_KEY,
+              secretAccessKey: env.S3_SECRET_KEY || "",
             }
           : undefined,
       }),
-      Bucket = process.env.S3_BUCKET || "workspace";
+      Bucket = env.S3_BUCKET || "workspace";
     return {
       async put(Key, Body, ContentType) {
         await client.send(
-          new PutObjectCommand({ Bucket, Key, Body, ContentType }),
+          new PutObjectCommand({
+            Bucket,
+            Key,
+            Body,
+            ContentType,
+            IfNoneMatch: "*",
+          }),
         );
       },
       async get(Key) {
@@ -48,22 +55,24 @@ export function createStorage(): Storage {
       async health() {
         await client.send(new HeadBucketCommand({ Bucket }));
       },
+      close: () => client.destroy(),
     };
   }
+  const root = env.STORAGE_LOCAL_PATH || ".data/files";
   return {
     async put(k, b) {
-      const p = local(k);
+      const p = local(root, k);
       await mkdir(path.dirname(p), { recursive: true });
       await writeFile(p, b, { flag: "wx" });
     },
-    get: async (k) => readFile(local(k)),
+    get: async (k) => readFile(local(root, k)),
     async delete(k) {
-      await unlink(local(k)).catch((e) => {
+      await unlink(local(root, k)).catch((e) => {
         if (e.code !== "ENOENT") throw e;
       });
     },
     async health() {
-      await mkdir(process.env.STORAGE_LOCAL_PATH || ".data/files", {
+      await mkdir(root, {
         recursive: true,
       });
     },

@@ -25,6 +25,12 @@ Successful CI: https://github.com/sjevans1/Workspace-Platform/actions/runs/36611
 - Trash traversal skips already-deleted descendants; numeric filters use numeric comparisons; record title limits match resource limits.
 - Docker excludes generated Next.js type references and defaults host bindings to loopback. HTTPS instructions include an explicit public bind address.
 
+## Active next slice: storage recovery and two-user revocation
+
+The user authorized continuation after the verified first pass. The next increment adds an authenticated SeaweedFS 4.47 service to CI and a recovery test using separate source/recovery PostgreSQL databases and S3 buckets. It covers anonymous and bad-credential rejection, immutable object writes, canonical Yjs and retained-file recovery, checksum/key/schema checks, collision handling and upload-failure rollback. S3 PUT now uses If-None-Match to match local storage’s no-overwrite contract; storage clients are closed on shutdown.
+
+Local TypeScript passes. The S3 integration test requires TEST_DATABASE_URL and TEST_S3_ENDPOINT and is skipped without them; native CI results are still pending for this increment. Next: execute this new CI gate, add deployed-browser coverage for invitation acceptance and live revocation between distinct users, and update this checkpoint with actual results.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.

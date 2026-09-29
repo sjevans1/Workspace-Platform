@@ -152,19 +152,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     throw Error("Usage: backup.ts backup|restore <archive.json>");
   const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
   if (!url) throw Error("Owner database URL required");
-  if (mode === "backup") {
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, JSON.stringify(await backup(url, createStorage())), {
-      mode: 0o600,
-      flag: "wx",
-    });
-    console.log(`Backup written: ${path}`);
-  } else {
-    await restore(
-      url,
-      JSON.parse(await readFile(path, "utf8")),
-      createStorage(),
-    );
-    console.log("Restore completed");
+  const storage = createStorage();
+  try {
+    if (mode === "backup") {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, JSON.stringify(await backup(url, storage)), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      console.log(`Backup written: ${path}`);
+    } else {
+      await restore(url, JSON.parse(await readFile(path, "utf8")), storage);
+      console.log("Restore completed");
+    }
+  } finally {
+    storage.close?.();
   }
 }
