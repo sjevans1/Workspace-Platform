@@ -1,0 +1,26 @@
+{$CADDY_ADDRESS::80} {
+  encode zstd gzip
+  header {
+    -Server
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    X-Frame-Options SAMEORIGIN
+  }
+  handle /collaboration* {
+    reverse_proxy collab:1234
+  }
+  handle /api/* {
+    reverse_proxy api:4000
+  }
+  handle /health {
+    reverse_proxy api:4000
+  }
+  handle /ready {
+    reverse_proxy api:4000
+  }
+  handle {
+    header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    reverse_proxy web:3000
+  }
+}
