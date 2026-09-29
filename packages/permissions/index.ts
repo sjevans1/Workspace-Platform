@@ -1,6 +1,61 @@
-import type{Query}from'../database/index.ts';import type{Actor}from'../auth/index.ts';import{HttpError}from'../contracts/index.ts';
-export function evaluate(a:Pick<Actor,'role'|'user_id'>,path:any[],deleted=false){if(!path.length||(!deleted&&path.some(p=>p.deleted_at)))return 0;if(['owner','admin'].includes(a.role))return 4;let level=a.role==='guest'?0:3;for(const p of path){if(!p.inherit_permissions)level=0;const g=p.acl.find((g:any)=>g.principal_id===a.user_id)??p.acl.find((g:any)=>g.principal_id==='*');if(g)level=g.level;if(!level)return 0;}return level;}
-export async function ancestry(q:Query,id:string){return(await q.query(`WITH RECURSIVE chain AS(SELECT r.*,0 depth,ARRAY[r.id] path FROM resources r WHERE id=$1 UNION ALL SELECT r.*,c.depth+1,c.path||r.id FROM resources r JOIN chain c ON c.parent_id=r.id WHERE NOT r.id=ANY(c.path) AND c.depth<64) SELECT c.*,coalesce((SELECT jsonb_agg(jsonb_build_object('principal_id',a.principal_id,'level',a.level)) FROM acl a WHERE a.resource_id=c.id),'[]') acl FROM chain c ORDER BY depth DESC`,[id])).rows;}
-export async function access(q:Query,a:Actor,id:string,deleted=false){return evaluate(a,await ancestry(q,id),deleted);}
-export async function requireAccess(q:Query,a:Actor,id:string,level=1,deleted=false){const path=await ancestry(q,id),effective=evaluate(a,path,deleted);if(effective<level)throw new HttpError(effective?403:404,effective?'Insufficient permission':'Resource not found');return{...path.at(-1),effective_permission:effective};}
-export async function visible(q:Query,a:Actor,rows:any[],deleted=false){const out=[];for(const r of rows){const level=await access(q,a,r.resource_id||r.id,deleted);if(level)out.push({...r,effective_permission:level});}return out;}
+import type { Query } from "../database/index.ts";
+import type { Actor } from "../auth/index.ts";
+import { HttpError } from "../contracts/index.ts";
+export function evaluate(
+  a: Pick<Actor, "role" | "user_id">,
+  path: any[],
+  deleted = false,
+) {
+  if (!path.length || (!deleted && path.some((p) => p.deleted_at))) return 0;
+  if (["owner", "admin"].includes(a.role)) return 4;
+  let level = a.role === "guest" ? 0 : 3;
+  for (const p of path) {
+    if (!p.inherit_permissions) level = 0;
+    const g =
+      p.acl.find((g: any) => g.principal_id === a.user_id) ??
+      p.acl.find((g: any) => g.principal_id === "*");
+    if (g) level = g.level;
+    if (!level) return 0;
+  }
+  return level;
+}
+export async function ancestry(q: Query, id: string) {
+  return (
+    await q.query(
+      `WITH RECURSIVE chain AS(SELECT r.*,0 depth,ARRAY[r.id] path FROM resources r WHERE id=$1 UNION ALL SELECT r.*,c.depth+1,c.path||r.id FROM resources r JOIN chain c ON c.parent_id=r.id WHERE NOT r.id=ANY(c.path) AND c.depth<64) SELECT c.*,coalesce((SELECT jsonb_agg(jsonb_build_object('principal_id',a.principal_id,'level',a.level)) FROM acl a WHERE a.resource_id=c.id),'[]') acl FROM chain c ORDER BY depth DESC`,
+      [id],
+    )
+  ).rows;
+}
+export async function access(q: Query, a: Actor, id: string, deleted = false) {
+  return evaluate(a, await ancestry(q, id), deleted);
+}
+export async function requireAccess(
+  q: Query,
+  a: Actor,
+  id: string,
+  level = 1,
+  deleted = false,
+) {
+  const path = await ancestry(q, id),
+    effective = evaluate(a, path, deleted);
+  if (effective < level)
+    throw new HttpError(
+      effective ? 403 : 404,
+      effective ? "Insufficient permission" : "Resource not found",
+    );
+  return { ...path.at(-1), effective_permission: effective };
+}
+export async function visible(
+  q: Query,
+  a: Actor,
+  rows: any[],
+  deleted = false,
+) {
+  const out = [];
+  for (const r of rows) {
+    const level = await access(q, a, r.resource_id || r.id, deleted);
+    if (level) out.push({ ...r, effective_permission: level });
+  }
+  return out;
+}

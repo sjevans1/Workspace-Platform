@@ -1,7 +1,826 @@
-'use client';import {useEffect,useState} from 'react';import {Plus,Table2,Columns3,SlidersHorizontal,Filter,ArrowUpRight,ArrowUp,ArrowDown} from 'lucide-react';import {api,run,notify,go,changed} from '../lib/api';import {Modal,Field,Empty} from './common';
-export function PropertyInput({p,value,members=[],disabled=false,save}:{p:any;value:any;members?:any[];disabled?:boolean;save:(v:any)=>void}){if(p.type==='checkbox')return <input aria-label={p.name} type="checkbox" checked={!!value} disabled={disabled} onChange={e=>save(e.target.checked)}/>;if(['select','status','person','multi_select'].includes(p.type)){const options=p.type==='person'?members.filter(m=>m.active&&!m.is_service).map(m=>({id:m.id,name:m.name})):(p.options||[]).map((x:string)=>({id:x,name:x}));return <select className={p.type==='status'?`status-select status-${String(value).replaceAll(' ','-').toLowerCase()}`:''} aria-label={p.name} value={p.type==='multi_select'?value||[]:value||''} multiple={p.type==='multi_select'} disabled={disabled} onChange={e=>save(p.type==='multi_select'?Array.from(e.target.selectedOptions).map(o=>o.value):e.target.value||null)}>{p.type!=='multi_select'&&<option value="">—</option>}{options.map((o:any)=><option key={o.id} value={o.id}>{o.name}</option>)}</select>;}return <input key={JSON.stringify(value)} aria-label={p.name} type={({number:'number',date:'date',email:'email',url:'url'} as Record<string,string>)[p.type]||'text'} step={p.type==='number'?'any':undefined} defaultValue={value??''} disabled={disabled} placeholder="—" onBlur={e=>{const v=e.target.value? p.type==='number'?Number(e.target.value):e.target.value:null;if(v!==(value??null))save(v);}} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();}}/>;}
-export default function Database({id,editable}:{id:string;editable:boolean}){const[data,setData]=useState<any>(),[rows,setRows]=useState<any[]>([]),[members,setMembers]=useState<any[]>([]),[selected,setSelected]=useState(''),[offset,setOffset]=useState(0),[panel,setPanel]=useState(''),[name,setName]=useState('');const current=data?.views.find((v:any)=>v.id===selected)||data?.views[0];async function load(viewId=selected){const d=await api(`/databases/${id}`);setData(d);const v=d.views.find((v:any)=>v.id===viewId)||d.views[0];setSelected(v?.id||'');setRows(await api(`/databases/${id}/records?limit=100&offset=${offset}${v?`&view=${v.id}`:''}`));}useEffect(()=>{run(async()=>{await load();setMembers(await api('/members'));});},[id,selected,offset]);if(!data)return <div className="loading">Opening database…</div>;const config=current?.config||{type:'table',filters:[],sort:[]};const props=(config.order||data.properties.map((p:any)=>p.id)).map((k:string)=>data.properties.find((p:any)=>p.id===k)).filter((p:any)=>p&&(!config.visible||config.visible.includes(p.id)));async function save(row:any,property:string,value:any){await run(async()=>{await api(`/records/${row.id}`,'PATCH',{values:{[property]:value},expected_revision:row.revision});await load();changed();});}
- async function switchType(type:string){const v=data.views.find((v:any)=>v.config.type===type);if(v){setSelected(v.id);setOffset(0);return;}if(!editable)return notify('No saved board view is available');const group=data.properties.find((p:any)=>['select','status'].includes(p.type));if(type==='board'&&!group)return notify('Add a Select or Status property before creating a board');const created=await api(`/databases/${id}/views`,'POST',{name:type==='board'?'Board':'Table',config:{type,groupBy:group?.id,filters:[],sort:[]}});await load(created.id);}
- const group=data.properties.find((p:any)=>p.id===config.groupBy),groups=[...(group?.options||[]),''];return <div className="database"><div className="database-toolbar"><div className="view-tabs"><button className={config.type==='table'?'selected':''} onClick={()=>run(()=>switchType('table'))}><Table2 size={16}/>Table</button><button className={config.type==='board'?'selected':''} onClick={()=>run(()=>switchType('board'))}><Columns3 size={16}/>Board</button></div><select className="view-select" aria-label="Saved view" value={selected} onChange={e=>{setSelected(e.target.value);setOffset(0);}}>{data.views.map((v:any)=><option key={v.id} value={v.id}>{v.name}</option>)}</select><div className="database-controls"><button className="button quiet" onClick={()=>setPanel('view')}><Filter size={14}/>Filter & sort{config.filters.length?` (${config.filters.length})`:''}</button><button className="icon-button" aria-label="Configure properties" onClick={()=>setPanel('properties')}><SlidersHorizontal size={17}/></button>{editable&&<button className="button primary small-button" onClick={()=>setPanel('new')}><Plus size={15}/>New record</button>}</div></div>{config.type==='board'?<div className="board">{groups.map((status:string)=><section key={status} className="board-column" onDragOver={e=>editable&&e.preventDefault()} onDrop={e=>{e.preventDefault();const row=rows.find(r=>r.id===e.dataTransfer.getData('text/plain'));if(row&&editable)save(row,group.id,status||null);}}><header><span className={`status-dot status-${status.replaceAll(' ','-').toLowerCase()}`}/><strong>{status||'No status'}</strong><span>{rows.filter(r=>(r.values[group?.id]||'')===status).length}</span></header>{rows.filter(r=>(r.values[group?.id]||'')===status).map(row=><article className="board-card" draggable={editable} onDragStart={e=>e.dataTransfer.setData('text/plain',row.id)} key={row.id}><button className="board-card-title" onClick={()=>go(row.id)}>{row.title}<ArrowUpRight size={14}/></button>{props.filter((p:any)=>p.type!=='title').map((p:any)=><div className="board-property" key={p.id}><small>{p.name}</small><PropertyInput p={p} value={row.values[p.id]} members={members} disabled={!editable} save={value=>save(row,p.id,value)}/></div>)}</article>)}</section>)}</div>:<div className="table-scroll"><table className="record-table"><thead><tr>{props.map((p:any)=><th key={p.id} style={{minWidth:config.widths?.[p.id]|| (p.type==='title'?280:155)}}><span className="property-type">{p.type==='title'?'Aa':p.type==='date'?'◷':p.type==='number'?'#':'•'}</span>{p.name}</th>)}<th/></tr></thead><tbody>{rows.map(row=><tr key={row.id}>{props.map((p:any)=><td key={p.id}><div className="cell-content"><PropertyInput p={p} value={row.values[p.id]} members={members} disabled={!editable} save={value=>save(row,p.id,value)}/>{p.type==='title'&&<button className="cell-open" aria-label={`Open ${row.title}`} onClick={()=>go(row.id)}><ArrowUpRight size={14}/></button>}</div></td>)}<td><button className="icon-button" aria-label={`Open record ${row.title}`} onClick={()=>go(row.id)}><ArrowUpRight size={14}/></button></td></tr>)}</tbody></table>{!rows.length&&<Empty title="Make the first move."><p>Add a record to start tracking your work.</p></Empty>}{editable&&<button className="table-add" onClick={()=>setPanel('new')}><Plus size={15}/>New record</button>}</div>}<div className="table-footer"><span>{rows.length} records · {offset+1}–{offset+rows.length}</span><button disabled={!offset} onClick={()=>setOffset(v=>Math.max(0,v-100))}>Previous</button><button disabled={rows.length<100} onClick={()=>setOffset(v=>v+100)}>Next</button></div>{panel==='new'&&<Modal title="New record" close={()=>setPanel('')}><form className="form" onSubmit={e=>{e.preventDefault();run(async()=>{const title=data.properties.find((p:any)=>p.type==='title');await api(`/databases/${id}/records`,'POST',{values:{[title.id]:name}});setName('');setPanel('');await load();changed();});}}><Field label="Name"><input autoFocus value={name} required onChange={e=>setName(e.target.value)}/></Field><button className="button primary">Create record</button></form></Modal>}{panel==='view'&&<ViewDialog data={data} view={current} editable={editable} close={()=>setPanel('')} done={async v=>{await load(v);setPanel('');}}/>}{panel==='properties'&&<PropertiesDialog data={data} view={current} editable={editable} close={()=>setPanel('')} done={async()=>{await load();setPanel('');}}/>}</div>;}
-function ViewDialog({data,view,editable,close,done}:{data:any;view:any;editable:boolean;close:()=>void;done:(v:string)=>Promise<void>}){const[name,setName]=useState(view.name),[config,setConfig]=useState(view.config),[copy,setCopy]=useState(false);return <Modal title="View settings" close={close}><form className="form" onSubmit={e=>{e.preventDefault();run(async()=>{const v=await api(`/databases/${data.id}/views${copy?'':`/${view.id}`}`,copy?'POST':'PATCH',{name,config});await done(v.id);});}}><Field label="View name"><input value={name} disabled={!editable} onChange={e=>setName(e.target.value)}/></Field>{config.type==='board'&&<Field label="Group by"><select value={config.groupBy} disabled={!editable} onChange={e=>setConfig({...config,groupBy:e.target.value})}>{data.properties.filter((p:any)=>['status','select'].includes(p.type)).map((p:any)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>}<h3>Filters</h3>{config.filters.map((f:any,i:number)=><div className="filter-row" key={i}><select aria-label="Filter property" disabled={!editable} value={f.property} onChange={e=>setConfig({...config,filters:config.filters.map((v:any,j:number)=>i===j?{...v,property:e.target.value}:v)})}>{data.properties.map((p:any)=><option key={p.id} value={p.id}>{p.name}</option>)}</select><select aria-label="Filter operator" disabled={!editable} value={f.op} onChange={e=>setConfig({...config,filters:config.filters.map((v:any,j:number)=>i===j?{...v,op:e.target.value}:v)})}>{['eq','contains','before','after','empty'].map(x=><option key={x}>{x}</option>)}</select><input aria-label="Filter value" disabled={!editable||f.op==='empty'} value={f.value||''} onChange={e=>setConfig({...config,filters:config.filters.map((v:any,j:number)=>i===j?{...v,value:e.target.value}:v)})}/>{editable&&<button type="button" className="icon-button" onClick={()=>setConfig({...config,filters:config.filters.filter((_:any,j:number)=>i!==j)})}>×</button>}</div>)}{editable&&<button type="button" className="button" onClick={()=>setConfig({...config,filters:[...config.filters,{property:data.properties[0].id,op:'contains',value:''}]})}>Add filter</button>}<h3>Sort</h3><div className="form-grid"><select aria-label="Sort property" disabled={!editable} value={config.sort[0]?.property||''} onChange={e=>setConfig({...config,sort:e.target.value?[{property:e.target.value,direction:config.sort[0]?.direction||'asc'}]:[]})}><option value="">Manual order</option>{data.properties.map((p:any)=><option key={p.id} value={p.id}>{p.name}</option>)}</select><select aria-label="Sort direction" disabled={!editable||!config.sort.length} value={config.sort[0]?.direction||'asc'} onChange={e=>setConfig({...config,sort:[{...config.sort[0],direction:e.target.value}]})}><option value="asc">Ascending</option><option value="desc">Descending</option></select></div>{editable&&<><label className="checkbox-line"><input type="checkbox" checked={copy} onChange={e=>setCopy(e.target.checked)}/>Save as a new view</label><button className="button primary">Save view</button></>}</form></Modal>;}
-function PropertiesDialog({data,view,editable,close,done}:{data:any;view:any;editable:boolean;close:()=>void;done:()=>Promise<void>}){const[props,setProps]=useState<any[]>(data.properties),[visible,setVisible]=useState<string[]>(view.config.visible||data.properties.map((p:any)=>p.id)),[widths,setWidths]=useState(view.config.widths||{});const update=(i:number,v:any)=>setProps(p=>p.map((x,j)=>i===j?{...x,...v}:x));return <Modal title="Properties & columns" close={close} wide><form className="form" onSubmit={e=>{e.preventDefault();run(async()=>{await api(`/databases/${data.id}`,'PATCH',{properties:props});await api(`/databases/${data.id}/views/${view.id}`,'PATCH',{name:view.name,config:{...view.config,visible,order:props.map(p=>p.id),widths}});await done();});}}><p className="muted">Schema changes are checked against existing records. Select options are separated by commas.</p>{props.map((p,i)=><div className="property-editor" key={p.id}><input aria-label={`Show ${p.name}`} type="checkbox" checked={visible.includes(p.id)} disabled={!editable} onChange={e=>setVisible(v=>e.target.checked?[...v,p.id]:v.filter(x=>x!==p.id))}/><input aria-label="Property name" value={p.name} disabled={!editable} onChange={e=>update(i,{name:e.target.value})}/><select aria-label="Property type" value={p.type} disabled={!editable||p.type==='title'} onChange={e=>update(i,{type:e.target.value,...(['select','status','multi_select'].includes(e.target.value)?{options:p.options||['Option 1']}:{options:undefined})})}>{['title','text','number','select','multi_select','status','date','checkbox','person','url','email'].map(t=><option key={t}>{t}</option>)}</select><input aria-label="Column width" type="number" min="80" max="900" value={widths[p.id]||155} disabled={!editable} onChange={e=>setWidths({...widths,[p.id]:Number(e.target.value)})}/><button className="icon-button" type="button" disabled={!editable||!i} aria-label="Move property up" onClick={()=>setProps(v=>{const a=[...v];[a[i-1],a[i]]=[a[i],a[i-1]];return a;})}><ArrowUp size={15}/></button>{['select','status','multi_select'].includes(p.type)&&<input className="options-input" aria-label={`${p.name} options`} defaultValue={p.options?.join(', ')||''} disabled={!editable} onBlur={e=>update(i,{options:e.target.value.split(',').map(s=>s.trim()).filter(Boolean)})}/>}</div>)}{editable&&<><button className="button" type="button" onClick={()=>{const p={id:`prop_${crypto.randomUUID().slice(0,8)}`,name:'New property',type:'text'};setProps(v=>[...v,p]);setVisible(v=>[...v,p.id]);}}>Add property</button><div className="modal-actions"><button className="button primary">Save properties</button></div></>}</form></Modal>;}
+"use client";
+import { useEffect, useState } from "react";
+import {
+  Plus,
+  Table2,
+  Columns3,
+  SlidersHorizontal,
+  Filter,
+  ArrowUpRight,
+  ArrowUp,
+  ArrowDown,
+} from "lucide-react";
+import { api, run, notify, go, changed } from "../lib/api";
+import { Modal, Field, Empty } from "./common";
+export function PropertyInput({
+  p,
+  value,
+  members = [],
+  disabled = false,
+  save,
+}: {
+  p: any;
+  value: any;
+  members?: any[];
+  disabled?: boolean;
+  save: (v: any) => void;
+}) {
+  if (p.type === "checkbox")
+    return (
+      <input
+        aria-label={p.name}
+        type="checkbox"
+        checked={!!value}
+        disabled={disabled}
+        onChange={(e) => save(e.target.checked)}
+      />
+    );
+  if (["select", "status", "person", "multi_select"].includes(p.type)) {
+    const options =
+      p.type === "person"
+        ? members
+            .filter((m) => m.active && !m.is_service)
+            .map((m) => ({ id: m.id, name: m.name }))
+        : (p.options || []).map((x: string) => ({ id: x, name: x }));
+    return (
+      <select
+        className={
+          p.type === "status"
+            ? `status-select status-${String(value).replaceAll(" ", "-").toLowerCase()}`
+            : ""
+        }
+        aria-label={p.name}
+        value={p.type === "multi_select" ? value || [] : value || ""}
+        multiple={p.type === "multi_select"}
+        disabled={disabled}
+        onChange={(e) =>
+          save(
+            p.type === "multi_select"
+              ? Array.from(e.target.selectedOptions).map((o) => o.value)
+              : e.target.value || null,
+          )
+        }
+      >
+        {p.type !== "multi_select" && <option value="">—</option>}
+        {options.map((o: any) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <input
+      key={JSON.stringify(value)}
+      aria-label={p.name}
+      type={
+        (
+          {
+            number: "number",
+            date: "date",
+            email: "email",
+            url: "url",
+          } as Record<string, string>
+        )[p.type] || "text"
+      }
+      step={p.type === "number" ? "any" : undefined}
+      defaultValue={value ?? ""}
+      disabled={disabled}
+      placeholder="—"
+      onBlur={(e) => {
+        const v = e.target.value
+          ? p.type === "number"
+            ? Number(e.target.value)
+            : e.target.value
+          : null;
+        if (v !== (value ?? null)) save(v);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+    />
+  );
+}
+export default function Database({
+  id,
+  editable,
+}: {
+  id: string;
+  editable: boolean;
+}) {
+  const [data, setData] = useState<any>(),
+    [rows, setRows] = useState<any[]>([]),
+    [members, setMembers] = useState<any[]>([]),
+    [selected, setSelected] = useState(""),
+    [offset, setOffset] = useState(0),
+    [panel, setPanel] = useState(""),
+    [name, setName] = useState("");
+  const current =
+    data?.views.find((v: any) => v.id === selected) || data?.views[0];
+  async function load(viewId = selected) {
+    const d = await api(`/databases/${id}`);
+    setData(d);
+    const v = d.views.find((v: any) => v.id === viewId) || d.views[0];
+    setSelected(v?.id || "");
+    setRows(
+      await api(
+        `/databases/${id}/records?limit=100&offset=${offset}${v ? `&view=${v.id}` : ""}`,
+      ),
+    );
+  }
+  useEffect(() => {
+    run(async () => {
+      await load();
+      setMembers(await api("/members"));
+    });
+  }, [id, selected, offset]);
+  if (!data) return <div className="loading">Opening database…</div>;
+  const config = current?.config || { type: "table", filters: [], sort: [] };
+  const props = (config.order || data.properties.map((p: any) => p.id))
+    .map((k: string) => data.properties.find((p: any) => p.id === k))
+    .filter(
+      (p: any) => p && (!config.visible || config.visible.includes(p.id)),
+    );
+  async function save(row: any, property: string, value: any) {
+    await run(async () => {
+      await api(`/records/${row.id}`, "PATCH", {
+        values: { [property]: value },
+        expected_revision: row.revision,
+      });
+      await load();
+      changed();
+    });
+  }
+  async function switchType(type: string) {
+    const v = data.views.find((v: any) => v.config.type === type);
+    if (v) {
+      setSelected(v.id);
+      setOffset(0);
+      return;
+    }
+    if (!editable) return notify("No saved board view is available");
+    const group = data.properties.find((p: any) =>
+      ["select", "status"].includes(p.type),
+    );
+    if (type === "board" && !group)
+      return notify("Add a Select or Status property before creating a board");
+    const created = await api(`/databases/${id}/views`, "POST", {
+      name: type === "board" ? "Board" : "Table",
+      config: { type, groupBy: group?.id, filters: [], sort: [] },
+    });
+    await load(created.id);
+  }
+  const group = data.properties.find((p: any) => p.id === config.groupBy),
+    groups = [...(group?.options || []), ""];
+  return (
+    <div className="database">
+      <div className="database-toolbar">
+        <div className="view-tabs">
+          <button
+            className={config.type === "table" ? "selected" : ""}
+            onClick={() => run(() => switchType("table"))}
+          >
+            <Table2 size={16} />
+            Table
+          </button>
+          <button
+            className={config.type === "board" ? "selected" : ""}
+            onClick={() => run(() => switchType("board"))}
+          >
+            <Columns3 size={16} />
+            Board
+          </button>
+        </div>
+        <select
+          className="view-select"
+          aria-label="Saved view"
+          value={selected}
+          onChange={(e) => {
+            setSelected(e.target.value);
+            setOffset(0);
+          }}
+        >
+          {data.views.map((v: any) => (
+            <option key={v.id} value={v.id}>
+              {v.name}
+            </option>
+          ))}
+        </select>
+        <div className="database-controls">
+          <button className="button quiet" onClick={() => setPanel("view")}>
+            <Filter size={14} />
+            Filter & sort
+            {config.filters.length ? ` (${config.filters.length})` : ""}
+          </button>
+          <button
+            className="icon-button"
+            aria-label="Configure properties"
+            onClick={() => setPanel("properties")}
+          >
+            <SlidersHorizontal size={17} />
+          </button>
+          {editable && (
+            <button
+              className="button primary small-button"
+              onClick={() => setPanel("new")}
+            >
+              <Plus size={15} />
+              New record
+            </button>
+          )}
+        </div>
+      </div>
+      {config.type === "board" ? (
+        <div className="board">
+          {groups.map((status: string) => (
+            <section
+              key={status}
+              className="board-column"
+              onDragOver={(e) => editable && e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const row = rows.find(
+                  (r) => r.id === e.dataTransfer.getData("text/plain"),
+                );
+                if (row && editable) save(row, group.id, status || null);
+              }}
+            >
+              <header>
+                <span
+                  className={`status-dot status-${status.replaceAll(" ", "-").toLowerCase()}`}
+                />
+                <strong>{status || "No status"}</strong>
+                <span>
+                  {
+                    rows.filter((r) => (r.values[group?.id] || "") === status)
+                      .length
+                  }
+                </span>
+              </header>
+              {rows
+                .filter((r) => (r.values[group?.id] || "") === status)
+                .map((row) => (
+                  <article
+                    className="board-card"
+                    draggable={editable}
+                    onDragStart={(e) =>
+                      e.dataTransfer.setData("text/plain", row.id)
+                    }
+                    key={row.id}
+                  >
+                    <button
+                      className="board-card-title"
+                      onClick={() => go(row.id)}
+                    >
+                      {row.title}
+                      <ArrowUpRight size={14} />
+                    </button>
+                    {props
+                      .filter((p: any) => p.type !== "title")
+                      .map((p: any) => (
+                        <div className="board-property" key={p.id}>
+                          <small>{p.name}</small>
+                          <PropertyInput
+                            p={p}
+                            value={row.values[p.id]}
+                            members={members}
+                            disabled={!editable}
+                            save={(value) => save(row, p.id, value)}
+                          />
+                        </div>
+                      ))}
+                  </article>
+                ))}
+            </section>
+          ))}
+        </div>
+      ) : (
+        <div className="table-scroll">
+          <table className="record-table">
+            <thead>
+              <tr>
+                {props.map((p: any) => (
+                  <th
+                    key={p.id}
+                    style={{
+                      minWidth:
+                        config.widths?.[p.id] ||
+                        (p.type === "title" ? 280 : 155),
+                    }}
+                  >
+                    <span className="property-type">
+                      {p.type === "title"
+                        ? "Aa"
+                        : p.type === "date"
+                          ? "◷"
+                          : p.type === "number"
+                            ? "#"
+                            : "•"}
+                    </span>
+                    {p.name}
+                  </th>
+                ))}
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  {props.map((p: any) => (
+                    <td key={p.id}>
+                      <div className="cell-content">
+                        <PropertyInput
+                          p={p}
+                          value={row.values[p.id]}
+                          members={members}
+                          disabled={!editable}
+                          save={(value) => save(row, p.id, value)}
+                        />
+                        {p.type === "title" && (
+                          <button
+                            className="cell-open"
+                            aria-label={`Open ${row.title}`}
+                            onClick={() => go(row.id)}
+                          >
+                            <ArrowUpRight size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  ))}
+                  <td>
+                    <button
+                      className="icon-button"
+                      aria-label={`Open record ${row.title}`}
+                      onClick={() => go(row.id)}
+                    >
+                      <ArrowUpRight size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!rows.length && (
+            <Empty title="Make the first move.">
+              <p>Add a record to start tracking your work.</p>
+            </Empty>
+          )}
+          {editable && (
+            <button className="table-add" onClick={() => setPanel("new")}>
+              <Plus size={15} />
+              New record
+            </button>
+          )}
+        </div>
+      )}
+      <div className="table-footer">
+        <span>
+          {rows.length} records · {offset + 1}–{offset + rows.length}
+        </span>
+        <button
+          disabled={!offset}
+          onClick={() => setOffset((v) => Math.max(0, v - 100))}
+        >
+          Previous
+        </button>
+        <button
+          disabled={rows.length < 100}
+          onClick={() => setOffset((v) => v + 100)}
+        >
+          Next
+        </button>
+      </div>
+      {panel === "new" && (
+        <Modal title="New record" close={() => setPanel("")}>
+          <form
+            className="form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              run(async () => {
+                const title = data.properties.find(
+                  (p: any) => p.type === "title",
+                );
+                await api(`/databases/${id}/records`, "POST", {
+                  values: { [title.id]: name },
+                });
+                setName("");
+                setPanel("");
+                await load();
+                changed();
+              });
+            }}
+          >
+            <Field label="Name">
+              <input
+                autoFocus
+                value={name}
+                required
+                onChange={(e) => setName(e.target.value)}
+              />
+            </Field>
+            <button className="button primary">Create record</button>
+          </form>
+        </Modal>
+      )}
+      {panel === "view" && (
+        <ViewDialog
+          data={data}
+          view={current}
+          editable={editable}
+          close={() => setPanel("")}
+          done={async (v) => {
+            await load(v);
+            setPanel("");
+          }}
+        />
+      )}
+      {panel === "properties" && (
+        <PropertiesDialog
+          data={data}
+          view={current}
+          editable={editable}
+          close={() => setPanel("")}
+          done={async () => {
+            await load();
+            setPanel("");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+function ViewDialog({
+  data,
+  view,
+  editable,
+  close,
+  done,
+}: {
+  data: any;
+  view: any;
+  editable: boolean;
+  close: () => void;
+  done: (v: string) => Promise<void>;
+}) {
+  const [name, setName] = useState(view.name),
+    [config, setConfig] = useState(view.config),
+    [copy, setCopy] = useState(false);
+  return (
+    <Modal title="View settings" close={close}>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          run(async () => {
+            const v = await api(
+              `/databases/${data.id}/views${copy ? "" : `/${view.id}`}`,
+              copy ? "POST" : "PATCH",
+              { name, config },
+            );
+            await done(v.id);
+          });
+        }}
+      >
+        <Field label="View name">
+          <input
+            value={name}
+            disabled={!editable}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+        {config.type === "board" && (
+          <Field label="Group by">
+            <select
+              value={config.groupBy}
+              disabled={!editable}
+              onChange={(e) =>
+                setConfig({ ...config, groupBy: e.target.value })
+              }
+            >
+              {data.properties
+                .filter((p: any) => ["status", "select"].includes(p.type))
+                .map((p: any) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+            </select>
+          </Field>
+        )}
+        <h3>Filters</h3>
+        {config.filters.map((f: any, i: number) => (
+          <div className="filter-row" key={i}>
+            <select
+              aria-label="Filter property"
+              disabled={!editable}
+              value={f.property}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  filters: config.filters.map((v: any, j: number) =>
+                    i === j ? { ...v, property: e.target.value } : v,
+                  ),
+                })
+              }
+            >
+              {data.properties.map((p: any) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter operator"
+              disabled={!editable}
+              value={f.op}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  filters: config.filters.map((v: any, j: number) =>
+                    i === j ? { ...v, op: e.target.value } : v,
+                  ),
+                })
+              }
+            >
+              {["eq", "contains", "before", "after", "empty"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+            <input
+              aria-label="Filter value"
+              disabled={!editable || f.op === "empty"}
+              value={f.value || ""}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  filters: config.filters.map((v: any, j: number) =>
+                    i === j ? { ...v, value: e.target.value } : v,
+                  ),
+                })
+              }
+            />
+            {editable && (
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() =>
+                  setConfig({
+                    ...config,
+                    filters: config.filters.filter(
+                      (_: any, j: number) => i !== j,
+                    ),
+                  })
+                }
+              >
+                ×
+              </button>
+            )}
+          </div>
+        ))}
+        {editable && (
+          <button
+            type="button"
+            className="button"
+            onClick={() =>
+              setConfig({
+                ...config,
+                filters: [
+                  ...config.filters,
+                  {
+                    property: data.properties[0].id,
+                    op: "contains",
+                    value: "",
+                  },
+                ],
+              })
+            }
+          >
+            Add filter
+          </button>
+        )}
+        <h3>Sort</h3>
+        <div className="form-grid">
+          <select
+            aria-label="Sort property"
+            disabled={!editable}
+            value={config.sort[0]?.property || ""}
+            onChange={(e) =>
+              setConfig({
+                ...config,
+                sort: e.target.value
+                  ? [
+                      {
+                        property: e.target.value,
+                        direction: config.sort[0]?.direction || "asc",
+                      },
+                    ]
+                  : [],
+              })
+            }
+          >
+            <option value="">Manual order</option>
+            {data.properties.map((p: any) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Sort direction"
+            disabled={!editable || !config.sort.length}
+            value={config.sort[0]?.direction || "asc"}
+            onChange={(e) =>
+              setConfig({
+                ...config,
+                sort: [{ ...config.sort[0], direction: e.target.value }],
+              })
+            }
+          >
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </div>
+        {editable && (
+          <>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={copy}
+                onChange={(e) => setCopy(e.target.checked)}
+              />
+              Save as a new view
+            </label>
+            <button className="button primary">Save view</button>
+          </>
+        )}
+      </form>
+    </Modal>
+  );
+}
+function PropertiesDialog({
+  data,
+  view,
+  editable,
+  close,
+  done,
+}: {
+  data: any;
+  view: any;
+  editable: boolean;
+  close: () => void;
+  done: () => Promise<void>;
+}) {
+  const [props, setProps] = useState<any[]>(data.properties),
+    [visible, setVisible] = useState<string[]>(
+      view.config.visible || data.properties.map((p: any) => p.id),
+    ),
+    [widths, setWidths] = useState(view.config.widths || {});
+  const update = (i: number, v: any) =>
+    setProps((p) => p.map((x, j) => (i === j ? { ...x, ...v } : x)));
+  return (
+    <Modal title="Properties & columns" close={close} wide>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          run(async () => {
+            await api(`/databases/${data.id}`, "PATCH", { properties: props });
+            await api(`/databases/${data.id}/views/${view.id}`, "PATCH", {
+              name: view.name,
+              config: {
+                ...view.config,
+                visible,
+                order: props.map((p) => p.id),
+                widths,
+              },
+            });
+            await done();
+          });
+        }}
+      >
+        <p className="muted">
+          Schema changes are checked against existing records. Select options
+          are separated by commas.
+        </p>
+        {props.map((p, i) => (
+          <div className="property-editor" key={p.id}>
+            <input
+              aria-label={`Show ${p.name}`}
+              type="checkbox"
+              checked={visible.includes(p.id)}
+              disabled={!editable}
+              onChange={(e) =>
+                setVisible((v) =>
+                  e.target.checked ? [...v, p.id] : v.filter((x) => x !== p.id),
+                )
+              }
+            />
+            <input
+              aria-label="Property name"
+              value={p.name}
+              disabled={!editable}
+              onChange={(e) => update(i, { name: e.target.value })}
+            />
+            <select
+              aria-label="Property type"
+              value={p.type}
+              disabled={!editable || p.type === "title"}
+              onChange={(e) =>
+                update(i, {
+                  type: e.target.value,
+                  ...(["select", "status", "multi_select"].includes(
+                    e.target.value,
+                  )
+                    ? { options: p.options || ["Option 1"] }
+                    : { options: undefined }),
+                })
+              }
+            >
+              {[
+                "title",
+                "text",
+                "number",
+                "select",
+                "multi_select",
+                "status",
+                "date",
+                "checkbox",
+                "person",
+                "url",
+                "email",
+              ].map((t) => (
+                <option key={t}>{t}</option>
+              ))}
+            </select>
+            <input
+              aria-label="Column width"
+              type="number"
+              min="80"
+              max="900"
+              value={widths[p.id] || 155}
+              disabled={!editable}
+              onChange={(e) =>
+                setWidths({ ...widths, [p.id]: Number(e.target.value) })
+              }
+            />
+            <button
+              className="icon-button"
+              type="button"
+              disabled={!editable || !i}
+              aria-label="Move property up"
+              onClick={() =>
+                setProps((v) => {
+                  const a = [...v];
+                  [a[i - 1], a[i]] = [a[i], a[i - 1]];
+                  return a;
+                })
+              }
+            >
+              <ArrowUp size={15} />
+            </button>
+            {["select", "status", "multi_select"].includes(p.type) && (
+              <input
+                className="options-input"
+                aria-label={`${p.name} options`}
+                defaultValue={p.options?.join(", ") || ""}
+                disabled={!editable}
+                onBlur={(e) =>
+                  update(i, {
+                    options: e.target.value
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+            )}
+          </div>
+        ))}
+        {editable && (
+          <>
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                const p = {
+                  id: `prop_${crypto.randomUUID().slice(0, 8)}`,
+                  name: "New property",
+                  type: "text",
+                };
+                setProps((v) => [...v, p]);
+                setVisible((v) => [...v, p.id]);
+              }}
+            >
+              Add property
+            </button>
+            <div className="modal-actions">
+              <button className="button primary">Save properties</button>
+            </div>
+          </>
+        )}
+      </form>
+    </Modal>
+  );
+}

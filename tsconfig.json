@@ -1,1 +1,27 @@
-{"compilerOptions":{"target":"ES2023","lib":["ES2023","DOM"],"module":"ESNext","moduleResolution":"Bundler","allowImportingTsExtensions":true,"resolveJsonModule":true,"esModuleInterop":true,"strict":true,"skipLibCheck":true,"noEmit":true,"jsx":"react-jsx","types":["node"]},"include":["apps/api/**/*.ts","apps/collab/**/*.ts","apps/worker/**/*.ts","packages/**/*.ts","packages/**/*.tsx","scripts/**/*.ts","tests/**/*.ts","e2e/**/*.ts","playwright.config.ts"]}
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": [
+    "apps/api/**/*.ts",
+    "apps/collab/**/*.ts",
+    "apps/worker/**/*.ts",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "e2e/**/*.ts",
+    "playwright.config.ts"
+  ]
+}

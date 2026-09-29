@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
   valkey:
     image: ghcr.io/valkey-io/valkey:8.1.10-alpine
-    command: [valkey-server, --save, '', --appendonly, 'no']
+    command: [valkey-server, --save, "", --appendonly, "no"]
     healthcheck:
       test: [CMD, valkey-cli, ping]
       interval: 5s
@@ -56,65 +56,76 @@ services:
     restart: unless-stopped
   migrate:
     <<: *app
-    restart: 'no'
+    restart: "no"
     command: [npm, run, migrate]
     environment:
       MIGRATION_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/workspace
       RUNTIME_DB_PASSWORD: ${RUNTIME_DB_PASSWORD}
     depends_on:
-      postgres: {condition: service_healthy}
+      postgres: { condition: service_healthy }
   api:
     <<: *app
-    command: [npm, run, 'start:api']
+    command: [npm, run, "start:api"]
     volumes: [files:/data/files]
     environment:
       <<: *runtime
-      TRUST_PROXY: 'true'
+      TRUST_PROXY: "true"
     depends_on:
-      migrate: {condition: service_completed_successfully}
-      valkey: {condition: service_healthy}
+      migrate: { condition: service_completed_successfully }
+      valkey: { condition: service_healthy }
     healthcheck:
-      test: [CMD, node, -e, "fetch('http://localhost:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://localhost:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
   collab:
     <<: *app
-    command: [npm, run, 'start:collab']
+    command: [npm, run, "start:collab"]
     depends_on:
-      migrate: {condition: service_completed_successfully}
+      migrate: { condition: service_completed_successfully }
   worker:
     <<: *app
-    command: [npm, run, 'start:worker']
+    command: [npm, run, "start:worker"]
     volumes: [files:/data/files]
     depends_on:
-      migrate: {condition: service_completed_successfully}
+      migrate: { condition: service_completed_successfully }
   web:
     <<: *app
     command: [npm, run, start, -w, apps/web]
     environment:
       API_INTERNAL_URL: http://api:4000
     depends_on:
-      api: {condition: service_healthy}
+      api: { condition: service_healthy }
   caddy:
     image: caddy:2.11.4-alpine
     environment:
       CADDY_ADDRESS: ${CADDY_ADDRESS:-:80}
-    ports: ['${HTTP_PORT:-8080}:80', '${HTTPS_PORT:-8443}:443']
-    volumes: ['./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro', 'caddy_data:/data', 'caddy_config:/config']
+    ports: ["${HTTP_PORT:-8080}:80", "${HTTPS_PORT:-8443}:443"]
+    volumes:
+      [
+        "./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro",
+        "caddy_data:/data",
+        "caddy_config:/config",
+      ]
     depends_on: [web, collab]
     restart: unless-stopped
   ops:
     <<: *app
     profiles: [ops]
-    restart: 'no'
+    restart: "no"
     environment:
       <<: *runtime
       MIGRATION_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/workspace
-      WORKSPACE_MAINTENANCE: 'true'
-    volumes: [files:/data/files, './backups:/backups']
+      WORKSPACE_MAINTENANCE: "true"
+    volumes: [files:/data/files, "./backups:/backups"]
     depends_on:
-      postgres: {condition: service_healthy}
+      postgres: { condition: service_healthy }
 volumes:
   postgres:
   files:

@@ -1,2 +1,45 @@
-import {PGlite} from '@electric-sql/pglite';import {PGLiteSocketServer} from '@electric-sql/pglite-socket';import {randomUUID} from 'node:crypto';import pg from 'pg';
-export async function testPostgres(port=55432,persistent=false){if(process.env.TEST_DATABASE_URL){const source=process.env.TEST_DATABASE_URL;if(persistent)return{url:source,emulated:false,close:async()=>{}};const owner=new pg.Client({connectionString:source});await owner.connect();const name=`workspace_test_${randomUUID().replaceAll('-','')}`;await owner.query(`CREATE DATABASE ${name}`);const url=new URL(source);url.pathname=`/${name}`;return{url:url.toString(),emulated:false,close:async()=>{await owner.query(`DROP DATABASE ${name} WITH (FORCE)`);await owner.end();}};}const database=await PGlite.create(persistent?(process.env.DEV_DATABASE_PATH||'.data/dev-postgres'):undefined);const server=new PGLiteSocketServer({db:database,host:'127.0.0.1',port,maxConnections:20});await server.start();return{url:`postgres://postgres:postgres@127.0.0.1:${port}/postgres`,emulated:true,close:async()=>{await server.stop();await database.close();}};}
+import { PGlite } from "@electric-sql/pglite";
+import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
+import { randomUUID } from "node:crypto";
+import pg from "pg";
+export async function testPostgres(port = 55432, persistent = false) {
+  if (process.env.TEST_DATABASE_URL) {
+    const source = process.env.TEST_DATABASE_URL;
+    if (persistent)
+      return { url: source, emulated: false, close: async () => {} };
+    const owner = new pg.Client({ connectionString: source });
+    await owner.connect();
+    const name = `workspace_test_${randomUUID().replaceAll("-", "")}`;
+    await owner.query(`CREATE DATABASE ${name}`);
+    const url = new URL(source);
+    url.pathname = `/${name}`;
+    return {
+      url: url.toString(),
+      emulated: false,
+      close: async () => {
+        await owner.query(`DROP DATABASE ${name} WITH (FORCE)`);
+        await owner.end();
+      },
+    };
+  }
+  const database = await PGlite.create(
+    persistent
+      ? process.env.DEV_DATABASE_PATH || ".data/dev-postgres"
+      : undefined,
+  );
+  const server = new PGLiteSocketServer({
+    db: database,
+    host: "127.0.0.1",
+    port,
+    maxConnections: 20,
+  });
+  await server.start();
+  return {
+    url: `postgres://postgres:postgres@127.0.0.1:${port}/postgres`,
+    emulated: true,
+    close: async () => {
+      await server.stop();
+      await database.close();
+    },
+  };
+}

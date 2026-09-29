@@ -1,3 +1,35 @@
-import{z}from'zod';const link=z.string().max(2048).refine(v=>!v||/^https?:\/\//.test(v)||/^\/(?!\/)/.test(v));
-export const brandingSchema=z.object({productName:z.string().min(1).max(80),primaryAccent:z.string().regex(/^#[a-f0-9]{6}$/i),logoLight:link,logoDark:link,favicon:link,loginBackground:link,supportName:z.string().max(100),supportUrl:link,legalName:z.string().max(120),privacyUrl:link,termsUrl:link}).strict();
-export function defaultBranding(env:NodeJS.ProcessEnv=process.env){return brandingSchema.parse({productName:env.PRODUCT_NAME||'OpenJM Workspace',primaryAccent:env.PRIMARY_ACCENT||'#177a64',logoLight:env.LOGO_LIGHT||'',logoDark:env.LOGO_DARK||'',favicon:env.FAVICON||'',loginBackground:env.LOGIN_BACKGROUND||'',supportName:env.SUPPORT_NAME||'Workspace support',supportUrl:env.SUPPORT_URL||'',legalName:env.LEGAL_NAME||'',privacyUrl:env.PRIVACY_URL||'',termsUrl:env.TERMS_URL||''});}
+import { z } from "zod";
+const link = z
+  .string()
+  .max(2048)
+  .refine((v) => !v || /^https?:\/\//.test(v) || /^\/(?!\/)/.test(v));
+export const brandingSchema = z
+  .object({
+    productName: z.string().min(1).max(80),
+    primaryAccent: z.string().regex(/^#[a-f0-9]{6}$/i),
+    logoLight: link,
+    logoDark: link,
+    favicon: link,
+    loginBackground: link,
+    supportName: z.string().max(100),
+    supportUrl: link,
+    legalName: z.string().max(120),
+    privacyUrl: link,
+    termsUrl: link,
+  })
+  .strict();
+export function defaultBranding(env: NodeJS.ProcessEnv = process.env) {
+  return brandingSchema.parse({
+    productName: env.PRODUCT_NAME || "OpenJM Workspace",
+    primaryAccent: env.PRIMARY_ACCENT || "#177a64",
+    logoLight: env.LOGO_LIGHT || "",
+    logoDark: env.LOGO_DARK || "",
+    favicon: env.FAVICON || "",
+    loginBackground: env.LOGIN_BACKGROUND || "",
+    supportName: env.SUPPORT_NAME || "Workspace support",
+    supportUrl: env.SUPPORT_URL || "",
+    legalName: env.LEGAL_NAME || "",
+    privacyUrl: env.PRIVACY_URL || "",
+    termsUrl: env.TERMS_URL || "",
+  });
+}
