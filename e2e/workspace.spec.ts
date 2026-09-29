@@ -164,11 +164,12 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   ).toBeVisible();
   await page.screenshot({ path: "docs/screenshots/board.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  const closeSidebar = page.getByRole("button", {
+    name: "Close sidebar",
+    exact: true,
+  });
+  if (await closeSidebar.isVisible()) await closeSidebar.click();
   await page.getByRole("button", { name: "Toggle sidebar" }).click();
-  if (
-    !(await page.getByRole("button", { name: "Home", exact: true }).isVisible())
-  )
-    await page.getByRole("button", { name: "Toggle sidebar" }).click();
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Welcome back, Shane." }),
