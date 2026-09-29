@@ -170,12 +170,25 @@ export async function records(
     where = ["r.parent_id=$1", "r.deleted_at IS NULL"];
   for (const f of config.filters) {
     p.push(f.property);
-    const key = `v.values->>$${p.length}`;
+    let key = `v.values->>$${p.length}`;
     if (f.op === "empty") {
       where.push(`(${key} IS NULL OR ${key}='')`);
       continue;
     }
-    p.push(String(f.value ?? ""));
+    const numeric =
+      d.properties.find((x: Property) => x.id === f.property)?.type ===
+        "number" && f.op !== "contains";
+    if (numeric) {
+      assert(
+        (typeof f.value === "number" ||
+          (typeof f.value === "string" && f.value.trim() !== "")) &&
+          Number.isFinite(Number(f.value)),
+        400,
+        "Numeric filter requires a finite number",
+      );
+      key = `(${key})::numeric`;
+    }
+    p.push(numeric ? Number(f.value) : String(f.value ?? ""));
     const value = `$${p.length}`;
     where.push(
       f.op === "contains"

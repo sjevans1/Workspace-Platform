@@ -2,10 +2,10 @@
   "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:6db3cd5f-68f0-4177-bbf6-7aedba6b8fd4",
+  "serialNumber": "urn:uuid:9f022623-44a7-4916-8e30-2fa9e1a52612",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-29T08:01:12.926Z",
+    "timestamp": "2026-09-29T08:13:30.851Z",
     "lifecycles": [
       {
         "phase": "build"
@@ -3842,53 +3842,6 @@
       ]
     },
     {
-      "bom-ref": "@sparticuz/chromium@143.0.4",
-      "type": "library",
-      "name": "@sparticuz/chromium",
-      "version": "143.0.4",
-      "scope": "required",
-      "author": "Kyle McNally",
-      "description": "Chromium Binary for Serverless Platforms",
-      "purl": "pkg:npm/%40sparticuz/chromium@143.0.4",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@sparticuz/chromium/-/chromium-143.0.4.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git://github.com/Sparticuz/chromium.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/Sparticuz/chromium"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/Sparticuz/chromium/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "ffa23bb904d18510c3dbf8063d0d4691ff83aa4d116030023c90d97d2cf3d0e5a4e099944e89cd1cf5dbae7e9422494e1e59c32dff31000ce4399281fdc2692c"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "@swc/helpers@0.5.23",
       "type": "library",
       "name": "@swc/helpers",
@@ -5054,53 +5007,6 @@
       ]
     },
     {
-      "bom-ref": "b4a@1.9.0",
-      "type": "library",
-      "name": "b4a",
-      "version": "1.9.0",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "Bridging the gap between buffers and typed arrays",
-      "purl": "pkg:npm/b4a@1.9.0",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/b4a/-/b4a-1.9.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/b4a.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/b4a#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/b4a/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "7697dc17d7c3351ebef9cb615d1ebb8b2860a96cbd081a2e02f2168489edcc11ba72f2bf72720f8994230708bf66a8e30440c67e8343b660749138eba0e277a5"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "balanced-match@4.0.4",
       "type": "library",
       "name": "balanced-match",
@@ -5129,241 +5035,6 @@
         {
           "license": {
             "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "bare-events@2.9.2",
-      "type": "library",
-      "name": "bare-events",
-      "version": "2.9.2",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "Event emitters for JavaScript",
-      "purl": "pkg:npm/bare-events@2.9.2",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/bare-events/-/bare-events-2.9.2.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/bare-events.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/bare-events#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/bare-events/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "0083ca8a857bfd8ffc29f6770008633c9c4b2db638f52eb8626e436a4665520ef9a90893814abd8442681306b87947b33d4957472fe2e4da6c2afa3d8e02a6a0"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "bare-fs@4.8.2",
-      "type": "library",
-      "name": "bare-fs",
-      "version": "4.8.2",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "Native file system operations for Bare",
-      "purl": "pkg:npm/bare-fs@4.8.2",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/bare-fs/-/bare-fs-4.8.2.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/bare-fs.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/bare-fs#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/bare-fs/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "f9923af0a1cc52fa2c5df29b83f50e1cad2d6c27519de81bbcf11d11c67735de937ad89e42c24f4570515cf74bcb2f3edd54846cf5edb2e993a44b6defcc6ff7"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "bare-path@3.1.2",
-      "type": "library",
-      "name": "bare-path",
-      "version": "3.1.2",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "Path manipulation library for JavaScript",
-      "purl": "pkg:npm/bare-path@3.1.2",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/bare-path/-/bare-path-3.1.2.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/bare-path.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/bare-path#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/bare-path/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "67229bb2ebaa2ba020d0af295fa5794f1aba5de251bd8fb05ee7271464638b25583fd6160e9210ba093f6fe7a7458ac460125aa8bce08514295cf311ef7e3537"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "bare-stream@2.13.4",
-      "type": "library",
-      "name": "bare-stream",
-      "version": "2.13.4",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "Streaming data for JavaScript",
-      "purl": "pkg:npm/bare-stream@2.13.4",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/bare-stream/-/bare-stream-2.13.4.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/bare-stream.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/bare-stream#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/bare-stream/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "3dcad0f2554b6e226c70d9b529ecfe629e06cb800719c375973c23bdfe4dc9b59e9fb56f12051fc9f9d7609db336a5a7cce7c26f501baba947f2d8b4b3242ccc"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "bare-url@2.5.4",
-      "type": "library",
-      "name": "bare-url",
-      "version": "2.5.4",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "WHATWG URL implementation for JavaScript",
-      "purl": "pkg:npm/bare-url@2.5.4",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/bare-url/-/bare-url-2.5.4.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/bare-url.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/bare-url"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/bare-url/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "1b16bb515581af4fde754d5bf932619ff019bcc4148fd386b29bd8b1a4d842b01b640e013936462f72e2671bc3f8278c9431f88eec03f38f9e4c0a7f6cb616e6"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
           }
         }
       ]
@@ -6192,53 +5863,6 @@
       ]
     },
     {
-      "bom-ref": "end-of-stream@1.4.5",
-      "type": "library",
-      "name": "end-of-stream",
-      "version": "1.4.5",
-      "scope": "required",
-      "author": "Mathias Buus <mathiasbuus@gmail.com>",
-      "description": "Call a callback when a readable/writable/duplex stream has completed or failed.",
-      "purl": "pkg:npm/end-of-stream@1.4.5",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/end-of-stream/-/end-of-stream-1.4.5.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git://github.com/mafintosh/end-of-stream.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/mafintosh/end-of-stream"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/mafintosh/end-of-stream/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "a2810673a1cfdbac57abf37e18218e4f424a08b0c6aead9b41466b43b832ac989900d27ff180d3c53a5005718c9fe59b2105cd569c96ca69bb2985480909f23a"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "entities@8.1.0",
       "type": "library",
       "name": "entities",
@@ -6330,53 +5954,6 @@
         {
           "license": {
             "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "events-universal@1.0.1",
-      "type": "library",
-      "name": "events-universal",
-      "version": "1.0.1",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "Universal wrapper for the Node.js events module",
-      "purl": "pkg:npm/events-universal@1.0.1",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/events-universal/-/events-universal-1.0.1.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/events-universal.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/events-universal#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/events-universal/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "2d47797aebdb30ba70385f26ea2bcf09b85079289854d6fc56cd1f43c4235e8d094e4107a73f29c5d41fd204ad96d68fa70d0271af1bdfd2b1bcaf5c7ca46203"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
           }
         }
       ]
@@ -6497,53 +6074,6 @@
         {
           "alg": "SHA-512",
           "content": "f2e9e6bc0d2aadfa455816146ad7bd0531ad41d28758162df8a7402246a0ed5bf17bbc33f10da7260edf2cc0b46c9a9ed1b8cfdf591c6bb0a469ac2bb3822cb6"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "fast-fifo@1.3.2",
-      "type": "library",
-      "name": "fast-fifo",
-      "version": "1.3.2",
-      "scope": "required",
-      "author": "Mathias Buus (@mafintosh)",
-      "description": "A fast fifo implementation similar to the one powering nextTick in Node.js core",
-      "purl": "pkg:npm/fast-fifo@1.3.2",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/fast-fifo/-/fast-fifo-1.3.2.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/mafintosh/fast-fifo.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/mafintosh/fast-fifo"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/mafintosh/fast-fifo/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "fddf6c7e8b38cb1ce9c240e4b8dee4d92a852ad60d9824f381f129cfcdb1df820cf7fcdcf0a1b14285e0d6588d0bf8b3a5133f30176de38366c78d595aa93e15"
         }
       ],
       "licenses": [
@@ -6830,53 +6360,6 @@
         {
           "alg": "SHA-512",
           "content": "b09b20675b101f6503ba8c0fb8c2a0f1acfb41cf05d239e3f922a415653ff93d31705960579b2481738652a990cce7665ba00b03b021248356c77a850646cb1c"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "follow-redirects@1.16.0",
-      "type": "library",
-      "name": "follow-redirects",
-      "version": "1.16.0",
-      "scope": "required",
-      "author": "Ruben Verborgh <ruben@verborgh.org> (https://ruben.verborgh.org/)",
-      "description": "HTTP and HTTPS modules that follow redirects.",
-      "purl": "pkg:npm/follow-redirects@1.16.0",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+ssh://git@github.com/follow-redirects/follow-redirects.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/follow-redirects/follow-redirects"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/follow-redirects/follow-redirects/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cb9acdfee3ac69d153fc97d8c21c514b947b41c7be837cc6f7bf89aed159942f64957fd6e610fb8a22f349c2389d9a944bb0cd51d84f830e3123c5b62ee5e553"
         }
       ],
       "licenses": [
@@ -7958,45 +7441,6 @@
         {
           "license": {
             "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "once@1.4.0",
-      "type": "library",
-      "name": "once",
-      "version": "1.4.0",
-      "scope": "required",
-      "author": "Isaac Z. Schlueter <i@izs.me> (http://blog.izs.me/)",
-      "description": "Run a function exactly one time",
-      "purl": "pkg:npm/once@1.4.0",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/once/-/once-1.4.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git://github.com/isaacs/once"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "94d689808fb643951140191c7042874d038f697754c67659125413658d0c15402e684a9ed44f8dcaf81dcff688c8d8ba67d3333b976fd47f27e7cfc610ba77fb"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "ISC"
           }
         }
       ]
@@ -9389,41 +8833,6 @@
       ]
     },
     {
-      "bom-ref": "pump@3.0.4",
-      "type": "library",
-      "name": "pump",
-      "version": "3.0.4",
-      "scope": "required",
-      "author": "Mathias Buus Madsen <mathiasbuus@gmail.com>",
-      "description": "pipe streams together and close all of them if one of them closes",
-      "purl": "pkg:npm/pump@3.0.4",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/pump/-/pump-3.0.4.tgz"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "552eec8dce8a47b7b5ba4445850498e4b336b8158050f88e3dafc0de690a9a23304a64455084edd31ba3fbf95eb209c2bfe74f204625933adcc9782ab881cc70"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "punycode@2.3.1",
       "type": "library",
       "name": "punycode",
@@ -10522,53 +9931,6 @@
       ]
     },
     {
-      "bom-ref": "streamx@2.28.1",
-      "type": "library",
-      "name": "streamx",
-      "version": "2.28.1",
-      "scope": "required",
-      "author": "Mathias Buus (@mafintosh)",
-      "description": "An iteration of the Node.js core streams with a series of improvements",
-      "purl": "pkg:npm/streamx@2.28.1",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/streamx/-/streamx-2.28.1.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/mafintosh/streamx.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/mafintosh/streamx"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/mafintosh/streamx/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cc4cd76f4b3909db3bb6a307eab859d3995c2727425a240f13088d9e056acecc4273deb6bcb638530fa65bba1df240c7db9f24d94cff26b3a474800085287d54"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "styled-jsx@5.1.6",
       "type": "library",
       "name": "styled-jsx",
@@ -10707,194 +10069,6 @@
         {
           "license": {
             "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "tar-fs@3.1.3",
-      "type": "library",
-      "name": "tar-fs",
-      "version": "3.1.3",
-      "scope": "required",
-      "author": "Mathias Buus",
-      "description": "filesystem bindings for tar-stream",
-      "purl": "pkg:npm/tar-fs@3.1.3",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/tar-fs/-/tar-fs-3.1.3.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/mafintosh/tar-fs.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/mafintosh/tar-fs"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/mafintosh/tar-fs/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "fe15380179c8759bbe1af975a64d282397f91f15ac08946d636685689764f55bf22f8f03594ea253958020f1bec088b562f580e9e4c9bc8be23ffb4c01964dc1"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "tar-stream@3.2.1",
-      "type": "library",
-      "name": "tar-stream",
-      "version": "3.2.1",
-      "scope": "required",
-      "author": "Mathias Buus <mathiasbuus@gmail.com>",
-      "description": "tar-stream is a streaming tar parser and generator and nothing else. It operates purely using streams which means you can easily extract/parse tarballs without ever hitting the file system.",
-      "purl": "pkg:npm/tar-stream@3.2.1",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/tar-stream/-/tar-stream-3.2.1.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/mafintosh/tar-stream.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/mafintosh/tar-stream"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/mafintosh/tar-stream/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9eab043bcccb649beb38c744c2403441d08b15b7ad1cc9fde59aaee1f2b05fe8646935893d964eaf1c7f3f0b71a0ad0c3064260503515b708fb3c205610cf871"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "teex@1.0.1",
-      "type": "library",
-      "name": "teex",
-      "version": "1.0.1",
-      "scope": "required",
-      "author": "Mathias Buus (@mafintosh)",
-      "description": "Turn a readable stream into multiple readable streamx streams",
-      "purl": "pkg:npm/teex@1.0.1",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/teex/-/teex-1.0.1.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/mafintosh/teex.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/mafintosh/teex"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/mafintosh/teex/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "79813a88423ad8d8b51fca086bb2a50d4eae401b6aaf811a8e78b7c17eeba5f5c3f32b05c7ccf4f9dae2f8a5843d6a41b315dfc6ee7cc7fd23bd3553d5e90e4a"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "text-decoder@1.2.7",
-      "type": "library",
-      "name": "text-decoder",
-      "version": "1.2.7",
-      "scope": "required",
-      "author": "Holepunch",
-      "description": "Streaming text decoder that preserves multibyte Unicode characters",
-      "purl": "pkg:npm/text-decoder@1.2.7",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/text-decoder/-/text-decoder-1.2.7.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/holepunchto/text-decoder.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/holepunchto/text-decoder#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/holepunchto/text-decoder/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "be52f2b5791e3f8c6f12ada8b477897d24084725b1a3fa191846d7aed10417d1e79ab765cb9f6c51bcd9fd08325ae2d81dcb421f1145e2d45064d43d93ad04c5"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
           }
         }
       ]
@@ -11724,53 +10898,6 @@
       ]
     },
     {
-      "bom-ref": "wrappy@1.0.2",
-      "type": "library",
-      "name": "wrappy",
-      "version": "1.0.2",
-      "scope": "required",
-      "author": "Isaac Z. Schlueter <i@izs.me> (http://blog.izs.me/)",
-      "description": "Callback wrapping utility",
-      "purl": "pkg:npm/wrappy@1.0.2",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/npm/wrappy"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/npm/wrappy"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/npm/wrappy/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9784a9fc346c7a8afdc0be84bd5dbe4ee427eb774c90f8d9feca7d5e48214c46d5f4a94f4b5c54b19deeeff2103b8c31b5c141e1b82940f45c477402bdeccf71"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "ISC"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "xml-name-validator@5.0.0",
       "type": "library",
       "name": "xml-name-validator",
@@ -12106,7 +11233,6 @@
         "@electric-sql/pglite@0.5.8",
         "@electric-sql/pglite-socket@0.2.11",
         "@playwright/test@1.63.0",
-        "@sparticuz/chromium@143.0.4",
         "@types/node@26.6.3",
         "@types/pg@8.23.1",
         "@types/react@19.3.0",
@@ -12877,13 +12003,6 @@
       ]
     },
     {
-      "ref": "@sparticuz/chromium@143.0.4",
-      "dependsOn": [
-        "follow-redirects@1.16.0",
-        "tar-fs@3.1.3"
-      ]
-    },
-    {
       "ref": "@swc/helpers@0.5.23",
       "dependsOn": [
         "tslib@2.8.1"
@@ -13077,45 +12196,8 @@
       ]
     },
     {
-      "ref": "b4a@1.9.0",
-      "dependsOn": []
-    },
-    {
       "ref": "balanced-match@4.0.4",
       "dependsOn": []
-    },
-    {
-      "ref": "bare-events@2.9.2",
-      "dependsOn": []
-    },
-    {
-      "ref": "bare-fs@4.8.2",
-      "dependsOn": [
-        "bare-events@2.9.2",
-        "bare-path@3.1.2",
-        "bare-stream@2.13.4",
-        "bare-url@2.5.4",
-        "fast-fifo@1.3.2"
-      ]
-    },
-    {
-      "ref": "bare-path@3.1.2",
-      "dependsOn": []
-    },
-    {
-      "ref": "bare-stream@2.13.4",
-      "dependsOn": [
-        "bare-events@2.9.2",
-        "b4a@1.9.0",
-        "streamx@2.28.1",
-        "teex@1.0.1"
-      ]
-    },
-    {
-      "ref": "bare-url@2.5.4",
-      "dependsOn": [
-        "bare-path@3.1.2"
-      ]
     },
     {
       "ref": "baseline-browser-mapping@2.11.26",
@@ -13226,12 +12308,6 @@
       "dependsOn": []
     },
     {
-      "ref": "end-of-stream@1.4.5",
-      "dependsOn": [
-        "once@1.4.0"
-      ]
-    },
-    {
       "ref": "entities@8.1.0",
       "dependsOn": []
     },
@@ -13246,12 +12322,6 @@
       "dependsOn": []
     },
     {
-      "ref": "events-universal@1.0.1",
-      "dependsOn": [
-        "bare-events@2.9.2"
-      ]
-    },
-    {
       "ref": "fast-decode-uri-component@1.0.1",
       "dependsOn": []
     },
@@ -13261,10 +12331,6 @@
     },
     {
       "ref": "fast-equals@5.4.3",
-      "dependsOn": []
-    },
-    {
-      "ref": "fast-fifo@1.3.2",
       "dependsOn": []
     },
     {
@@ -13325,10 +12391,6 @@
         "fast-querystring@1.1.2",
         "safe-regex2@5.1.1"
       ]
-    },
-    {
-      "ref": "follow-redirects@1.16.0",
-      "dependsOn": []
     },
     {
       "ref": "get-nonce@1.0.1",
@@ -13517,12 +12579,6 @@
     {
       "ref": "on-exit-leak-free@2.1.2",
       "dependsOn": []
-    },
-    {
-      "ref": "once@1.4.0",
-      "dependsOn": [
-        "wrappy@1.0.2"
-      ]
     },
     {
       "ref": "openapi-types@12.1.3",
@@ -13780,13 +12836,6 @@
       ]
     },
     {
-      "ref": "pump@3.0.4",
-      "dependsOn": [
-        "end-of-stream@1.4.5",
-        "once@1.4.0"
-      ]
-    },
-    {
       "ref": "punycode@2.3.1",
       "dependsOn": []
     },
@@ -13941,14 +12990,6 @@
       "dependsOn": []
     },
     {
-      "ref": "streamx@2.28.1",
-      "dependsOn": [
-        "events-universal@1.0.1",
-        "fast-fifo@1.3.2",
-        "text-decoder@1.2.7"
-      ]
-    },
-    {
       "ref": "styled-jsx@5.1.6",
       "dependsOn": [
         "react@19.3.0",
@@ -13966,36 +13007,6 @@
     {
       "ref": "tagged-tag@1.0.0",
       "dependsOn": []
-    },
-    {
-      "ref": "tar-fs@3.1.3",
-      "dependsOn": [
-        "pump@3.0.4",
-        "tar-stream@3.2.1",
-        "bare-fs@4.8.2",
-        "bare-path@3.1.2"
-      ]
-    },
-    {
-      "ref": "tar-stream@3.2.1",
-      "dependsOn": [
-        "b4a@1.9.0",
-        "bare-fs@4.8.2",
-        "fast-fifo@1.3.2",
-        "streamx@2.28.1"
-      ]
-    },
-    {
-      "ref": "teex@1.0.1",
-      "dependsOn": [
-        "streamx@2.28.1"
-      ]
-    },
-    {
-      "ref": "text-decoder@1.2.7",
-      "dependsOn": [
-        "b4a@1.9.0"
-      ]
     },
     {
       "ref": "thread-stream@4.2.0",
@@ -14115,10 +13126,6 @@
         "tr46@6.0.0",
         "webidl-conversions@8.0.1"
       ]
-    },
-    {
-      "ref": "wrappy@1.0.2",
-      "dependsOn": []
     },
     {
       "ref": "xml-name-validator@5.0.0",

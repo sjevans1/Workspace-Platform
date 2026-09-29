@@ -162,7 +162,6 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | @smithy/node-http-handler | 4.12.1 | Apache-2.0 | [LICENSE](docs/licenses/d82ceb8cbd004a2d.txt) |
 | @smithy/signature-v4 | 5.7.4 | Apache-2.0 | [LICENSE](docs/licenses/d82ceb8cbd004a2d.txt) |
 | @smithy/types | 4.19.0 | Apache-2.0 | [LICENSE](docs/licenses/07364a5f7d0177a5.txt) |
-| @sparticuz/chromium | 143.0.4 | MIT | [LICENSE](docs/licenses/3569040c1b042820.txt) |
 | @swc/helpers | 0.5.23 | Apache-2.0 | [LICENSE](docs/licenses/d96eba1f1881334d.txt) |
 | @tiptap/core | 3.31.3 | MIT | [LICENSE.md](docs/licenses/c96e5ecb55ac5931.txt) |
 | @tiptap/extension-bold | 3.31.3 | MIT | [LICENSE.md](docs/licenses/c96e5ecb55ac5931.txt) |
@@ -211,13 +210,7 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | async-mutex | 0.5.0 | MIT | [LICENSE](docs/licenses/afdf40d8e1d2478a.txt) |
 | atomic-sleep | 1.0.0 | MIT | [LICENSE](docs/licenses/8d58741278b289a7.txt) |
 | avvio | 9.3.0 | MIT | [LICENSE](docs/licenses/0dae13c0bb4d8c6d.txt) |
-| b4a | 1.9.0 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt) |
 | balanced-match | 4.0.4 | MIT | [LICENSE.md](docs/licenses/d408f38ffa3355c5.txt) |
-| bare-events | 2.9.2 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt) |
-| bare-fs | 4.8.2 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt) |
-| bare-path | 3.1.2 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt), [NOTICE](docs/licenses/fd4098360de4b9fb.txt) |
-| bare-stream | 2.13.4 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt) |
-| bare-url | 2.5.4 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt) |
 | baseline-browser-mapping | 2.11.26 | Apache-2.0 | [LICENSE.txt](docs/licenses/c71d239df91726fc.txt) |
 | bidi-js | 1.1.0 | MIT | [LICENSE.txt](docs/licenses/49d4d143fed599de.txt) |
 | bowser | 2.14.1 | MIT | [LICENSE](docs/licenses/dfde54fedc270c2a.txt) |
@@ -243,15 +236,12 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | detect-libc | 2.1.2 | Apache-2.0 | [LICENSE](docs/licenses/b40930bbcf80744c.txt) |
 | detect-node-es | 1.1.0 | MIT | [LICENSE](docs/licenses/54b32293ea560d22.txt) |
 | emoji-mart | 5.6.0 | MIT | [LICENSE](docs/licenses/9acd87e46fa3c7fb.txt) |
-| end-of-stream | 1.4.5 | MIT | [LICENSE](docs/licenses/3fe8d55a98dbf260.txt) |
 | entities | 8.1.0 | BSD-2-Clause | [LICENSE](docs/licenses/cb992345949ccd6e.txt) |
 | esbuild | 0.28.2 | MIT | [LICENSE.md](docs/licenses/b40ec5baec7bb34f.txt) |
 | escape-html | 1.0.3 | MIT | [LICENSE](docs/licenses/255aa557a1f55224.txt) |
-| events-universal | 1.0.1 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt) |
 | fast-decode-uri-component | 1.0.1 | MIT | [LICENSE](docs/licenses/27384b39baee4b47.txt) |
 | fast-deep-equal | 3.1.3 | MIT | [LICENSE](docs/licenses/7bf9b2de73a6b356.txt) |
 | fast-equals | 5.4.3 | MIT | [LICENSE](docs/licenses/c0af1c3e74a891b4.txt) |
-| fast-fifo | 1.3.2 | MIT | [LICENSE](docs/licenses/41a2aa55a9ebad3d.txt) |
 | fast-json-stringify | 7.0.1 | MIT | [LICENSE](docs/licenses/b08de5bb7b21f44a.txt) |
 | fast-querystring | 1.1.2 | MIT | [LICENSE](docs/licenses/4f8cf48502224399.txt) |
 | fast-uri | 3.1.8 | BSD-3-Clause | [LICENSE](docs/licenses/b010b0dfdfdb23d7.txt) |
@@ -261,7 +251,6 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | fastify-plugin | 6.0.0 | MIT | [LICENSE](docs/licenses/ba9677e5a34c2738.txt) |
 | fastq | 1.20.3 | ISC | [LICENSE](docs/licenses/c3367f6d01a79d36.txt) |
 | find-my-way | 9.9.0 | MIT | [LICENSE](docs/licenses/693f9539655acc18.txt) |
-| follow-redirects | 1.16.0 | MIT | [LICENSE](docs/licenses/bfa8a54bb952ccda.txt) |
 | fsevents | 2.3.3 | MIT | Not installed on this platform |
 | get-nonce | 1.0.1 | MIT | [LICENSE](docs/licenses/acf3b087b348d2f2.txt) |
 | glob | 13.0.6 | BlueOak-1.0.0 | [LICENSE.md](docs/licenses/a49c9ba464796f65.txt) |
@@ -297,7 +286,6 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | nanoid | 3.3.19 | MIT | [LICENSE](docs/licenses/da4db1480d9beea3.txt) |
 | next | 16.3.6 | MIT | [license.md](docs/licenses/ee765244e2d59f52.txt) |
 | on-exit-leak-free | 2.1.2 | MIT | [LICENSE](docs/licenses/47404ffc18f12678.txt) |
-| once | 1.4.0 | ISC | [LICENSE](docs/licenses/4ec3d4c66cd87f5c.txt) |
 | openapi-types | 12.1.3 | MIT | [LICENSE](docs/licenses/a5b243ddbec533f2.txt) |
 | orderedmap | 2.1.1 | MIT | [LICENSE](docs/licenses/869c30f368eb0873.txt) |
 | parse5 | 8.0.1 | MIT | [LICENSE](docs/licenses/8c535800331e1e44.txt) |
@@ -338,7 +326,6 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | prosemirror-tables | 1.8.5 | MIT | [LICENSE](docs/licenses/d1d2046ebbe6362f.txt) |
 | prosemirror-transform | 1.12.2 | MIT | [LICENSE](docs/licenses/ef0b452ced6304db.txt) |
 | prosemirror-view | 1.42.6 | MIT | [LICENSE](docs/licenses/ef0b452ced6304db.txt) |
-| pump | 3.0.4 | MIT | [LICENSE](docs/licenses/3fe8d55a98dbf260.txt) |
 | punycode | 2.3.1 | MIT | [LICENSE-MIT.txt](docs/licenses/483acb265f182907.txt) |
 | quick-format-unescaped | 4.0.4 | MIT | [LICENSE](docs/licenses/5ac141bfc70bec8f.txt) |
 | react | 19.3.0 | MIT | [LICENSE](docs/licenses/da6d3703ed11cbe4.txt) |
@@ -369,15 +356,10 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | split2 | 4.2.0 | ISC | [LICENSE](docs/licenses/c372ef2fa1dfcb12.txt) |
 | standard-as-callback | 2.1.0 | MIT | [LICENSE](docs/licenses/a1de72eb7bdf08c1.txt) |
 | statuses | 2.0.2 | MIT | [LICENSE](docs/licenses/512cfa4d5e7a7569.txt) |
-| streamx | 2.28.1 | MIT | [LICENSE](docs/licenses/41a2aa55a9ebad3d.txt) |
 | styled-jsx | 5.1.6 | MIT | [license.md](docs/licenses/24d4a4580df855c3.txt) |
 | symbol-tree | 3.2.4 | MIT | [LICENSE](docs/licenses/9ea1eccdabe46976.txt) |
 | tabbable | 6.5.0 | MIT | [LICENSE](docs/licenses/8e714750725e75c8.txt) |
 | tagged-tag | 1.0.0 | MIT | [license](docs/licenses/5c932d88256b4ab9.txt) |
-| tar-fs | 3.1.3 | MIT | [LICENSE](docs/licenses/3fe8d55a98dbf260.txt) |
-| tar-stream | 3.2.1 | MIT | [LICENSE](docs/licenses/3fe8d55a98dbf260.txt) |
-| teex | 1.0.1 | MIT | [LICENSE](docs/licenses/69b1ce578ad0aa97.txt) |
-| text-decoder | 1.2.7 | Apache-2.0 | [LICENSE](docs/licenses/c71d239df91726fc.txt) |
 | thread-stream | 4.2.0 | MIT | [LICENSE](docs/licenses/47404ffc18f12678.txt) |
 | tldts | 7.4.16 | MIT | [LICENSE](docs/licenses/c64182d48160db94.txt) |
 | tldts-core | 7.4.16 | MIT | [LICENSE](docs/licenses/c64182d48160db94.txt) |
@@ -399,7 +381,6 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | webidl-conversions | 8.0.1 | BSD-2-Clause | [LICENSE.md](docs/licenses/a889cc4dbee2ae17.txt) |
 | whatwg-mimetype | 5.0.0 | MIT | [LICENSE.txt](docs/licenses/528eec83cb836a0a.txt) |
 | whatwg-url | 16.0.1 | MIT | [LICENSE.txt](docs/licenses/db480f236292a093.txt) |
-| wrappy | 1.0.2 | ISC | [LICENSE](docs/licenses/4ec3d4c66cd87f5c.txt) |
 | xml-name-validator | 5.0.0 | Apache-2.0 | [LICENSE.txt](docs/licenses/a6cba85bc92e0cff.txt) |
 | xmlchars | 2.2.0 | MIT | [LICENSE](docs/licenses/45d196313c2647d3.txt) |
 | xtend | 4.0.2 | MIT | [LICENSE](docs/licenses/82e67379203d5794.txt) |

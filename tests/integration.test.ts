@@ -606,3 +606,41 @@ test("audit is append-only to runtime role and credentials revoke immediately", 
   assert.equal((await req("GET", "/me", undefined, member)).statusCode, 401);
   assert((await ok("GET", "/audit")).length > 0);
 });
+
+test("numeric filters compare values numerically and record titles respect resource limits", async () => {
+  const d = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: space.id,
+    title: "Numeric acceptance",
+  });
+  await ok("PATCH", `/databases/${d.id}`, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "amount", name: "Amount", type: "number" },
+    ],
+  });
+  await ok("POST", `/databases/${d.id}/records`, {
+    values: { name: "Ten", amount: 10 },
+  });
+  await ok("POST", `/databases/${d.id}/records`, {
+    values: { name: "Two", amount: 2 },
+  });
+  const v = await ok("POST", `/databases/${d.id}/views`, {
+    name: "Above nine",
+    config: {
+      type: "table",
+      filters: [{ property: "amount", op: "after", value: "9" }],
+    },
+  });
+  const rows = await ok("GET", `/databases/${d.id}/records?view=${v.id}`);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].title, "Ten");
+  assert.equal(
+    (
+      await req("POST", `/databases/${d.id}/records`, {
+        values: { name: "x".repeat(501) },
+      })
+    ).statusCode,
+    400,
+  );
+});

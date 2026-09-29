@@ -47,16 +47,23 @@ export async function createCollab(db: Database, port = 1234) {
     });
     return { actor: a, level };
   }
+  async function recheck(c: Connection<Context>, name: string) {
+    try {
+      const v = await authorize(c.context.ticket, name);
+      c.readOnly = v.level < 3;
+      c.context.actor = v.actor;
+    } catch (error) {
+      c.sendStateless(JSON.stringify({ type: "reset" }));
+      c.close({ code: 4403, reason: "Access or document changed" });
+      throw error;
+    }
+  }
   async function prune(d: Document) {
     for (const c of d.getConnections()) {
       try {
-        const ctx = c.context as Context;
-        const v = await authorize(ctx.ticket, d.name);
-        c.readOnly = v.level < 3;
-        ctx.actor = v.actor;
+        await recheck(c, d.name);
       } catch {
-        c.sendStateless(JSON.stringify({ type: "reset" }));
-        c.close({ code: 4403, reason: "Access or document changed" });
+        /* Already disconnected. */
       }
     }
   }
@@ -87,14 +94,11 @@ export async function createCollab(db: Database, port = 1234) {
     },
     async beforeHandleMessage({ context, documentName, update, connection }) {
       assert(update.byteLength <= 1048576, 413, "Update too large");
-      const v = await authorize(context.ticket, documentName);
-      connection.readOnly = v.level < 3;
-      context.actor = v.actor;
+      await recheck(connection, documentName);
     },
     async beforeSync({ document, connection, type, payload }) {
       await prune(document);
-      const live = await authorize(connection.context.ticket, document.name);
-      connection.readOnly = live.level < 3;
+      await recheck(connection, document.name);
       if (type !== 0 && !connection.readOnly) {
         const copy = new Y.Doc();
         try {

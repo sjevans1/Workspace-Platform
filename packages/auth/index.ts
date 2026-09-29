@@ -21,8 +21,11 @@ export type Actor = {
 };
 export const hash = (v: string) => createHash("sha256").update(v).digest("hex"),
   token = () => randomBytes(32).toString("base64url");
-export const equal = (a: string, b: string) =>
-  a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+export function equal(a: string, b: string) {
+  const left = Buffer.from(a),
+    right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
 const derive = (p: string, salt: string) =>
   new Promise<Buffer>((res, rej) =>
     scrypt(p, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 67108864 }, (e, k) =>

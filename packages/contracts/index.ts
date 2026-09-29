@@ -71,6 +71,9 @@ export function validateValues(props: Property[], values: Record<string, any>) {
     }
     let s: z.ZodType = z.string().max(10000);
     switch (p.type) {
+      case "title":
+        s = z.string().trim().min(1).max(500);
+        break;
       case "number":
         s = z.number().finite();
         break;

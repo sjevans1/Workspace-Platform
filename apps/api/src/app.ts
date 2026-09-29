@@ -107,6 +107,7 @@ export async function buildApp(
     500,
     "Set ENCRYPTION_KEY to 64 hexadecimal characters",
   );
+  const dummyPasswordHash = await passwordHash("dummy-password-constant");
   const app = Fastify({
     logger: logging
       ? {
@@ -151,19 +152,17 @@ export async function buildApp(
         ? 400
         : e.statusCode || (["23505", "23503"].includes(e.code) ? 409 : 500);
     if (status >= 500) r.log.error({ err: e }, "Request failed");
-    reply
-      .code(status)
-      .send({
-        error:
-          status >= 500
-            ? "Internal error"
-            : e instanceof z.ZodError
-              ? e.issues
-                  .map((i: any) => `${i.path.join(".")}: ${i.message}`)
-                  .join("; ")
-              : e.message,
-        request_id: r.id,
-      });
+    reply.code(status).send({
+      error:
+        status >= 500
+          ? "Internal error"
+          : e instanceof z.ZodError
+            ? e.issues
+                .map((i: any) => `${i.path.join(".")}: ${i.message}`)
+                .join("; ")
+            : e.message,
+      request_id: r.id,
+    });
   });
   app.addHook("onRequest", async (r, reply) => {
     reply.header("X-Request-Id", r.id);
@@ -320,7 +319,7 @@ export async function buildApp(
       );
       const valid = await verifyPassword(
         v.password,
-        u?.password_hash || (await passwordHash("dummy-password-constant")),
+        u?.password_hash || dummyPasswordHash,
       );
       assert(u && valid, 401, "Incorrect email or password");
       const m = (

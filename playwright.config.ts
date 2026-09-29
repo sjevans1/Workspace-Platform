@@ -1,5 +1,4 @@
 import { defineConfig } from "@playwright/test";
-import chromium from "@sparticuz/chromium";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -16,7 +15,7 @@ export default defineConfig({
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_PATH
       ? {
           executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH,
-          args: chromium.args,
+          args: ["--no-sandbox"],
         }
       : {},
   },

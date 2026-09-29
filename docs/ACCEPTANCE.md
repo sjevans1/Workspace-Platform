@@ -9,7 +9,7 @@ This is an executable alpha built from the OpenJM Workspace Astra handoff, not a
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration and backup tests | 22 passed, 0 failed |
+| Unit, API, collaboration and backup tests | 23 passed, 0 failed |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Service-token scope and guest-default isolation | Pass |

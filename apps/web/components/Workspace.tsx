@@ -900,7 +900,11 @@ function Login({
     >
       <section className="login-card">
         <div className="brand">
-          <div className="brand-mark">✳</div>
+          {brand.logoLight ? (
+            <img src={brand.logoLight} alt="" />
+          ) : (
+            <div className="brand-mark">✳</div>
+          )}
           <strong>{brand.productName}</strong>
         </div>
         <div className="eyebrow">A SHARED PLACE FOR GOOD WORK</div>
