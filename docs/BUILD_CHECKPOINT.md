@@ -29,7 +29,9 @@ Successful CI: https://github.com/sjevans1/Workspace-Platform/actions/runs/36611
 
 The user authorized continuation after the verified first pass. The next increment adds an authenticated SeaweedFS 4.47 service to CI and a recovery test using separate source/recovery PostgreSQL databases and S3 buckets. It covers anonymous and bad-credential rejection, immutable object writes, canonical Yjs and retained-file recovery, checksum/key/schema checks, collision handling and upload-failure rollback. S3 PUT now uses If-None-Match to match local storage’s no-overwrite contract; storage clients are closed on shutdown.
 
-Local TypeScript passes. The S3 integration test requires TEST_DATABASE_URL and TEST_S3_ENDPOINT and is skipped without them; native CI results are still pending for this increment. Next: execute this new CI gate, add deployed-browser coverage for invitation acceptance and live revocation between distinct users, and update this checkpoint with actual results.
+Storage increment published: `d53d363cfa8c0d2d6f17b492bd7a7cbb022ded17`. CI https://github.com/sjevans1/Workspace-Platform/actions/runs/36613650554 passed its backend job: 24 native tests, 0 skipped, including the real SeaweedFS drill, plus TypeScript and production build. The S3 test requires TEST_DATABASE_URL and TEST_S3_ENDPOINT and is skipped locally without them.
+
+The second increment adds a distinct invited teammate to deployed-browser acceptance, covering live edits, view-only downgrade, upgrade, full revocation, private files, search, tickets, owner edits after revocation and access restoration. The review found that the server enforced read-only changes but the editor retained its initial editability flag. Collaboration now sends permission updates and the open editor applies them; the backend regression covers both directions. Deployed-browser results for this increment are pending. Next: verify the new browser gate and record final evidence.
 
 ## First-pass completion and future work
 

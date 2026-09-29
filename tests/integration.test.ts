@@ -399,12 +399,40 @@ test("private uploads validate type and authorize parent on every download", asy
     404,
   );
 });
-test("ancestor permission revocation removes API, search, file and live access", async () => {
+test("live permission changes update editability, and ancestor revocation removes API, search, file and live access", async () => {
   const c = await connect(member);
   let reset = false;
+  const permissions: boolean[] = [];
   c.provider.on("stateless", ({ payload }: any) => {
-    if (JSON.parse(payload).type === "reset") reset = true;
+    const event = JSON.parse(payload);
+    if (event.type === "reset") reset = true;
+    if (event.type === "permission") permissions.push(event.readOnly);
   });
+  await ok("PATCH", `/resources/${space.id}/permissions`, {
+    inherit: true,
+    grants: [{ principal_id: member.id, level: 1 }],
+  });
+  await until(() => permissions.at(-1) === true);
+  assert.equal(
+    (await ok("POST", `/pages/${page.id}/collab`, {}, member)).readOnly,
+    true,
+  );
+  assert.equal(
+    (
+      await req(
+        "POST",
+        `/resources/${page.id}/comments`,
+        { body: "Blocked viewer comment" },
+        member,
+      )
+    ).statusCode,
+    403,
+  );
+  await ok("PATCH", `/resources/${space.id}/permissions`, {
+    inherit: true,
+    grants: [],
+  });
+  await until(() => permissions.at(-1) === false);
   await ok("PATCH", `/resources/${space.id}/permissions`, {
     inherit: false,
     grants: [],

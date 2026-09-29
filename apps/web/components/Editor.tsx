@@ -60,6 +60,7 @@ export default function Editor({ id, user }: { id: string; user: any }) {
     api(`/pages/${id}/collab`, "POST", {})
       .then((ticket) => {
         if (disposed) return;
+        let readOnly = ticket.readOnly;
         const url =
           process.env.NEXT_PUBLIC_COLLAB_URL ||
           (location.port === "3000"
@@ -77,7 +78,7 @@ export default function Editor({ id, user }: { id: string; user: any }) {
           },
           onSynced: () => {
             if (disposed) return;
-            setConnection({ provider: p, doc, readOnly: ticket.readOnly });
+            setConnection({ provider: p, doc, readOnly });
             p?.sendStateless("status");
           },
           onStateless: ({ payload }) => {
@@ -90,6 +91,12 @@ export default function Editor({ id, user }: { id: string; user: any }) {
             }
             if (v.type === "persistence-error")
               setStatus("Save failed · keep this page open");
+            if (v.type === "permission") {
+              readOnly = v.readOnly;
+              setConnection((current: any) =>
+                current ? { ...current, readOnly } : current,
+              );
+            }
             if (v.type === "reset") {
               setConnection(undefined);
               setGeneration((x) => x + 1);

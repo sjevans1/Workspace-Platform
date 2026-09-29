@@ -58,7 +58,7 @@ S3_SECRET_KEY=<dedicated-service-secret>
 S3_FORCE_PATH_STYLE=true
 ```
 
-Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. The S3 adapter is implemented; an actual SeaweedFS/S3 deployment has not yet been exercised by this alpha's local verification. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
+Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. Object writes use the S3 If-None-Match condition so an existing key cannot be overwritten, matching local storage. The automated CI recovery drill passes against authenticated SeaweedFS 4.47; verify conditional PUT support and recovery against your selected S3 provider before rollout. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
 
 ## Webhooks
 
@@ -85,7 +85,7 @@ The backup command refuses to replace an existing file. Choose a new dated filen
 
 Restore into a separate fresh deployment with the **same application/schema version** and original ENCRYPTION_KEY. The tool refuses to restore into any nonempty application database or overwrite existing object keys. Do not delete the old deployment as part of a recovery test.
 
-1. Copy the source `.env` securely to the recovery directory and choose unused host ports.
+1. Copy the source `.env` securely to the recovery directory and choose unused host ports. Preserve the original ENCRYPTION_KEY, but configure fresh PostgreSQL/file volumes and, for S3, a separate empty recovery bucket. Do not point the recovery deployment at the source database or bucket.
 2. Start the fresh PostgreSQL and Valkey services, then run the migration service.
 3. Make the archive readable by the non-root ops user and ensure the new object destination is empty.
 4. Run restore before starting API, collaboration or worker:
@@ -97,7 +97,7 @@ docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts re
 docker compose up -d
 ```
 
-Verify sign-in, page content, restored history, files, a table/board record, and collaboration from two browsers. The automated backup test verifies metadata, raw Yjs equality and attachment bytes, rejects a corrupt object, and rejects a nonempty restore. It does not substitute for a periodic host-level restore drill.
+Verify sign-in, page content, restored history, files, a table/board record, and collaboration from two browsers. The automated tests verify metadata, raw Yjs equality and attachment bytes. The SeaweedFS drill uses separate source/recovery databases and buckets, retains soft-deleted attachments, rejects anonymous reads and bad credentials, and checks checksum/key/schema validation, existing-object collisions, concurrent overwrite protection and upload-failure rollback. It also rejects a nonempty restore and confirms that source objects remain intact. It does not substitute for a periodic host-level restore drill.
 
 ## Upgrades and health
 
@@ -110,3 +110,28 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 - Settings → Audit: recent append-only application audit records.
 
 Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, metrics export, disaster recovery automation, antivirus and SSO remain deployment work described in the acceptance checklist.
+
+## Repeat the S3 recovery check
+
+CI starts `chrislusf/seaweedfs:4.47` with its default `weed mini` entrypoint, synthetic test credentials and `S3_BUCKET=workspace-ci`. Only the S3 port is exposed. This service is disposable test infrastructure; see [SeaweedFS mini documentation](https://github.com/seaweedfs/seaweedfs/wiki/Quick-Start-with-weed-mini) for its configuration.
+
+To run the same check locally, start an isolated service:
+
+```bash
+docker run --rm --name workspace-s3-check \
+  -p 127.0.0.1:8333:8333 \
+  -e AWS_ACCESS_KEY_ID=workspace-ci \
+  -e AWS_SECRET_ACCESS_KEY=workspace-ci-secret \
+  -e S3_BUCKET=workspace-ci chrislusf/seaweedfs:4.47
+```
+
+In another terminal, set TEST_DATABASE_URL to a disposable native PostgreSQL service whose test account can create databases, then run:
+
+```bash
+TEST_S3_ENDPOINT=http://127.0.0.1:8333 \
+TEST_S3_ACCESS_KEY=workspace-ci \
+TEST_S3_SECRET_KEY=workspace-ci-secret \
+node --import tsx --test tests/s3.test.ts
+```
+
+The test creates uniquely named databases/buckets and removes them afterwards. Without both TEST_DATABASE_URL and TEST_S3_ENDPOINT it is explicitly skipped. Never use production credentials for this check.

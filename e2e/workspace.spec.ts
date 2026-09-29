@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 const email = "browser@example.test",
   password = "browser-password-123";
 async function login(page: Page) {
@@ -184,4 +185,233 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
     ),
   ).toBeTruthy();
   expect(errors).toEqual([]);
+});
+
+test("distinct users: invitation, live view-only access, revocation and recovery", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await login(page);
+  const owner = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": owner.csrf };
+  const invitation = await page.request.post("/api/v1/members/invite", {
+    headers,
+    data: {
+      name: "Browser Teammate",
+      email: `teammate-${randomUUID()}@example.test`,
+      role: "member",
+    },
+  });
+  expect(invitation.ok()).toBeTruthy();
+  const context = await browser.newContext();
+  try {
+    const teammate = await context.newPage();
+    teammate.on("pageerror", (error) => errors.push(error.message));
+    await teammate.goto((await invitation.json()).url);
+    await expect(
+      teammate.getByRole("heading", { name: "Join your team." }),
+    ).toBeVisible();
+    await teammate
+      .getByLabel("Password", { exact: true })
+      .fill("teammate-password-123");
+    await teammate
+      .getByRole("button", { name: "Accept invitation", exact: true })
+      .click();
+    await expect(
+      teammate.getByRole("heading", { name: "Welcome back, Browser." }),
+    ).toBeVisible();
+    const member = await (await teammate.request.get("/api/v1/me")).json();
+    expect(member.user.id).not.toBe(owner.user.id);
+    expect(member.user.role).toBe("member");
+
+    const roots = await (await page.request.get("/api/v1/resources")).json();
+    const spaceResponse = await page.request.post("/api/v1/resources", {
+      headers,
+      data: {
+        kind: "space",
+        title: "Access evaluation",
+        parent_id: roots[0].id,
+      },
+    });
+    expect(spaceResponse.ok()).toBeTruthy();
+    const space = await spaceResponse.json();
+    const title = `Access evidence ${randomUUID()}`;
+    const documentResponse = await page.request.post("/api/v1/resources", {
+      headers,
+      data: { kind: "page", title, parent_id: space.id },
+    });
+    expect(documentResponse.ok()).toBeTruthy();
+    const document = await documentResponse.json();
+    const url = `/?page=${document.id}`;
+    await page.goto(url);
+    const editor = page.locator(".bn-editor");
+    await expect(editor).toBeVisible();
+    await editor.click();
+    await page.keyboard.type("Shared access evidence.");
+    await expect
+      .poll(
+        async () =>
+          (
+            await (
+              await page.request.get(`/api/v1/pages/${document.id}/content`)
+            ).json()
+          ).plain_text,
+      )
+      .toContain("Shared access evidence.");
+    await teammate.goto(url);
+    const otherEditor = teammate.locator(".bn-editor");
+    await expect(otherEditor).toContainText("Shared access evidence.");
+    await otherEditor.click();
+    await teammate.keyboard.press("ControlOrMeta+End");
+    await teammate.keyboard.type(" Teammate contribution.");
+    await expect(editor).toContainText("Teammate contribution.");
+    await expect(
+      teammate.getByRole("status").filter({ hasText: "Saved" }),
+    ).toBeVisible();
+
+    const upload = await page.request.post(
+      `/api/v1/resources/${document.id}/files`,
+      {
+        headers,
+        multipart: {
+          file: {
+            name: "private-evidence.txt",
+            mimeType: "text/plain",
+            buffer: Buffer.from("Private attachment evidence"),
+          },
+        },
+      },
+    );
+    expect(upload.ok()).toBeTruthy();
+    const file = await upload.json();
+    const readable = await teammate.request.get(file.url);
+    expect(readable.ok()).toBeTruthy();
+    expect(await readable.text()).toBe("Private attachment evidence");
+    expect(readable.headers()["cache-control"]).toBe("no-store");
+
+    // Change access in the owner UI while the teammate's editor is still open.
+    await page.getByRole("button", { name: "Page actions" }).click();
+    await page
+      .getByRole("button", { name: "Manage access", exact: true })
+      .click();
+    const access = page.getByRole("dialog", { name: "Manage access" });
+    await expect(
+      access.getByText("Your access: 4.", { exact: false }),
+    ).toBeVisible();
+    await access
+      .getByRole("button", { name: "Add person or integration" })
+      .click();
+    await access
+      .getByLabel("Principal", { exact: true })
+      .selectOption(member.user.id);
+    await access.getByLabel("Access level", { exact: true }).selectOption("1");
+    await access
+      .getByRole("button", { name: "Save access", exact: true })
+      .click();
+    await expect(access).toBeHidden();
+    await expect(otherEditor).toHaveAttribute("contenteditable", "false");
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.type(" Owner update remains visible.");
+    await expect(otherEditor).toContainText("Owner update remains visible.");
+    const deniedEdit = await teammate.request.post(
+      `/api/v1/resources/${document.id}/comments`,
+      {
+        headers: { "X-CSRF-Token": member.csrf },
+        data: { body: "Viewers cannot comment" },
+      },
+    );
+    expect(deniedEdit.status()).toBe(403);
+
+    await page.getByRole("button", { name: "Page actions" }).click();
+    await page
+      .getByRole("button", { name: "Manage access", exact: true })
+      .click();
+    await expect(
+      access.getByLabel("Access level", { exact: true }),
+    ).toHaveValue("1");
+    await access.getByLabel("Access level", { exact: true }).selectOption("3");
+    await access
+      .getByRole("button", { name: "Save access", exact: true })
+      .click();
+    await expect(access).toBeHidden();
+    await expect(otherEditor).toHaveAttribute("contenteditable", "true");
+
+    await page.getByRole("button", { name: "Page actions" }).click();
+    await page
+      .getByRole("button", { name: "Manage access", exact: true })
+      .click();
+    await expect(
+      access.getByLabel("Access level", { exact: true }),
+    ).toHaveValue("3");
+    await access.getByRole("button", { name: "Remove grant" }).click();
+    await access.getByLabel("Inherit access from parent").uncheck();
+    await access
+      .getByRole("button", { name: "Save access", exact: true })
+      .click();
+    await expect(access).toBeHidden();
+    await expect(otherEditor).toHaveCount(0);
+    await expect(
+      teammate.getByText("Teammate contribution.", { exact: false }),
+    ).toHaveCount(0);
+    await expect(
+      teammate.getByRole("status").filter({ hasText: "Unable to connect" }),
+    ).toBeVisible();
+    for (const route of [
+      `/resources/${document.id}`,
+      `/pages/${document.id}/content`,
+      `/pages/${document.id}/versions`,
+    ]) {
+      expect((await teammate.request.get(`/api/v1${route}`)).status()).toBe(
+        404,
+      );
+    }
+    expect((await teammate.request.get(file.url)).status()).toBe(404);
+    const hiddenSearch = await teammate.request.get("/api/v1/search", {
+      params: { q: title },
+    });
+    expect(hiddenSearch.ok()).toBeTruthy();
+    expect(await hiddenSearch.json()).toEqual([]);
+    const ticket = await teammate.request.post(
+      `/api/v1/pages/${document.id}/collab`,
+      { headers: { "X-CSRF-Token": member.csrf }, data: {} },
+    );
+    expect(ticket.status()).toBe(404);
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.type(" Owner-only update after revocation.");
+    await expect
+      .poll(
+        async () =>
+          (
+            await (
+              await page.request.get(`/api/v1/pages/${document.id}/content`)
+            ).json()
+          ).plain_text,
+      )
+      .toContain("Owner-only update after revocation.");
+    await expect(
+      teammate.getByText("Owner-only update after revocation.", {
+        exact: false,
+      }),
+    ).toHaveCount(0);
+
+    const restored = await page.request.patch(
+      `/api/v1/resources/${document.id}/permissions`,
+      { headers, data: { inherit: true, grants: [] } },
+    );
+    expect(restored.ok()).toBeTruthy();
+    await teammate.reload();
+    await expect(otherEditor).toContainText(
+      "Owner-only update after revocation.",
+    );
+    await expect(otherEditor).toHaveAttribute("contenteditable", "true");
+    expect((await teammate.request.get(file.url)).ok()).toBeTruthy();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
 });

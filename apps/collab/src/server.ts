@@ -52,7 +52,11 @@ export async function createCollab(db: Database, port = 1234) {
   async function recheck(c: Connection<Context>, name: string) {
     try {
       const v = await authorize(c.context.ticket, name);
-      c.readOnly = v.level < 3;
+      const readOnly = v.level < 3;
+      if (c.readOnly !== readOnly) {
+        c.readOnly = readOnly;
+        c.sendStateless(JSON.stringify({ type: "permission", readOnly }));
+      }
       c.context.actor = v.actor;
     } catch (error) {
       c.sendStateless(JSON.stringify({ type: "reset" }));
