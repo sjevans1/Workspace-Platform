@@ -6,6 +6,8 @@ Use this only for a disposable identity test environment on the existing WSL2 ho
 
 Independently validate the OpenJM Workspace OIDC implementation against a real Keycloak server and a real browser redirect flow.
 
+This original runbook validated the SSO foundation. Back-channel logout was implemented afterwards. For current session-revocation acceptance, continue with `docs/HERMES_KEYCLOAK_LOGOUT_ACCEPTANCE.md` rather than treating the old Phase 8 boundary below as current runtime behavior.
+
 The application code under test was introduced at merge commit:
 
 `842ee53bbc17f569d0aaba748d8a15ac517b6955`
@@ -305,3 +307,8 @@ When cleanup is authorized, verify names first. Only remove:
 - private temporary realm import/test data.
 
 Never remove volumes belonging to `openjm_workspace_source` or `openjm_workspace_recovery`.
+
+
+## Follow-up: back-channel logout
+
+The SSO foundation described above has passed. OIDC back-channel logout was added later at runtime merge `bd6b0c4a053a93f9dd060003c44a7adaa95768b2` and passed CI run 36792189577. Use [the focused Keycloak logout acceptance](HERMES_KEYCLOAK_LOGOUT_ACCEPTANCE.md) to validate active-session revocation against the real disposable Keycloak environment.
