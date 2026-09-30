@@ -11,7 +11,7 @@ Both jobs passed in [GitHub Actions run 36611129995](https://github.com/sjevans1
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration and backup tests | 30 passed, 0 failed in latest native PostgreSQL gate |
+| Unit, API, collaboration, identity and backup tests | 34 passed, 0 failed in latest native PostgreSQL gate |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Concurrent ACL replacement and stale-write rejection | Pass; simultaneous conflicting saves resolve as one success and one 409 |
@@ -24,12 +24,13 @@ Both jobs passed in [GitHub Actions run 36611129995](https://github.com/sjevans1
 | Trash cascade and restore | Pass |
 | Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL 17 test suite | 30 passed; clean process shutdown |
+| Native PostgreSQL 17 test suite | 34 passed; clean process shutdown |
 | Migration rollback/retry and historical checksum integrity | Pass; failed partial DDL rolls back, corrected retry succeeds, reruns are idempotent, applied-file drift is rejected |
 | Docker image, migrations and full Compose startup | Pass; API, collaboration and worker all report healthy before browser acceptance |
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
 | Mobile viewport, 390 × 844 | Pass; sidebar navigation and no document-width overflow |
-| Browser runtime errors | None in the primary session during the tested workflow |\n| Independent WSL2 host deployment and recovery | Hermes-reported PASS on `b392f4113`: fresh install, 2/2 browser tests, restart persistence, idempotent migrations, backup, isolated restore, recovered sign-in/content and operational status; trusted TLS not executed |
+| Browser runtime errors | None in the primary session during the tested workflow |
+| OIDC / Keycloak authentication foundation | Pass in CI run 36770930101: state/nonce/PKCE, signed ID-token validation, verified email, existing-user linking, invitation provisioning and replay rejection; real Keycloak host test remains |\n| Independent WSL2 host deployment and recovery | Hermes-reported PASS on `b392f4113`: fresh install, 2/2 browser tests, restart persistence, idempotent migrations, backup, isolated restore, recovered sign-in/content and operational status; trusted TLS not executed |
 
 Local backend tests run against PGlite's PostgreSQL engine, with serialized test transactions because its socket bridge multiplexes one backend. Production uses normal native PostgreSQL transactions. Native PostgreSQL is a separate required CI gate, not assumed equivalent solely from PGlite results.
 
@@ -45,7 +46,7 @@ The repository contains a connected interface, API, collaboration server, import
 
 | Area | Remaining work or current boundary |
 |---|---|
-| Identity | OIDC/Keycloak SSO, MFA, password reset/recovery and enterprise directory lifecycle are not implemented. Invitations produce copyable links, not email delivery. |
+| Identity | Deployment-level OIDC/Keycloak SSO is implemented with PKCE/state/nonce, verified-email linking, invitation-controlled passwordless provisioning and optional local-auth disable. Remaining: real Keycloak/TLS host acceptance, per-tenant IdPs, SCIM/directory lifecycle, group/role mapping, IdP logout/session revocation, application-enforced MFA context, local password recovery and invitation email delivery. |
 | Editor coverage | Default BlockNote Core blocks, slash menu, formatting, links, images/files and tables are integrated. Custom callout/divider/wiki-link/backlink behaviour, a complete block-type acceptance matrix and block-anchored comment UI remain. The API accepts optional comment block IDs. |
 | Offline and scale | Offline edits are memory-only until acknowledged; no durable local offline queue. Single collaboration writer, no horizontal coordination. Load/concurrency and reconnect fault-injection benchmarks remain. |
 | Databases | No formulas, relations, rollups, advanced cross-database queries or import mapping wizard. Property schema changes validate existing data; destructive schema transformations need explicit migration support. Board keyboard updates use selectors. |
@@ -62,4 +63,4 @@ The repository contains a connected interface, API, collaboration server, import
 
 ## Suggested next acceptance slice
 
-With native PostgreSQL/container/browser gates and an independent WSL2 deployment/recovery exercise passing, the next host-level acceptance should be a customer-like trusted-TLS deployment and recovery drill against the selected production S3/object-store provider. Identity/SSO, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
+With native PostgreSQL/container/browser gates and an independent WSL2 deployment/recovery exercise passing, the next host-level acceptance should be a customer-like trusted-TLS deployment and recovery drill against the selected production S3/object-store provider. Real-provider identity acceptance, directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
