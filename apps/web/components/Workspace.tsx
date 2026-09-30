@@ -26,6 +26,10 @@ export default function Workspace() {
     [setup, setSetup] = useState(false),
     [loaded, setLoaded] = useState(false),
     [brand, setBrand] = useState<any>({ productName: "Workspace" }),
+    [authMethods, setAuthMethods] = useState<any>({
+      local: true,
+      oidc: { enabled: false },
+    }),
     [screen, setScreen] = useState("home"),
     [current, setCurrent] = useState(""),
     [roots, setRoots] = useState<any[]>([]),
@@ -40,6 +44,7 @@ export default function Workspace() {
       const m = await api("/me");
       setMe(m);
       setBrand(m.branding);
+      setAuthMethods(m.authentication || authMethods);
       setCsrf(m.csrf);
       const nodes = await api("/resources");
       setRoots(nodes);
@@ -50,6 +55,7 @@ export default function Workspace() {
       setMe(null);
       setSetup((await api("/setup")).required);
       setBrand(await api("/branding"));
+      setAuthMethods(await api("/auth/methods"));
     } finally {
       setLoaded(true);
     }
@@ -127,7 +133,7 @@ export default function Workspace() {
   if (!me)
     return (
       <>
-        <Login setup={setup} brand={brand} done={init} />
+        <Login setup={setup} brand={brand} auth={authMethods} done={init} />
         {toast && (
           <div className="toast" role="alert">
             {toast}
@@ -836,10 +842,12 @@ function CreateDialog({
 function Login({
   setup,
   brand,
+  auth,
   done,
 }: {
   setup: boolean;
   brand: any;
+  auth: any;
   done: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false),
@@ -922,6 +930,22 @@ function Login({
               ? "Use your existing account password, or choose a password for your new account."
               : "Sign in to your team’s workspace."}
         </p>
+        {!setup && auth.oidc?.enabled && (
+          <a
+            className="button primary full"
+            href={`/api/v1/auth/oidc/start?${new URLSearchParams({
+              return_to: "/",
+              ...(invite ? { invite } : {}),
+            }).toString()}`}
+          >
+            Continue with {auth.oidc.label || "Single sign-on"}
+            <ArrowRight size={16} />
+          </a>
+        )}
+        {!setup && auth.oidc?.enabled && auth.local && (
+          <div className="muted small-text">or use your local account</div>
+        )}
+        {(setup || auth.local) && (
         <form onSubmit={submit} className="form">
           {setup && (
             <>
@@ -983,6 +1007,12 @@ function Login({
             <ArrowRight size={16} />
           </button>
         </form>
+        )}
+        {!setup && !auth.local && !auth.oidc?.enabled && (
+          <p role="alert" className="error">
+            No sign-in method is configured for this deployment.
+          </p>
+        )}
         <footer>
           {brand.supportUrl && (
             <a href={brand.supportUrl}>{brand.supportName}</a>
