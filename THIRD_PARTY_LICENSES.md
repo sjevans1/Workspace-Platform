@@ -263,6 +263,7 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | ipaddr.js | 2.5.0 | MIT | [LICENSE](docs/licenses/62568a2d1337b771.txt) |
 | is-potential-custom-element-name | 1.0.1 | MIT | [LICENSE-MIT.txt](docs/licenses/483acb265f182907.txt) |
 | isomorphic.js | 0.2.5 | MIT | [LICENSE](docs/licenses/dd6488c9c1a4ce2d.txt) |
+| jose | 6.2.12 | MIT | [LICENSE.md](docs/licenses/8078b0829d6c3e9e.txt) |
 | jsdom | 29.1.1 | MIT | [LICENSE.txt](docs/licenses/242d37e7cab25cba.txt) |
 | json-schema-ref-resolver | 3.0.0 | MIT | [LICENSE](docs/licenses/0943b637252a9c6f.txt) |
 | json-schema-resolver | 3.0.0 | MIT | [LICENSE](docs/licenses/dfc6eb4df78850d3.txt) |
@@ -285,8 +286,10 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | ms | 2.1.3 | MIT | [license.md](docs/licenses/1662fae9b5314d11.txt) |
 | nanoid | 3.3.19 | MIT | [LICENSE](docs/licenses/da4db1480d9beea3.txt) |
 | next | 16.3.6 | MIT | [license.md](docs/licenses/ee765244e2d59f52.txt) |
+| oauth4webapi | 3.8.8 | MIT | [LICENSE.md](docs/licenses/81e7b4b0196e8caa.txt) |
 | on-exit-leak-free | 2.1.2 | MIT | [LICENSE](docs/licenses/47404ffc18f12678.txt) |
 | openapi-types | 12.1.3 | MIT | [LICENSE](docs/licenses/a5b243ddbec533f2.txt) |
+| openid-client | 6.8.8 | MIT | [LICENSE.md](docs/licenses/14c5cc0dc21f44ad.txt) |
 | orderedmap | 2.1.1 | MIT | [LICENSE](docs/licenses/869c30f368eb0873.txt) |
 | parse5 | 8.0.1 | MIT | [LICENSE](docs/licenses/8c535800331e1e44.txt) |
 | path-scurry | 2.0.2 | BlueOak-1.0.0 | [LICENSE.md](docs/licenses/8a1af140fdfbf5af.txt) |
