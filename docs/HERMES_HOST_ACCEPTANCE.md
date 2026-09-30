@@ -209,19 +209,37 @@ Create a second directory, for example `Workspace-Platform-Recovery`. **Before r
 
 Copy the backup file and securely copy the source configuration values needed for recovery, including the original encryption key. Do not share those values in evidence.
 
-In the recovery directory, configure fresh PostgreSQL/file volumes and different host ports. Verify the project name **without printing the interpolated Compose config/secrets**. Then:
+In the recovery directory, configure fresh PostgreSQL/file volumes and **different host ports and APP_URL**. Copy the original ENCRYPTION_KEY privately and preserve the same application/migration version. Do not copy the source `.env` without adjusting the recovery configuration. Set these shell overrides in the **recovery terminal**, which take precedence over `.env`; use different ports if 8081/8444 are already occupied:
 
 ```bash
 export COMPOSE_PROJECT_NAME=openjm_workspace_recovery
+export HTTP_PORT=8081 HTTPS_PORT=8444
+export APP_URL=http://localhost:8081
+export BIND_ADDRESS=127.0.0.1 CADDY_ADDRESS=:80 COOKIE_SECURE=false
 test "$COMPOSE_PROJECT_NAME" != "openjm_workspace_source"
 docker compose config --quiet
+# Show only nonsecret project/port evidence, NOT the full interpolated config.
+docker compose ps
+```
+
+Confirm independently that the source and recovery Compose projects have separate volumes and that the chosen host ports are free. Check that `backups/host-acceptance.json` is actually present in the recovery checkout and readable by the nonroot ops container user (UID 1000), without printing its contents.
+
+**Required restore order:** start only PostgreSQL and Valkey, run migrations, restore the archive **before** starting API/collaboration/worker/web/Caddy, and only then start the whole application. Do not run `docker compose up -d` before the restore command. Merely starting the full recovery stack is not a completed recovery test.
+
+```bash
 docker compose up -d postgres valkey
 docker compose run --rm migrate
+# If an earlier failed attempt started the recovery application, first inspect
+# whether the recovery database and object destination remain EMPTY.
+# The restore deliberately refuses to overwrite any existing application data.
 docker compose --profile ops run --rm ops \
   node --import tsx scripts/backup.ts restore /backups/host-acceptance.json
 docker compose up -d
 docker compose ps
+curl --fail http://localhost:8081/ready
 ```
+
+If a prior premature startup left data in the recovery database or objects in the recovery volume, **do not force the restore**. Stop and report the exact state. Only rebuild a recovery target after independently verifying that every affected volume/bucket is disposable and belongs exclusively to `openjm_workspace_recovery`; never reset the source project. A port-bind error is a configuration failure, not evidence of failed data restoration.
 
 Acceptance:
 - restore refuses to overwrite a nonempty target;
