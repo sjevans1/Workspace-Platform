@@ -65,6 +65,7 @@ import {
   validatePeople,
   treeLock,
   seedDemo,
+  purgeDeletedResource,
 } from "./domain.ts";
 type Request = FastifyRequest & { actor: Actor; sessionToken: string };
 type Handler = (
@@ -696,6 +697,50 @@ export async function buildApp(
       );
       await emit(q, a, `${n.kind}.restored`, n.id);
       return { ok: true };
+    },
+  );
+  route(
+    "GET",
+    "/retention",
+    "Read trash retention policy",
+    async (q, a) => {
+      admin(a);
+      return one(q, "SELECT trash_retention_days FROM organisations WHERE id=$1", [
+        a.tenant_id,
+      ]);
+    },
+  );
+  route(
+    "PATCH",
+    "/retention",
+    "Update trash retention policy",
+    async (q, a, r) => {
+      admin(a);
+      const v = body(
+        z
+          .object({
+            trash_retention_days: z.number().int().min(1).max(3650).nullable(),
+          })
+          .strict(),
+        r,
+      );
+      await q.query(
+        "UPDATE organisations SET trash_retention_days=$2 WHERE id=$1",
+        [a.tenant_id, v.trash_retention_days],
+      );
+      await emit(q, a, "retention.updated", null);
+      return v;
+    },
+  );
+  route(
+    "DELETE",
+    "/resources/:id/purge",
+    "Permanently purge a trashed resource subtree",
+    async (q, a, r) => {
+      admin(a);
+      const n = await requireAccess(q, a, id(r), 4, true);
+      assert(n.deleted_at, 409, "Resource must be in trash before purge");
+      return purgeDeletedResource(q, a.tenant_id, n.id, a);
     },
   );
   route(

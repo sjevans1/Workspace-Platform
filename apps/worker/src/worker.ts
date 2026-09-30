@@ -7,7 +7,8 @@ import { decrypt, signature } from "../../../packages/events/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
 import { requireAccess } from "../../../packages/permissions/index.ts";
 import type { Actor } from "../../../packages/auth/index.ts";
-import { createResource, createRecord } from "../../api/src/domain.ts";
+import { createResource, createRecord, purgeDeletedResource } from "../../api/src/domain.ts";
+import { createStorage, type Storage } from "../../../packages/storage/index.ts";
 import { markdownToBlocks } from "../../../packages/editor/server.ts";
 export function webhookUrl(text: string) {
   const u = new URL(text);
@@ -67,10 +68,13 @@ function deliver(url: string, secret: string, event: any) {
     req.end(body);
   });
 }
-export async function tick(db: Database) {
+export async function tick(db: Database, suppliedStorage?: Storage) {
+  const storage = suppliedStorage || createStorage();
+  const closeStorage = !suppliedStorage;
   const tenants = await db.system((q) =>
     q.query("SELECT id FROM worker_tenants()"),
   );
+  try {
   for (const { id: tenant } of tenants.rows) {
     await db.tenant(tenant, async (q) => {
       for (const e of (
@@ -127,6 +131,63 @@ export async function tick(db: Database) {
               d.attempts >= 7 ? "dead" : "retry",
               (err as Error).message.slice(0, 200),
               `${Math.min(3600, 5 * 2 ** d.attempts)} seconds`,
+            ],
+          );
+        }
+      }
+    });
+    await db.tenant(tenant, async (q) => {
+      const policy = await one(
+        q,
+        "SELECT trash_retention_days FROM organisations WHERE id=$1",
+        [tenant],
+      );
+      if (policy?.trash_retention_days) {
+        const candidate = await one(
+          q,
+          "SELECT id FROM resources WHERE deleted_at IS NOT NULL AND deleted_at <= now()-($1::int * interval '1 day') ORDER BY deleted_at,id LIMIT 1 FOR UPDATE SKIP LOCKED",
+          [policy.trash_retention_days],
+        );
+        if (candidate)
+          await purgeDeletedResource(q, tenant, candidate.id);
+
+        for (const file of (
+          await q.query(
+            "SELECT id,object_key,resource_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at <= now()-($1::int * interval '1 day') ORDER BY deleted_at,id LIMIT 25 FOR UPDATE SKIP LOCKED",
+            [policy.trash_retention_days],
+          )
+        ).rows) {
+          await q.query(
+            "INSERT INTO object_deletions(id,tenant_id,object_key,reason) VALUES($1,$2,$3,'file_retention') ON CONFLICT(tenant_id,object_key) DO NOTHING",
+            [randomUUID(), tenant, file.object_key],
+          );
+          await q.query("DELETE FROM files WHERE id=$1", [file.id]);
+          await q.query(
+            "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id) VALUES($1,$2,NULL,'retention.file_purged',$3)",
+            [randomUUID(), tenant, file.resource_id],
+          );
+        }
+      }
+
+      for (const deletion of (
+        await q.query(
+          "SELECT * FROM object_deletions WHERE status IN ('pending','retry') AND next_at<=now() ORDER BY next_at,id LIMIT 25 FOR UPDATE SKIP LOCKED",
+        )
+      ).rows) {
+        try {
+          await storage.delete(deletion.object_key);
+          await q.query(
+            "UPDATE object_deletions SET status='completed',attempts=attempts+1,last_error=NULL,completed_at=now() WHERE id=$1",
+            [deletion.id],
+          );
+        } catch (err) {
+          await q.query(
+            "UPDATE object_deletions SET status=$2,attempts=attempts+1,last_error=$3,next_at=now()+$4::interval WHERE id=$1",
+            [
+              deletion.id,
+              deletion.attempts >= 7 ? "dead" : "retry",
+              (err as Error).message.slice(0, 200),
+              `${Math.min(3600, 5 * 2 ** deletion.attempts)} seconds`,
             ],
           );
         }
@@ -217,12 +278,15 @@ export async function tick(db: Database) {
       }
     });
   }
+  } finally {
+    if (closeStorage) storage.close?.();
+  }
 }
-export function startWorker(db: Database) {
+export function startWorker(db: Database, storage: Storage = createStorage()) {
   let running: Promise<unknown> | undefined;
   const timer = setInterval(() => {
     if (running) return;
-    running = tick(db)
+    running = tick(db, storage)
       .catch((e) => console.error("Worker tick failed", e))
       .finally(() => {
         running = undefined;
@@ -231,5 +295,6 @@ export function startWorker(db: Database) {
   return async () => {
     clearInterval(timer);
     await running;
+    storage.close?.();
   };
 }

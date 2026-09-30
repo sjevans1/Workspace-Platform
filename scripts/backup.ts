@@ -26,6 +26,7 @@ const tables = [
   "webhook_deliveries",
   "audit_events",
   "jobs",
+  "object_deletions",
 ] as const;
 const digest = (b: string | Buffer) =>
   createHash("sha256").update(b).digest("hex");

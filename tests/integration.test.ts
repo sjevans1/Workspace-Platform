@@ -634,6 +634,73 @@ test("trash cascade is atomic and restore preserves content", async () => {
     ),
   );
 });
+test("permanent purge queues object deletion and retention policy purges expired trash", async () => {
+  const doomed = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "Purge acceptance",
+  });
+  const boundary = "purge-boundary";
+  const data = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="purge.txt"\r\nContent-Type: text/plain\r\n\r\nPurge bytes\r\n--${boundary}--\r\n`;
+  const upload = await req("POST", `/resources/${doomed.id}/files`, data, owner, {
+    "content-type": `multipart/form-data; boundary=${boundary}`,
+  });
+  assert.equal(upload.statusCode, 200, upload.body);
+  const stored = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT object_key FROM files WHERE id=$1", [upload.json().id]),
+  );
+  await ok("DELETE", `/resources/${doomed.id}`);
+  await ok("DELETE", `/resources/${doomed.id}/purge`);
+  assert.equal(
+    await db.tenant(owner.tenant, async (q) =>
+      Number((await one(q, "SELECT count(*) n FROM resources WHERE id=$1", [doomed.id])).n),
+    ),
+    0,
+  );
+  assert.equal(
+    (
+      await db.tenant(owner.tenant, (q) =>
+        one(q, "SELECT status FROM object_deletions WHERE object_key=$1", [
+          stored.object_key,
+        ]),
+      )
+    ).status,
+    "pending",
+  );
+  await tick(db);
+  assert.equal(
+    (
+      await db.tenant(owner.tenant, (q) =>
+        one(q, "SELECT status FROM object_deletions WHERE object_key=$1", [
+          stored.object_key,
+        ]),
+      )
+    ).status,
+    "completed",
+  );
+
+  await ok("PATCH", "/retention", { trash_retention_days: 1 });
+  const expired = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "Expired trash",
+  });
+  await ok("DELETE", `/resources/${expired.id}`);
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE resources SET deleted_at=now()-interval '2 days' WHERE id=$1", [
+      expired.id,
+    ]),
+  );
+  await tick(db);
+  assert.equal(
+    await db.tenant(owner.tenant, async (q) =>
+      Number((await one(q, "SELECT count(*) n FROM resources WHERE id=$1", [expired.id])).n),
+    ),
+    0,
+  );
+  await ok("PATCH", "/retention", { trash_retention_days: 30 });
+});
+
 test("audit is append-only to runtime role and credentials revoke immediately", async () => {
   await assert.rejects(
     db.tenant(owner.tenant, (q) => q.query("DELETE FROM audit_events")),
