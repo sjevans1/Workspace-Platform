@@ -91,6 +91,22 @@ The application performs server-side code exchange and supports a confidential c
 Official Keycloak OIDC documentation:
 https://www.keycloak.org/securing-apps/oidc-layers
 
+### Back-channel logout
+
+Workspace exposes the OIDC Back-Channel Logout endpoint:
+
+```
+${APP_URL}/api/v1/auth/oidc/backchannel-logout
+```
+
+Configure this exact URL as the Keycloak client's **Backchannel logout URL**. When available, enable Keycloak's session-ID/backchannel-session option so logout tokens contain `sid` and Workspace can revoke only the matching OIDC-created Workspace session.
+
+Workspace validates the signed logout JWT against the configured provider JWKS and requires the expected issuer/audience, temporal/JTI/event claims, and `sub` or `sid`. Logout tokens containing a nonce are rejected. Repeated delivery of the same logout `jti` is idempotent.
+
+OIDC-created Workspace sessions retain only issuer/subject/session-ID linkage; Workspace still does not retain the IdP access or refresh token. A matching back-channel logout removes the affected Workspace session, so subsequent REST access fails and collaboration's normal session recheck disconnects/rejects continued editing. Unrelated local/password break-glass sessions are not revoked by an OIDC logout token.
+
+An administrator deactivating a Workspace membership already revokes that user's Workspace sessions for the tenant. Separately, disabling an account in an external directory does not by itself guarantee that an OIDC back-channel event will be emitted; directory/SCIM offboarding remains a distinct lifecycle concern.
+
 ## Enabling SSO safely
 
 1. Keep `LOCAL_AUTH_ENABLED=true`.
@@ -133,15 +149,15 @@ Not yet implemented:
 - IdP group/role to Workspace-role mapping;
 - automatic offboarding from IdP directory changes;
 - OIDC RP-initiated logout;
-- back-channel/front-channel logout;
-- immediate Workspace-session revocation when an IdP session is disabled;
+- OIDC RP-initiated/front-channel logout;
+- automatic directory-disable/SCIM offboarding when the IdP does not emit a back-channel logout event;
 - local password-reset/recovery;
 - application-enforced MFA/ACR/AMR policy;
 - email delivery of invitation links.
 
 MFA can be required by the external IdP, but Workspace does not yet independently verify or require a particular MFA authentication-context claim.
 
-Because Workspace creates its own 12-hour session after OIDC login and does not retain the IdP refresh token, disabling a user at the IdP does not currently invalidate an already-issued Workspace session immediately. Administrators must deactivate membership/revoke Workspace sessions until directory lifecycle/back-channel revocation is implemented.
+Workspace now accepts standards-based signed OIDC back-channel logout tokens and revokes matching OIDC-created Workspace sessions. Workspace membership deactivation also revokes tenant sessions immediately. What remains is directory lifecycle synchronization: disabling a user in an IdP does not necessarily generate a back-channel logout event, so SCIM/directory-driven offboarding must still be implemented or the operator must terminate the IdP session / deactivate the Workspace membership.
 
 ## Verification
 
@@ -158,6 +174,8 @@ CI covers:
 - signed ID-token verification;
 - nonce validation;
 - verified-email enforcement;
+- signed back-channel logout JWT validation, nonce rejection and replay-safe session revocation;
+- preservation of an unrelated local break-glass session during OIDC session revocation;
 - normal non-SSO Docker and Chromium workflows.
 
-A real Keycloak 26.7.4 deployment test has now passed on WSL2, including owner linking, repeat login, passwordless invited-user provisioning, invitation mismatch rejection, SSO-only mode and disabled-user rejection for new authentication. The remaining verified gap is immediate Workspace-session revocation/offboarding after identity-provider disablement.
+A real Keycloak 26.7.4 deployment test has passed on WSL2 for login/provisioning/SSO-only behavior. The back-channel logout implementation has passed CI and now requires a focused real-Keycloak host test to prove Keycloak emits a logout token that invalidates an already-active Workspace SSO session end to end.
