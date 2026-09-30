@@ -178,4 +178,4 @@ CI covers:
 - preservation of an unrelated local break-glass session during OIDC session revocation;
 - normal non-SSO Docker and Chromium workflows.
 
-A real Keycloak 26.7.4 deployment test has passed on WSL2 for login/provisioning/SSO-only behavior. The back-channel logout implementation has passed CI and now requires a focused real-Keycloak host test to prove Keycloak emits a logout token that invalidates an already-active Workspace SSO session end to end.
+A real Keycloak 26.7.4 deployment test has passed on WSL2 for login/provisioning/SSO-only behavior. The back-channel logout implementation has passed CI and now requires a focused real-Keycloak host test to prove Keycloak emits a logout token that invalidates an already-active Workspace SSO session end to end. Follow `HERMES_KEYCLOAK_LOGOUT_ACCEPTANCE.md` for that bounded test.
