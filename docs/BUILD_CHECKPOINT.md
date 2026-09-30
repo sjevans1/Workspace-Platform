@@ -81,7 +81,15 @@ PR #14 passed the complete final-head CI gate in GitHub Actions run 36770930101 
 
 The identity slice adds deployment-level OpenID Connect/Keycloak sign-in using authorization code + PKCE S256, random state, OIDC nonce, browser-bound and server-side single-use login state, signed ID-token validation through `openid-client`, verified-email enforcement, durable issuer/subject identity links, and optional local-password disable. Existing accounts may link by verified email; passwordless new users require an administrator-issued invitation whose email exactly matches the verified IdP email. SSO never invents organisation membership or roles. Durable identity links are backed up; transient login state is not.
 
-CI includes a disposable real OIDC issuer that exercises discovery, confidential-client code exchange, PKCE transmission, signed ID-token verification, nonce validation and verified-email rejection, in addition to application-level tests for account linking, invitation provisioning, browser-state mismatch and replay rejection. A real Keycloak host/browser acceptance remains outstanding before treating the provider integration as deployment-validated. The bounded WSL procedure is committed at `docs/HERMES_KEYCLOAK_ACCEPTANCE.md`; it isolates a new `openjm_workspace_sso` project and disposable Keycloak instance from the already-accepted source/recovery projects.
+CI includes a disposable real OIDC issuer that exercises discovery, confidential-client code exchange, PKCE transmission, signed ID-token verification, nonce validation and verified-email rejection, in addition to application-level tests for account linking, invitation provisioning, browser-state mismatch and replay rejection. Real Keycloak host/browser acceptance has now passed using the bounded WSL procedure in `docs/HERMES_KEYCLOAK_ACCEPTANCE.md`. The remaining identity gap is immediate Workspace-session revocation/offboarding lifecycle after IdP disablement or membership deactivation.
+
+## Independent Keycloak host acceptance — passed
+
+Hermes reported complete real-provider acceptance against Workspace `1702779fa5d31a8de159ee6d476e451d90e316f3` using `quay.io/keycloak/keycloak:26.7.4` on the isolated WSL2 `openjm_workspace_sso` project. OIDC discovery used `http://keycloak.localhost:18081/realms/openjm-test` because local port 18080 was occupied.
+
+The host exercise passed existing-owner SSO linking without duplicate accounts, repeat issuer/subject login, administrator-invited passwordless member provisioning, mismatched-invitation rejection, SSO-only mode with local password login disabled, disabled-Keycloak-user rejection for new authentication, and operational health/log review. All Workspace services remained healthy with no restart loops or OIDC errors.
+
+The expected lifecycle boundary was confirmed: disabling a user at Keycloak prevents a new IdP login, but an already-issued Workspace session is not immediately revoked. This remains the next identity-hardening target rather than a Keycloak interoperability defect.
 
 ## First-pass completion and future work
 
