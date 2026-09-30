@@ -31,7 +31,11 @@ The user authorized continuation after the verified first pass. The next increme
 
 Storage increment published: `d53d363cfa8c0d2d6f17b492bd7a7cbb022ded17`. CI https://github.com/sjevans1/Workspace-Platform/actions/runs/36613650554 passed its backend job: 24 native tests, 0 skipped, including the real SeaweedFS drill, plus TypeScript and production build. The S3 test requires TEST_DATABASE_URL and TEST_S3_ENDPOINT and is skipped locally without them.
 
-The second increment adds a distinct invited teammate to deployed-browser acceptance, covering live edits, view-only downgrade, upgrade, full revocation, private files, search, tickets, owner edits after revocation and access restoration. The review found that the server enforced read-only changes but the editor retained its initial editability flag. Collaboration now sends permission updates and the open editor applies them; the backend regression covers both directions. Deployed-browser results for this increment are pending. Next: verify the new browser gate and record final evidence.
+The second increment added a distinct invited teammate to deployed-browser acceptance, covering live edits, view-only downgrade, upgrade, full revocation, private files, search, tickets, owner edits after revocation and access restoration. The review found that the server enforced read-only changes but the editor retained its initial editability flag. Collaboration now sends permission updates and the open editor applies them; the backend regression covers both directions. This increment was published at `7a7ce9e2ddbb1783556d569b2810607f0ddfca1a` after the deployed two-user browser verification passed.
+
+## Active hardening slice: retention and object lifecycle
+
+Work is isolated on `hardening/retention-object-cleanup` / PR #8 until its full CI gate passes. The slice adds a configurable organisation trash-retention period, administrator-only permanent purge, deepest-first subtree removal, retention of audit/outbox evidence, a tenant-isolated durable object-deletion queue with retry/dead states, cleanup of expired soft-deleted attachments, backup/restore coverage for cleanup state, and regression tests. Do not treat this slice as verified until PR #8 has passed native PostgreSQL, TypeScript/build, Docker and deployed Chromium acceptance and is merged.
 
 ## First-pass completion and future work
 
