@@ -152,6 +152,17 @@ export async function buildApp(
     ...(redis ? { redis } : {}),
   });
   await app.register(multipart, { limits: { fileSize: 26214400, files: 1 } });
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string", bodyLimit: 20000 },
+    (_request, payload, done) => {
+      try {
+        done(null, Object.fromEntries(new URLSearchParams(payload)));
+      } catch (error) {
+        done(error as Error);
+      }
+    },
+  );
   await app.register(swagger, {
     openapi: {
       info: { title: "Workspace API", version: "1.0.0" },
@@ -247,6 +258,65 @@ export async function buildApp(
     local: localAuth,
     oidc: oidc ? { enabled: true, label: oidc.label } : { enabled: false },
   }));
+  app.post(
+    "/api/v1/auth/oidc/backchannel-logout",
+    {
+      config: { rateLimit: { max: 120, timeWindow: "5 minutes" } },
+      logLevel: "warn",
+    },
+    async (r, reply) => {
+      assert(oidc, 404, "OIDC sign-in is not configured");
+      const v = body(
+          z
+            .object({ logout_token: z.string().min(20).max(16384) })
+            .passthrough(),
+          r,
+        ),
+        logout = await oidc.validateBackchannelLogout(v.logout_token),
+        result = await db.systemTransaction(async (q) => {
+          await q.query(
+            "DELETE FROM oidc_logout_events WHERE expires_at<=now()",
+          );
+          const accepted = await one(
+            q,
+            "INSERT INTO oidc_logout_events(issuer,jti,expires_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING jti",
+            [logout.issuer, logout.jti, logout.expiresAt],
+          );
+          if (!accepted) return { revoked: 0, replayed: true };
+
+          const deleted = logout.sid
+            ? (
+                await q.query(
+                  `DELETE FROM sessions
+                   WHERE oidc_issuer=$1 AND oidc_sid=$2
+                     AND ($3::text IS NULL OR oidc_subject=$3)
+                   RETURNING tenant_id,user_id`,
+                  [logout.issuer, logout.sid, logout.subject || null],
+                )
+              ).rows
+            : (
+                await q.query(
+                  "DELETE FROM sessions WHERE oidc_issuer=$1 AND oidc_subject=$2 RETURNING tenant_id,user_id",
+                  [logout.issuer, logout.subject],
+                )
+              ).rows;
+
+          const tenants = new Map<string, string>();
+          for (const row of deleted)
+            if (!tenants.has(row.tenant_id))
+              tenants.set(row.tenant_id, row.user_id);
+          for (const [tenantId, userId] of tenants)
+            await q.query(
+              "INSERT INTO audit_events(id,tenant_id,actor_id,action,request_id) VALUES($1,$2,NULL,'auth.oidc_backchannel_logout',$3)",
+              [randomUUID(), tenantId, r.id],
+            );
+          return { revoked: deleted.length, replayed: false };
+        });
+
+      reply.code(200);
+      return { ok: true, ...result };
+    },
+  );
   app.get(
     "/api/v1/auth/oidc/start",
     {
@@ -412,7 +482,11 @@ export async function buildApp(
               r.id,
             ],
           );
-          return createSession(q, selected.tenant_id, user.id);
+          return createSession(q, selected.tenant_id, user.id, null, null, {
+            issuer: profile.issuer,
+            subject: profile.subject,
+            sid: profile.sid,
+          });
         });
 
       reply.setCookie("workspace_session", sessionToken, cookies());
