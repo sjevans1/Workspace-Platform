@@ -67,17 +67,19 @@ The migration runner now records SHA-256 checksums for applied migration files, 
 
 A bounded independent host-validation procedure is now committed at `docs/HERMES_HOST_ACCEPTANCE.md`. It is intended for Hermes on a disposable WSL/Linux host and covers fresh deployment, browser acceptance, restart persistence, TLS/LAN, migration checksum verification, backup, separate-target recovery and operational queue review. It explicitly forbids destructive testing against the source deployment, production data, unknown Docker volumes or production buckets.
 
-## Independent WSL host acceptance — partial recovery follow-up
+## Independent WSL host acceptance — completed except TLS
 
-Hermes reported that the WSL host accepted the fresh deployment, 2/2 Playwright tests, source restart persistence, idempotent migrations and source backup against `b392f4113`. Trusted TLS was unavailable. Independent recovery remains **unverified**: Hermes started the complete recovery stack before restoring the archive and likely reused source host ports; the exact bind error was not captured in the report. The source and recovery Compose projects/volumes were reported isolated. This is a procedure/configuration issue under investigation, not an observed backup-restore algorithm failure.
+Hermes reported a complete real-host acceptance against application commit `b392f4113099788816250b3ee7e3a1d9573f1d9d` on Ubuntu 24.04 / WSL2. Fresh deployment, 2/2 Playwright browser workflows, source restart persistence, idempotent/checksummed migrations, logical backup, isolated recovery and operational status all passed. The recovery target used a separate Compose project, separate volumes and host ports 8081/8444; recovered sign-in/content were verified and the source remained healthy.
 
-The bounded follow-up and anonymized outcome record are in `docs/HOST_ACCEPTANCE_EVALUATION.md`. `docs/HERMES_HOST_ACCEPTANCE.md` now specifies explicit recovery origin/port overrides, fresh recovery credentials, a restore-before-start ordering and non-destructive preflight checks. Do not mark independent host recovery complete until a separate target is restored and its data and collaboration are functionally verified.
+The initial recovery startup failure was traced to a host-port collision with the still-running source stack, not a restore-code failure. The corrected isolated recovery completed successfully. Trusted TLS/LAN remains NOT EXECUTED because no trusted test certificate environment was available.
+
+The anonymized outcome record is in `docs/HOST_ACCEPTANCE_EVALUATION.md`. `docs/HERMES_HOST_ACCEPTANCE.md` retains the stricter isolation and restore-order safeguards learned from the exercise.
 
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and host-level migration/recovery execution. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning, external metrics/alerts and real host/TLS recovery validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+The next host-level acceptance phase is a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery and operational status have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning, external metrics/alerts and real host/TLS recovery validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
