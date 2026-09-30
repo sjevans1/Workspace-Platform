@@ -4,14 +4,14 @@ This is an executable alpha built from the OpenJM Workspace Astra handoff, not a
 
 ## Verified through 30 September 2026
 
-The latest identity hardening gate passed in [GitHub Actions run 36770930101](https://github.com/sjevans1/Workspace-Platform/actions/runs/36770930101), testing OIDC branch head `d04bc036c8388c03f1fadde21e45a34ebfc6b875`, which was squash-merged as `842ee53bbc17f569d0aaba748d8a15ac517b6955`. Documentation/license/SBOM commits after that merge do not change the runtime baseline.
+The latest identity hardening gate passed in [GitHub Actions run 36792189577](https://github.com/sjevans1/Workspace-Platform/actions/runs/36792189577), testing back-channel logout branch head `41060dd1b958f843ed119b42310da99298d98503`, which was squash-merged as `bd6b0c4a053a93f9dd060003c44a7adaa95768b2`. Documentation/SBOM commits after that merge do not change the runtime baseline.
 
 | Check | Result |
 |---|---|
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration, identity and backup tests | 34 passed, 0 failed in latest native PostgreSQL gate |
+| Unit, API, collaboration, identity and backup tests | 35 passed, 0 failed in latest native PostgreSQL gate |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Concurrent ACL replacement and stale-write rejection | Pass; simultaneous conflicting saves resolve as one success and one 409 |
@@ -24,13 +24,14 @@ The latest identity hardening gate passed in [GitHub Actions run 36770930101](ht
 | Trash cascade and restore | Pass |
 | Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL 17 test suite | 34 passed; clean process shutdown |
+| Native PostgreSQL 17 test suite | 35 passed; clean process shutdown |
 | Migration rollback/retry and historical checksum integrity | Pass; failed partial DDL rolls back, corrected retry succeeds, reruns are idempotent, applied-file drift is rejected |
 | Docker image, migrations and full Compose startup | Pass; API, collaboration and worker all report healthy before browser acceptance |
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
 | Mobile viewport, 390 × 844 | Pass; sidebar navigation and no document-width overflow |
 | Browser runtime errors | None in the primary session during the tested workflow |
 | OIDC / Keycloak authentication foundation | Pass in CI run 36770930101: state/nonce/PKCE, signed ID-token validation, verified email, existing-user linking, invitation provisioning and replay rejection |
+| OIDC back-channel session revocation | Pass in CI run 36792189577: signed logout JWT verification, required event/claim checks, nonce rejection, replay safety, sid/subject revocation and local break-glass preservation; real Keycloak logout emission still needs host verification |
 | Real Keycloak host/browser acceptance | Hermes-reported PASS on `1702779fa5d31a8de159ee6d476e451d90e316f3` with Keycloak 26.7.4: discovery, owner linking, repeat login, passwordless invited member, mismatch rejection, SSO-only mode and disabled-user new-login rejection all passed |
 | Independent WSL2 host deployment and recovery | Hermes-reported PASS on `b392f4113`: fresh install, 2/2 browser tests, restart persistence, idempotent migrations, backup, isolated restore, recovered sign-in/content and operational status; trusted TLS not executed |
 
@@ -48,7 +49,7 @@ The repository contains a connected interface, API, collaboration server, import
 
 | Area | Remaining work or current boundary |
 |---|---|
-| Identity | Deployment-level OIDC/Keycloak SSO is implemented and has passed a real Keycloak 26.7.4 host/browser exercise, including SSO-only mode and disabled-user new-login rejection. Remaining: immediate Workspace-session revocation/offboarding lifecycle, per-tenant IdPs, SCIM, group/role mapping, IdP logout/session revocation, application-enforced MFA context, local password recovery and invitation email delivery. |
+| Identity | Deployment-level OIDC/Keycloak SSO and standards-based OIDC back-channel session revocation are implemented. Real Keycloak login/provisioning/SSO-only acceptance has passed; back-channel logout has passed signed-token/application CI and still needs a focused real-Keycloak emission test. Workspace membership deactivation already revokes tenant sessions. Remaining: directory/SCIM offboarding, per-tenant IdPs, group/role mapping, RP/front-channel logout, application-enforced MFA context, local password recovery and invitation email delivery. |
 | Editor coverage | Default BlockNote Core blocks, slash menu, formatting, links, images/files and tables are integrated. Custom callout/divider/wiki-link/backlink behaviour, a complete block-type acceptance matrix and block-anchored comment UI remain. The API accepts optional comment block IDs. |
 | Offline and scale | Offline edits are memory-only until acknowledged; no durable local offline queue. Single collaboration writer, no horizontal coordination. Load/concurrency and reconnect fault-injection benchmarks remain. |
 | Databases | No formulas, relations, rollups, advanced cross-database queries or import mapping wizard. Property schema changes validate existing data; destructive schema transformations need explicit migration support. Board keyboard updates use selectors. |
@@ -65,4 +66,4 @@ The repository contains a connected interface, API, collaboration server, import
 
 ## Suggested next acceptance slice
 
-With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, and real Keycloak host/browser acceptance passing, the next identity slice is Workspace-session revocation and offboarding lifecycle. Trusted TLS and the selected production S3/object-store recovery drill remain separate host-level gates. Directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
+With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, real Keycloak login acceptance, and OIDC back-channel revocation CI passing, the next identity acceptance is a focused real-Keycloak back-channel logout test followed by directory/SCIM offboarding design. Trusted TLS and the selected production S3/object-store recovery drill remain separate host-level gates. Directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
