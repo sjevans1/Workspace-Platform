@@ -282,13 +282,53 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
     if (closeStorage) storage.close?.();
   }
 }
+export type WorkerHealthState = {
+  startedAt: number;
+  lastStartedAt: number | null;
+  lastCompletedAt: number | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+  running: boolean;
+};
+
+const health: WorkerHealthState = {
+  startedAt: Date.now(),
+  lastStartedAt: null,
+  lastCompletedAt: null,
+  lastError: null,
+  consecutiveFailures: 0,
+  running: false,
+};
+
+export function workerHealthState(): WorkerHealthState {
+  return { ...health };
+}
+
 export function startWorker(db: Database, storage: Storage = createStorage()) {
+  health.startedAt = Date.now();
+  health.lastStartedAt = null;
+  health.lastCompletedAt = null;
+  health.lastError = null;
+  health.consecutiveFailures = 0;
+  health.running = false;
   let running: Promise<unknown> | undefined;
   const timer = setInterval(() => {
     if (running) return;
+    health.running = true;
+    health.lastStartedAt = Date.now();
     running = tick(db, storage)
-      .catch((e) => console.error("Worker tick failed", e))
+      .then(() => {
+        health.lastCompletedAt = Date.now();
+        health.lastError = null;
+        health.consecutiveFailures = 0;
+      })
+      .catch((e) => {
+        health.lastError = (e as Error).message.slice(0, 200);
+        health.consecutiveFailures += 1;
+        console.error("Worker tick failed", e);
+      })
       .finally(() => {
+        health.running = false;
         running = undefined;
       });
   }, 1000);

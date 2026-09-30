@@ -103,13 +103,17 @@ Verify sign-in, page content, restored history, files, a table/board record, and
 
 Back up before each upgrade. Review release notes, build the new image, stop writers, run migrations once, and start the new services. Migrations are transactional and tracked in `schema_migrations`; the migration runner uses an advisory lock. Downgrade is not automatic: recover the matching backup into a separate deployment if needed.
 
-- `/health`: process alive.
-- `/ready`: database, rate-limit store when configured, and object storage accessible.
+- `/health`: API process alive.
+- `/ready`: API database, rate-limit store when configured, and object storage accessible.
+- `docker compose ps`: API, collaboration and worker should each report `healthy`. Collaboration health verifies its database writer lease; worker health verifies database access, recent tick completion, repeated failures and a maximum in-flight tick duration.
+- `GET /api/v1/operations/status` as an owner/admin human session: tenant queue counts for imports, event dispatch, webhook deliveries and object deletion, including dead/failed work requiring attention.
 - `docker compose logs api collab worker`: structured request/worker errors; HTTP logs redact cookies, bearer credentials, CSRF and setup tokens.
 - Settings → Webhooks: recent deliveries, retry/dead status and last error.
 - Settings → Audit: recent append-only application audit records.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, metrics export, disaster recovery automation, antivirus and SSO remain deployment work described in the acceptance checklist.
+The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
+
+Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation, antivirus and SSO remain deployment work described in the acceptance checklist.
 
 ## Repeat the S3 recovery check
 

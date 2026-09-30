@@ -87,14 +87,46 @@ services:
   collab:
     <<: *app
     command: [npm, run, "start:collab"]
+    environment:
+      <<: *runtime
+      COLLAB_HEALTH_PORT: "1235"
     depends_on:
       migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:1235/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
   worker:
     <<: *app
     command: [npm, run, "start:worker"]
     volumes: [files:/data/files]
+    environment:
+      <<: *runtime
+      WORKER_HEALTH_PORT: "4001"
+      WORKER_HEALTH_MAX_TICK_MS: ${WORKER_HEALTH_MAX_TICK_MS:-60000}
+      WORKER_HEALTH_GRACE_MS: ${WORKER_HEALTH_GRACE_MS:-10000}
     depends_on:
       migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 12s
   web:
     <<: *app
     command: [npm, run, start, -w, apps/web]
@@ -115,7 +147,9 @@ services:
         "caddy_data:/data",
         "caddy_config:/config",
       ]
-    depends_on: [web, collab]
+    depends_on:
+      web: { condition: service_started }
+      collab: { condition: service_healthy }
     restart: unless-stopped
   ops:
     <<: *app

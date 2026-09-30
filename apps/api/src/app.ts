@@ -1592,6 +1592,42 @@ function dataRoutes(route: Route, storage: Storage) {
       return v;
     },
   );
+  route(
+    "GET",
+    "/operations/status",
+    "Read tenant operational queue status",
+    async (q, a) => {
+      assert(!a.scopes, 403, "Human session required");
+      admin(a);
+      const jobs = await one(
+          q,
+          "SELECT count(*) FILTER (WHERE status='pending')::int pending,count(*) FILTER (WHERE status='failed')::int failed,min(created_at) FILTER (WHERE status='pending') oldest_pending_at FROM jobs",
+        ),
+        webhooks = await one(
+          q,
+          "SELECT count(*) FILTER (WHERE status IN ('pending','retry'))::int pending,count(*) FILTER (WHERE status='dead')::int dead,min(next_at) FILTER (WHERE status IN ('pending','retry')) oldest_pending_at FROM webhook_deliveries",
+        ),
+        objects = await one(
+          q,
+          "SELECT count(*) FILTER (WHERE status IN ('pending','retry'))::int pending,count(*) FILTER (WHERE status='dead')::int dead,min(next_at) FILTER (WHERE status IN ('pending','retry')) oldest_pending_at FROM object_deletions",
+        ),
+        events = await one(
+          q,
+          "SELECT count(*) FILTER (WHERE dispatched_at IS NULL)::int pending,min(created_at) FILTER (WHERE dispatched_at IS NULL) oldest_pending_at FROM event_outbox",
+        );
+      return {
+        generated_at: new Date().toISOString(),
+        attention_required:
+          jobs.failed > 0 || webhooks.dead > 0 || objects.dead > 0,
+        queues: {
+          imports: jobs,
+          webhooks,
+          object_deletions: objects,
+          events,
+        },
+      };
+    },
+  );
   route("GET", "/audit", "Read append-only audit", async (q, a, r) => {
     admin(a);
     return (

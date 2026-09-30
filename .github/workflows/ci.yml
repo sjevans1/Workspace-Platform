@@ -71,9 +71,23 @@ jobs:
         run: |
           docker compose up -d
           for i in $(seq 1 60); do
-            if curl --fail http://localhost:8080/ready; then exit 0; fi
+            all_healthy=1
+            for service in api collab worker; do
+              id="$(docker compose ps -q "$service")"
+              if [ -z "$id" ]; then
+                all_healthy=0
+                continue
+              fi
+              health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
+              if [ "$health" != "healthy" ]; then all_healthy=0; fi
+            done
+            if [ "$all_healthy" -eq 1 ] && curl --fail http://localhost:8080/ready; then
+              docker compose ps
+              exit 0
+            fi
             sleep 2
           done
+          docker compose ps
           docker compose logs
           exit 1
       - name: Verify deployed browser workflow
