@@ -30,7 +30,9 @@ The latest identity hardening gate passed in [GitHub Actions run 36770930101](ht
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
 | Mobile viewport, 390 × 844 | Pass; sidebar navigation and no document-width overflow |
 | Browser runtime errors | None in the primary session during the tested workflow |
-| OIDC / Keycloak authentication foundation | Pass in CI run 36770930101: state/nonce/PKCE, signed ID-token validation, verified email, existing-user linking, invitation provisioning and replay rejection; real Keycloak host test remains |\n| Independent WSL2 host deployment and recovery | Hermes-reported PASS on `b392f4113`: fresh install, 2/2 browser tests, restart persistence, idempotent migrations, backup, isolated restore, recovered sign-in/content and operational status; trusted TLS not executed |
+| OIDC / Keycloak authentication foundation | Pass in CI run 36770930101: state/nonce/PKCE, signed ID-token validation, verified email, existing-user linking, invitation provisioning and replay rejection |
+| Real Keycloak host/browser acceptance | Hermes-reported PASS on `1702779fa5d31a8de159ee6d476e451d90e316f3` with Keycloak 26.7.4: discovery, owner linking, repeat login, passwordless invited member, mismatch rejection, SSO-only mode and disabled-user new-login rejection all passed |
+| Independent WSL2 host deployment and recovery | Hermes-reported PASS on `b392f4113`: fresh install, 2/2 browser tests, restart persistence, idempotent migrations, backup, isolated restore, recovered sign-in/content and operational status; trusted TLS not executed |
 
 Local backend tests run against PGlite's PostgreSQL engine, with serialized test transactions because its socket bridge multiplexes one backend. Production uses normal native PostgreSQL transactions. Native PostgreSQL is a separate required CI gate, not assumed equivalent solely from PGlite results.
 
@@ -46,7 +48,7 @@ The repository contains a connected interface, API, collaboration server, import
 
 | Area | Remaining work or current boundary |
 |---|---|
-| Identity | Deployment-level OIDC/Keycloak SSO is implemented with PKCE/state/nonce, verified-email linking, invitation-controlled passwordless provisioning and optional local-auth disable. Remaining: real Keycloak/TLS host acceptance, per-tenant IdPs, SCIM/directory lifecycle, group/role mapping, IdP logout/session revocation, application-enforced MFA context, local password recovery and invitation email delivery. |
+| Identity | Deployment-level OIDC/Keycloak SSO is implemented and has passed a real Keycloak 26.7.4 host/browser exercise, including SSO-only mode and disabled-user new-login rejection. Remaining: immediate Workspace-session revocation/offboarding lifecycle, per-tenant IdPs, SCIM, group/role mapping, IdP logout/session revocation, application-enforced MFA context, local password recovery and invitation email delivery. |
 | Editor coverage | Default BlockNote Core blocks, slash menu, formatting, links, images/files and tables are integrated. Custom callout/divider/wiki-link/backlink behaviour, a complete block-type acceptance matrix and block-anchored comment UI remain. The API accepts optional comment block IDs. |
 | Offline and scale | Offline edits are memory-only until acknowledged; no durable local offline queue. Single collaboration writer, no horizontal coordination. Load/concurrency and reconnect fault-injection benchmarks remain. |
 | Databases | No formulas, relations, rollups, advanced cross-database queries or import mapping wizard. Property schema changes validate existing data; destructive schema transformations need explicit migration support. Board keyboard updates use selectors. |
@@ -63,4 +65,4 @@ The repository contains a connected interface, API, collaboration server, import
 
 ## Suggested next acceptance slice
 
-With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, and the OIDC standards/security suite passing, the next identity acceptance is the disposable real-Keycloak exercise in `HERMES_KEYCLOAK_ACCEPTANCE.md`. Trusted TLS and the selected production S3/object-store recovery drill remain separate host-level gates. Real-provider identity acceptance, directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
+With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, and real Keycloak host/browser acceptance passing, the next identity slice is Workspace-session revocation and offboarding lifecycle. Trusted TLS and the selected production S3/object-store recovery drill remain separate host-level gates. Directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
