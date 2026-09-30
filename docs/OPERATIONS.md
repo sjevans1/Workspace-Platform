@@ -115,6 +115,10 @@ The collaboration and worker health listeners bind only inside their own contain
 
 Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation, antivirus and SSO remain deployment work described in the acceptance checklist.
 
+## Real-host acceptance
+
+For a bounded disposable-host validation outside CI, including WSL/Linux restart persistence, TLS/LAN behavior, migration checksum verification, backup and recovery into a separate target, follow [the Hermes real-host acceptance runbook](HERMES_HOST_ACCEPTANCE.md). The runbook explicitly prohibits destructive testing against the source deployment or production data.
+
 ## Repeat the S3 recovery check
 
 CI starts `chrislusf/seaweedfs:4.47` with its default `weed mini` entrypoint, synthetic test credentials and `S3_BUCKET=workspace-ci`. Only the S3 port is exposed. This service is disposable test infrastructure; see [SeaweedFS mini documentation](https://github.com/seaweedfs/seaweedfs/wiki/Quick-Start-with-weed-mini) for its configuration.
