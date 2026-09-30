@@ -1,6 +1,6 @@
 # Build checkpoint
 
-Updated 29 September 2026. Repository: https://github.com/sjevans1/Workspace-Platform
+Updated 30 September 2026. Repository: https://github.com/sjevans1/Workspace-Platform
 
 ## Scope and authorization
 
@@ -39,11 +39,17 @@ PR #8 passed the complete CI gate in GitHub Actions run 36660728414 and was squa
 
 The verified slice adds a configurable organisation trash-retention period (1–3650 days, or disabled), administrator-only permanent purge, deepest-first subtree removal, preservation of audit/outbox evidence, a tenant-isolated durable object-deletion queue with retry/dead states, cleanup of expired soft-deleted attachments, backup/restore coverage for cleanup state, and regression tests for explicit and automatic purge.
 
+## Verified hardening slice: permission concurrency and audit export
+
+PR #9 passed the complete CI gate in GitHub Actions run 36661773259 and was squash-merged to `main` at `84a7844f61597baa68b7f49fdb79b6f13912bdcc`. The backend job passed 27 native PostgreSQL tests, TypeScript and the production build. The deployment job passed Docker image build, migrations/startup/readiness and both deployed Chromium workflows, including distinct-user live permission downgrade, revocation and recovery.
+
+The verified slice adds optimistic ACL revisions and stale-write rejection, serializes access-policy updates under the tenant tree lock, rejects duplicate, cross-tenant and inactive principals, updates the access-management UI to submit revision preconditions, and adds a bounded administrator-only CSV audit export with spreadsheet-formula neutralization. Regression coverage includes simultaneous conflicting ACL saves and requires exactly one success and one HTTP 409 conflict.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational hardening, broader adversarial permission coverage and wider browser/accessibility coverage remain.
+The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning and host hardening, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
