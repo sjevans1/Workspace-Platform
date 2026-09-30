@@ -4,7 +4,7 @@ This is an executable alpha built from the OpenJM Workspace Astra handoff, not a
 
 ## Verified through 30 September 2026
 
-Both jobs passed in [GitHub Actions run 36611129995](https://github.com/sjevans1/Workspace-Platform/actions/runs/36611129995), testing commit `e10d5676795f94a13a831989be3ace1e4b2c76fe`. Subsequent documentation/screenshot commits do not change that runtime baseline.
+The latest identity hardening gate passed in [GitHub Actions run 36770930101](https://github.com/sjevans1/Workspace-Platform/actions/runs/36770930101), testing OIDC branch head `d04bc036c8388c03f1fadde21e45a34ebfc6b875`, which was squash-merged as `842ee53bbc17f569d0aaba748d8a15ac517b6955`. Documentation/license/SBOM commits after that merge do not change the runtime baseline.
 
 | Check | Result |
 |---|---|
@@ -63,4 +63,4 @@ The repository contains a connected interface, API, collaboration server, import
 
 ## Suggested next acceptance slice
 
-With native PostgreSQL/container/browser gates and an independent WSL2 deployment/recovery exercise passing, the next host-level acceptance should be a customer-like trusted-TLS deployment and recovery drill against the selected production S3/object-store provider. Real-provider identity acceptance, directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
+With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, and the OIDC standards/security suite passing, the next identity acceptance is the disposable real-Keycloak exercise in `HERMES_KEYCLOAK_ACCEPTANCE.md`. Trusted TLS and the selected production S3/object-store recovery drill remain separate host-level gates. Real-provider identity acceptance, directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
