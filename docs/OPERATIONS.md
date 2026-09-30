@@ -40,6 +40,14 @@ Then run `docker compose up -d`. Caddy obtains and renews the certificate. Its d
 
 The application CSP allows inline scripts required by this Next.js build and inline editor styles. It does not permit embedded arbitrary HTML. A nonce-based CSP is a remaining hardening item. Avoid adding arbitrary third-party scripts to the deployment.
 
+## Enterprise SSO
+
+Workspace can use a deployment-level OpenID Connect provider such as Keycloak while retaining local password authentication as an optional break-glass path. Configure and validate SSO before disabling local passwords. The exact security model, environment variables, Keycloak callback and current directory-lifecycle boundaries are documented in [Identity and enterprise SSO](IDENTITY.md).
+
+The OIDC client secret belongs in the deployment secret environment and is passed only to the API service. Production issuers should use HTTPS; do not enable `OIDC_ALLOW_INSECURE` outside isolated testing.
+
+A successful IdP login does not grant tenant access by itself. Existing membership or a matching administrator-issued invitation is required.
+
 ## Branding
 
 Set PRODUCT_NAME, PRIMARY_ACCENT, LOGO_LIGHT, LOGO_DARK, FAVICON, LOGIN_BACKGROUND, SUPPORT_NAME, SUPPORT_URL, LEGAL_NAME, PRIVACY_URL and TERMS_URL for deployment-wide sign-in defaults. Administrators can override those fields for their signed-in organisation through Settings → Branding. Use HTTPS asset URLs or same-origin paths. The current interface uses the light logo; the dark logo is retained in configuration for a future dark theme.
@@ -113,7 +121,7 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 
 The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation, antivirus and SSO remain deployment work described in the acceptance checklist.
+Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO is implemented, but a real provider/TLS acceptance run and directory lifecycle controls remain.
 
 ## Real-host acceptance
 
