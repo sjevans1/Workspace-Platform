@@ -18,7 +18,7 @@ The authoritative source is:
 1. Use a fresh clone and fresh Docker volumes.
 2. Do not reuse production credentials, production buckets or production PostgreSQL instances.
 3. Never delete or overwrite the source deployment during a recovery test.
-4. The recovery target must use a separate directory and separate Docker volumes. If using S3-compatible storage, it must use a separate empty recovery bucket.
+4. The recovery target must use a separate directory and **a different Docker Compose project name** as well as separate Docker volumes. The repository's `compose.yaml` has a fixed top-level `name: openjm-workspace`; a different directory by itself does **not** isolate the volumes. If using S3-compatible storage, use a separate empty recovery bucket.
 5. Do not print or paste `.env`, setup tokens, passwords, encryption keys, cookies or bearer tokens into chat/log evidence.
 6. Redact public IPs, internal hostnames, usernames and local filesystem paths if evidence will be shared publicly.
 7. Do not change migration files. Applied migration files are checksum-pinned.
@@ -49,9 +49,10 @@ Acceptance:
 
 ## Phase 1 — fresh local deployment
 
-From a fresh clone:
+From a fresh clone, explicitly isolate the source Compose project for **every** subsequent `docker compose` command in this terminal:
 
 ```bash
+export COMPOSE_PROJECT_NAME=openjm_workspace_source
 npm ci
 node scripts/init-env.mjs
 docker compose config --quiet
@@ -204,13 +205,16 @@ Do not paste backup contents into chat. The archive contains sensitive applicati
 
 ## Phase 7 — separate recovery target
 
-Create a second directory, for example `Workspace-Platform-Recovery`. It must have separate Docker volumes and unused host ports.
+Create a second directory, for example `Workspace-Platform-Recovery`. **Before running any recovery Compose command**, set `export COMPOSE_PROJECT_NAME=openjm_workspace_recovery` in the recovery terminal and verify it differs from `openjm_workspace_source`. Explicitly use a unique Compose project name because `compose.yaml` otherwise has a fixed top-level name. The recovery instance must have separate Docker volumes, a separate S3 bucket if applicable, and unused host ports. Never use `down -v` against the source project.
 
 Copy the backup file and securely copy the source configuration values needed for recovery, including the original encryption key. Do not share those values in evidence.
 
-In the recovery directory, configure fresh PostgreSQL/file volumes and different host ports. Then:
+In the recovery directory, configure fresh PostgreSQL/file volumes and different host ports. Verify the project name **without printing the interpolated Compose config/secrets**. Then:
 
 ```bash
+export COMPOSE_PROJECT_NAME=openjm_workspace_recovery
+test "$COMPOSE_PROJECT_NAME" != "openjm_workspace_source"
+docker compose config --quiet
 docker compose up -d postgres valkey
 docker compose run --rm migrate
 docker compose --profile ops run --rm ops \
@@ -274,7 +278,7 @@ Return a concise report with:
 11. TLS result and certificate trust status;
 12. any defect with exact reproduction steps.
 
-Do not include passwords, tokens, cookies, encryption keys, private URLs, internal IPs or backup contents.
+Do not include passwords, tokens, cookies, encryption keys, private URLs, internal IPs or backup contents. Include both nonsecret Compose project names and confirm that source and recovery volumes do not overlap.
 
 ## Stop conditions
 
@@ -291,4 +295,4 @@ Stop the affected phase and report immediately if:
 
 Use the following instruction when handing this to Hermes:
 
-> Execute `docs/HERMES_HOST_ACCEPTANCE.md` against a fresh disposable clone of the OpenJM Workspace repository. Follow the safety boundaries exactly. Work autonomously through non-destructive steps, but do not delete or overwrite unknown databases, Docker volumes, buckets or source data. Do not expose any secrets in your report. Use a separate recovery directory and separate recovery volumes/bucket. Record PASS / FAIL / NOT EXECUTED for every phase and return exact nonsecret evidence for failures. Do not modify application source while testing; report defects back to the main engineering workflow instead.
+> Execute `docs/HERMES_HOST_ACCEPTANCE.md` against a fresh disposable clone of the OpenJM Workspace repository. Use `COMPOSE_PROJECT_NAME=openjm_workspace_source` for the source and `COMPOSE_PROJECT_NAME=openjm_workspace_recovery` for the separate recovery target; merely using separate directories is insufficient because compose.yaml has a fixed top-level project name. Follow the safety boundaries exactly. Work autonomously through non-destructive steps, but do not delete or overwrite unknown databases, Docker volumes, buckets or source data. Do not expose any secrets in your report. Use a separate recovery directory and separate recovery volumes/bucket. Record PASS / FAIL / NOT EXECUTED for every phase and return exact nonsecret evidence for failures. Do not modify application source while testing; report defects back to the main engineering workflow instead.
