@@ -399,9 +399,21 @@ test("distinct users: invitation, live view-only access, revocation and recovery
       }),
     ).toHaveCount(0);
 
+    const recoveryPolicy = await (
+      await page.request.get(
+        `/api/v1/resources/${document.id}/permissions`,
+      )
+    ).json();
     const restored = await page.request.patch(
       `/api/v1/resources/${document.id}/permissions`,
-      { headers, data: { inherit: true, grants: [] } },
+      {
+        headers,
+        data: {
+          inherit: true,
+          grants: [],
+          expected_revision: recoveryPolicy.revision,
+        },
+      },
     );
     expect(restored.ok()).toBeTruthy();
     await teammate.reload();
