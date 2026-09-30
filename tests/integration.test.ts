@@ -57,6 +57,19 @@ const ok = async (method: string, path: string, data?: any, actor = owner) => {
   assert.ok(r.statusCode < 300, `${method} ${path}: ${r.statusCode} ${r.body}`);
   return r.json();
 };
+const permissionPatch = async (
+  path: string,
+  data: { inherit: boolean; grants: any[] },
+  actor = owner,
+) => {
+  const current = await ok("GET", path, undefined, actor);
+  return ok(
+    "PATCH",
+    path,
+    { ...data, expected_revision: current.revision },
+    actor,
+  );
+};
 function session(r: any) {
   const cookie = r.headers["set-cookie"].split(";")[0];
   return { cookie, csrf: csrf(cookie.split("=")[1]) };
@@ -408,7 +421,7 @@ test("live permission changes update editability, and ancestor revocation remove
     if (event.type === "reset") reset = true;
     if (event.type === "permission") permissions.push(event.readOnly);
   });
-  await ok("PATCH", `/resources/${space.id}/permissions`, {
+  await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: true,
     grants: [{ principal_id: member.id, level: 1 }],
   });
@@ -428,12 +441,12 @@ test("live permission changes update editability, and ancestor revocation remove
     ).statusCode,
     403,
   );
-  await ok("PATCH", `/resources/${space.id}/permissions`, {
+  await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: true,
     grants: [],
   });
   await until(() => permissions.at(-1) === false);
-  await ok("PATCH", `/resources/${space.id}/permissions`, {
+  await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: false,
     grants: [],
   });
@@ -457,11 +470,94 @@ test("live permission changes update editability, and ancestor revocation remove
     404,
   );
   c.provider.destroy();
-  await ok("PATCH", `/resources/${space.id}/permissions`, {
+  await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: true,
     grants: [],
   });
 });
+test("ACL writes reject stale, duplicate and cross-tenant grants and serialize concurrent saves", async () => {
+  const path = `/resources/${space.id}/permissions`;
+  const current = await ok("GET", path);
+  assert.ok(current.revision >= 1);
+
+  const duplicate = await req("PATCH", path, {
+    inherit: true,
+    expected_revision: current.revision,
+    grants: [
+      { principal_id: member.id, level: 1 },
+      { principal_id: member.id, level: 3 },
+    ],
+  });
+  assert.equal(duplicate.statusCode, 400);
+
+  const crossTenant = await req("PATCH", path, {
+    inherit: true,
+    expected_revision: current.revision,
+    grants: [{ principal_id: other.id, level: 1 }],
+  });
+  assert.equal(crossTenant.statusCode, 400);
+
+  const [a, b] = await Promise.all([
+    req("PATCH", path, {
+      inherit: true,
+      expected_revision: current.revision,
+      grants: [{ principal_id: member.id, level: 1 }],
+    }),
+    req("PATCH", path, {
+      inherit: true,
+      expected_revision: current.revision,
+      grants: [{ principal_id: member.id, level: 3 }],
+    }),
+  ]);
+  assert.deepEqual(
+    [a.statusCode, b.statusCode].sort((x, y) => x - y),
+    [200, 409],
+  );
+
+  const after = await ok("GET", path);
+  assert.equal(after.revision, current.revision + 1);
+  assert.equal(
+    (
+      await req("PATCH", path, {
+        inherit: true,
+        expected_revision: current.revision,
+        grants: [],
+      })
+    ).statusCode,
+    409,
+  );
+
+  await permissionPatch(path, { inherit: true, grants: [] });
+});
+
+test("audit export is admin-only, bounded/filterable and spreadsheet safe", async () => {
+  const adminExport = await req("GET", "/audit/export?limit=25");
+  assert.equal(adminExport.statusCode, 200, adminExport.body);
+  assert.match(adminExport.headers["content-type"], /text\/csv/);
+  assert.match(adminExport.body, /id,action,actor,resource_id,request_id,created_at/);
+
+  const filtered = await req(
+    "GET",
+    "/audit/export?action=permission.updated&limit=25",
+  );
+  assert.equal(filtered.statusCode, 200, filtered.body);
+  assert.match(filtered.body, /permission.updated/);
+
+  assert.equal(
+    (await req("GET", "/audit/export?limit=25", undefined, guest)).statusCode,
+    403,
+  );
+
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE users SET name='=2+2' WHERE id=$1", [owner.id]),
+  );
+  const formulaSafe = await req("GET", "/audit/export?limit=25");
+  assert.match(formulaSafe.body, /'=2\+2/);
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE users SET name='Owner' WHERE id=$1", [owner.id]),
+  );
+});
+
 test("service principals default to no access and read scopes cannot write", async () => {
   service = await ok("POST", "/integrations", { name: "Intelligence" });
   const s = { cookie: "", csrf: "" };
@@ -471,7 +567,7 @@ test("service principals default to no access and read scopes cannot write", asy
       .statusCode,
     404,
   );
-  await ok("PATCH", `/resources/${root.id}/permissions`, {
+  await permissionPatch(`/resources/${root.id}/permissions`, {
     inherit: true,
     grants: [{ principal_id: service.principal_id, level: 1 }],
   });
@@ -588,7 +684,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     },
     member,
   );
-  await ok("PATCH", `/resources/${space.id}/permissions`, {
+  await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: false,
     grants: [],
   });
@@ -597,7 +693,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     one(q, "SELECT status FROM jobs WHERE id=$1", [denied.id]),
   );
   assert.equal(status.status, "failed");
-  await ok("PATCH", `/resources/${space.id}/permissions`, {
+  await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: true,
     grants: [],
   });

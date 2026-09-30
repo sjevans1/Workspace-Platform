@@ -518,6 +518,7 @@ export function Permissions({
                   await api(`/resources/${id}/permissions`, "PATCH", {
                     inherit,
                     grants,
+                    expected_revision: data.revision,
                   });
                   notify("Access updated");
                   changed();

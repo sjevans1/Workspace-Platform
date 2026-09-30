@@ -1477,6 +1477,7 @@ function dataRoutes(route: Route, storage: Storage) {
         tenant_id: a.tenant_id,
         resource_id: n.id,
         effective_permission: n.effective_permission,
+        revision: n.permission_revision,
         policy: (await ancestry(q, n.id)).map((p) => ({
           id: p.id,
           inherit: p.inherit_permissions,
@@ -1514,11 +1515,13 @@ function dataRoutes(route: Route, storage: Storage) {
     "Replace local access grants",
     async (q, a, r) => {
       assert(!a.scopes, 403, "Human session required");
+      await treeLock(q, a.tenant_id);
       await requireAccess(q, a, id(r), 4);
       const v = body(
         z
           .object({
             inherit: z.boolean(),
+            expected_revision: z.number().int().positive(),
             grants: z
               .array(
                 z.object({
@@ -1531,19 +1534,37 @@ function dataRoutes(route: Route, storage: Storage) {
           .strict(),
         r,
       );
+      assert(
+        new Set(v.grants.map((g) => g.principal_id)).size === v.grants.length,
+        400,
+        "Duplicate principal grant",
+      );
       for (const g of v.grants)
         if (g.principal_id !== "*")
           assert(
-            await one(q, "SELECT 1 FROM memberships WHERE user_id=$1", [
-              g.principal_id,
-            ]),
+            await one(
+              q,
+              "SELECT 1 FROM memberships WHERE user_id=$1 AND active",
+              [g.principal_id],
+            ),
             400,
-            "Principal must belong to this organisation",
+            "Principal must be an active member of this organisation",
           );
-      await q.query("UPDATE resources SET inherit_permissions=$2 WHERE id=$1", [
-        id(r),
-        v.inherit,
-      ]);
+      const current = await one(
+        q,
+        "SELECT permission_revision FROM resources WHERE id=$1 FOR UPDATE",
+        [id(r)],
+      );
+      assert(current, 404, "Resource not found");
+      assert(
+        current.permission_revision === v.expected_revision,
+        409,
+        "Access policy changed; reload before saving",
+      );
+      await q.query(
+        "UPDATE resources SET inherit_permissions=$2,permission_revision=permission_revision+1 WHERE id=$1",
+        [id(r), v.inherit],
+      );
       await q.query("DELETE FROM acl WHERE resource_id=$1", [id(r)]);
       for (const g of v.grants)
         await q.query(
@@ -1551,7 +1572,7 @@ function dataRoutes(route: Route, storage: Storage) {
           [a.tenant_id, id(r), g.principal_id, g.level],
         );
       await emit(q, a, "permission.updated", id(r));
-      return { ok: true };
+      return { ok: true, revision: current.permission_revision + 1 };
     },
   );
   route(
@@ -1578,6 +1599,74 @@ function dataRoutes(route: Route, storage: Storage) {
       )
     ).rows;
   });
+  route(
+    "GET",
+    "/audit/export",
+    "Export append-only audit as CSV",
+    async (q, a, r, reply) => {
+      admin(a);
+      const p = query(r),
+        limit = Math.min(10000, Math.max(1, Number(p.limit) || 10000)),
+        values: any[] = [],
+        where: string[] = [];
+      if (p.since) {
+        values.push(z.iso.datetime({ offset: true }).parse(p.since));
+        where.push(`e.created_at >= $${values.length}::timestamptz`);
+      }
+      if (p.until) {
+        values.push(z.iso.datetime({ offset: true }).parse(p.until));
+        where.push(`e.created_at <= $${values.length}::timestamptz`);
+      }
+      if (p.action) {
+        values.push(z.string().max(200).parse(p.action));
+        where.push(`e.action = $${values.length}`);
+      }
+      values.push(limit);
+      const rows = (
+        await q.query(
+          `SELECT e.id,e.action,e.resource_id,e.request_id,e.created_at,u.name actor
+           FROM audit_events e LEFT JOIN users u ON u.id=e.actor_id
+           ${where.length ? "WHERE " + where.join(" AND ") : ""}
+           ORDER BY e.created_at DESC,e.id
+           LIMIT $${values.length}`,
+          values,
+        )
+      ).rows;
+      const safe = (v: unknown) => {
+        const text = v == null ? "" : String(v);
+        return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      };
+      reply
+        .type("text/csv")
+        .header("Content-Disposition", 'attachment; filename="audit.csv"');
+      return reply.send(
+        stringify(
+          rows.map((row) => ({
+            id: row.id,
+            action: safe(row.action),
+            actor: safe(row.actor),
+            resource_id: row.resource_id || "",
+            request_id: safe(row.request_id),
+            created_at:
+              row.created_at instanceof Date
+                ? row.created_at.toISOString()
+                : String(row.created_at),
+          })),
+          {
+            header: true,
+            columns: [
+              "id",
+              "action",
+              "actor",
+              "resource_id",
+              "request_id",
+              "created_at",
+            ],
+          },
+        ),
+      );
+    },
+  );
   route(
     "GET",
     "/resources/:id/activity",
