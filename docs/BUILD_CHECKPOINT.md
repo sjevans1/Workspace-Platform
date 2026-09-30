@@ -89,7 +89,7 @@ PR #15 passed the complete final-head CI gate in GitHub Actions run 36792189577 
 
 The slice adds standards-based OIDC Back-Channel Logout. OIDC-created Workspace sessions now retain issuer/subject/session-ID metadata. The public back-channel endpoint validates signed logout JWTs against the configured provider JWKS, enforces issuer/audience/iat/exp/jti/events plus `sub` or `sid`, rejects `nonce`, returns HTTP 400 for invalid tokens, and makes repeated logout-JTI delivery idempotent. A `sid` logout revokes only the matching OIDC-created Workspace session; a subject-only logout revokes OIDC sessions for that issuer/subject. Unrelated local/password break-glass sessions are preserved.
 
-Workspace administrator membership deactivation already revokes that tenant's active sessions, so the remaining enterprise lifecycle gap is directory-originated offboarding when the external IdP does not emit a back-channel logout event. The next acceptance step is a focused real-Keycloak host exercise configuring the client's Backchannel logout URL and proving an already-active Workspace SSO session is invalidated.
+Workspace administrator membership deactivation already revokes that tenant's active sessions, so the remaining enterprise lifecycle gap is directory-originated offboarding when the external IdP does not emit a back-channel logout event. The next acceptance step is a focused real-Keycloak host exercise configuring the client's Backchannel logout URL and proving an already-active Workspace SSO session is invalidated. The bounded continuation is committed at `docs/HERMES_KEYCLOAK_LOGOUT_ACCEPTANCE.md`.
 
 ## Independent Keycloak host acceptance — passed
 
