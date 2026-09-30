@@ -11,7 +11,7 @@ Both jobs passed in [GitHub Actions run 36611129995](https://github.com/sjevans1
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration and backup tests | 29 passed, 0 failed in latest native PostgreSQL gate |
+| Unit, API, collaboration and backup tests | 30 passed, 0 failed in latest native PostgreSQL gate |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Concurrent ACL replacement and stale-write rejection | Pass; simultaneous conflicting saves resolve as one success and one 409 |
@@ -24,7 +24,8 @@ Both jobs passed in [GitHub Actions run 36611129995](https://github.com/sjevans1
 | Trash cascade and restore | Pass |
 | Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL 17 test suite | 29 passed; clean process shutdown |
+| Native PostgreSQL 17 test suite | 30 passed; clean process shutdown |
+| Migration rollback/retry and historical checksum integrity | Pass; failed partial DDL rolls back, corrected retry succeeds, reruns are idempotent, applied-file drift is rejected |
 | Docker image, migrations and full Compose startup | Pass; API, collaboration and worker all report healthy before browser acceptance |
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
 | Mobile viewport, 390 × 844 | Pass; sidebar navigation and no document-width overflow |
@@ -54,11 +55,11 @@ The repository contains a connected interface, API, collaboration server, import
 | Import/export | Markdown/CSV imports capped at 2 MiB; CSV at 2,000 rows/100 columns. Synchronous exports cap at 10,000 records. No bulk zipped workspace export or large streamed job output. |
 | Integrations | No actual OpenJM Intelligence deployment connected. Stable event cursor, reconciliation API, receiver secret rotation and dead-letter replay UI remain. The example documents mandatory permission recheck. |
 | API contracts | Versioned routes and interactive OpenAPI inventory exist. Core external integration routes now publish tested machine-readable request/query/path/response schemas. Complete SDK-grade schemas for the remaining human/admin routes and a generated client SDK are not finished. |
-| Operations | API readiness plus Docker health for API/collaboration/worker are enforced in CI; worker health detects repeated failures and stuck ticks, collaboration verifies its writer lease, and admins can inspect tenant queue backlogs. Real HTTPS/LAN installation, production-provider S3 drill, host recovery drill, external metrics/alerts, encryption-at-rest integration and release image scanning remain rollout requirements. |
+| Operations | API readiness plus Docker health for API/collaboration/worker are enforced in CI; worker health detects repeated failures and stuck ticks, collaboration verifies its writer lease, and admins can inspect tenant queue backlogs. Real HTTPS/LAN installation, production-provider S3 drill, host recovery drill, external metrics/alerts, encryption-at-rest integration and release image scanning remain rollout requirements. Migration files are checksum-pinned and rollback/retry behavior is covered in native PostgreSQL CI. |
 | Browser/accessibility | The Chromium workflow and screenshots pass in CI. Accessibility audit, keyboard/focus testing of all dialogs, visual regression and multiple browser engines remain. |
 | Branding | Runtime and sign-in configuration exist. Light theme is implemented; dark-logo config is retained but a full dark theme is not implemented. |
 | Licensing | Unmodified dependency notices and npm SBOM are included. Mirror the exact MPL source archives and generate container/base-OS SBOMs for each commercial release. Final product/legal packaging still needs review. |
 
 ## Suggested next acceptance slice
 
-With the native PostgreSQL/browser/container gate passing through the retention and permission-concurrency slices, the next host-level acceptance should be a customer-like TLS-enabled deployment covering migration recovery, object-store recovery and operational monitoring. Identity/SSO, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
+With the native PostgreSQL/browser/container gate passing through the retention and permission-concurrency slices, the next host-level acceptance should be a customer-like TLS-enabled deployment covering host-level migration execution/recovery, object-store recovery and operational monitoring. Identity/SSO, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
