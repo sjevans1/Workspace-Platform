@@ -36,21 +36,6 @@
   },
   "components": [
     {
-      "bom-ref": "@workspace/web@0.1.0",
-      "type": "library",
-      "name": "web",
-      "version": "0.1.0",
-      "scope": "required",
-      "purl": "pkg:npm/%40workspace/web@0.1.0",
-      "properties": [
-        {
-          "name": "cdx:npm:package:private",
-          "value": "true"
-        }
-      ],
-      "externalReferences": []
-    },
-    {
       "bom-ref": "@asamuzakjp/css-color@5.1.11",
       "type": "library",
       "name": "@asamuzakjp/css-color",
@@ -1309,49 +1294,6 @@
       ]
     },
     {
-      "bom-ref": "@electric-sql/pglite@0.5.8",
-      "type": "library",
-      "name": "@electric-sql/pglite",
-      "version": "0.5.8",
-      "scope": "required",
-      "author": "Electric DB Limited",
-      "description": "PGlite is a WASM Postgres build packaged into a TypeScript client library that enables you to run Postgres in the browser, Node.js and Bun, with no need to install any other dependencies. It is only 3.7mb gzipped.",
-      "purl": "pkg:npm/%40electric-sql/pglite@0.5.8",
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@electric-sql/pglite/-/pglite-0.5.8.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/electric-sql/pglite"
-        },
-        {
-          "type": "website",
-          "url": "https://pglite.dev"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "9fdb6c6d43a1c31d9ea4ad55d191bd02be121d6523bb4e1d866cd95e24815f006895e3af21f6a5b37dcd01a5a06a041500be116efc7f3edb2edcffa9034f5fe9"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "@electric-sql/pglite-age@0.0.9",
       "type": "library",
       "name": "@electric-sql/pglite-age",
@@ -1685,6 +1627,49 @@
         {
           "alg": "SHA-512",
           "content": "0ca9c905fefee731425d719900652f1a858a7ad3cfbda43b7cb48656a3f9a27ce006157dbef4dc1e2822ade31138c825828bef8685c768c38aaadebdfefb6ce0"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@electric-sql/pglite@0.5.8",
+      "type": "library",
+      "name": "@electric-sql/pglite",
+      "version": "0.5.8",
+      "scope": "required",
+      "author": "Electric DB Limited",
+      "description": "PGlite is a WASM Postgres build packaged into a TypeScript client library that enables you to run Postgres in the browser, Node.js and Bun, with no need to install any other dependencies. It is only 3.7mb gzipped.",
+      "purl": "pkg:npm/%40electric-sql/pglite@0.5.8",
+      "properties": [
+        {
+          "name": "cdx:npm:package:development",
+          "value": "true"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@electric-sql/pglite/-/pglite-0.5.8.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/electric-sql/pglite"
+        },
+        {
+          "type": "website",
+          "url": "https://pglite.dev"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "9fdb6c6d43a1c31d9ea4ad55d191bd02be121d6523bb4e1d866cd95e24815f006895e3af21f6a5b37dcd01a5a06a041500be116efc7f3edb2edcffa9034f5fe9"
         }
       ],
       "licenses": [
@@ -2489,48 +2474,6 @@
       ]
     },
     {
-      "bom-ref": "@fastify/swagger@9.9.0",
-      "type": "library",
-      "name": "@fastify/swagger",
-      "version": "9.9.0",
-      "scope": "required",
-      "author": "Tomas Della Vedova - @delvedor (https://delvedor.dev)",
-      "description": "Serve Swagger/OpenAPI documentation for Fastify, supporting dynamic generation",
-      "purl": "pkg:npm/%40fastify/swagger@9.9.0",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@fastify/swagger/-/swagger-9.9.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/fastify/fastify-swagger.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/fastify/fastify-swagger#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/fastify/fastify-swagger/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "776d489b59772a8176926cc91ce60be7412b8e18f5a9452e750b16f61cf061313b962923bccc7b0102a90a5c996dd86ba865db97e7d4e1d2364bb05a2e9148bf"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "@fastify/swagger-ui@6.1.1",
       "type": "library",
       "name": "@fastify/swagger-ui",
@@ -2562,6 +2505,48 @@
         {
           "alg": "SHA-512",
           "content": "44a08b4870129734b6259bc75a7d783661291f2974c8da2c1afab3854ba69bf2c63c6e9159005fe28b1c4c5b7cdd00ef7393b94e897705eba9f229c097f93810"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@fastify/swagger@9.9.0",
+      "type": "library",
+      "name": "@fastify/swagger",
+      "version": "9.9.0",
+      "scope": "required",
+      "author": "Tomas Della Vedova - @delvedor (https://delvedor.dev)",
+      "description": "Serve Swagger/OpenAPI documentation for Fastify, supporting dynamic generation",
+      "purl": "pkg:npm/%40fastify/swagger@9.9.0",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@fastify/swagger/-/swagger-9.9.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/fastify/fastify-swagger.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/fastify/fastify-swagger#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/fastify/fastify-swagger/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "776d489b59772a8176926cc91ce60be7412b8e18f5a9452e750b16f61cf061313b962923bccc7b0102a90a5c996dd86ba865db97e7d4e1d2364bb05a2e9148bf"
         }
       ],
       "licenses": [
@@ -2649,44 +2634,6 @@
       ]
     },
     {
-      "bom-ref": "@floating-ui/react@0.27.20",
-      "type": "library",
-      "name": "@floating-ui/react",
-      "version": "0.27.20",
-      "scope": "required",
-      "author": "atomiks",
-      "description": "Floating UI for React",
-      "purl": "pkg:npm/%40floating-ui/react@0.27.20",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@floating-ui/react/-/react-0.27.20.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/floating-ui/floating-ui.git"
-        },
-        {
-          "type": "website",
-          "url": "https://floating-ui.com/docs/react"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "08ca8ccbb39a5e5f56d1eab5532ecbee2d98fda9cfbc798598449dd82130d2de58bd985c5427a8e0c05ebc09acc119655fb63674489d038a3318fba72d24d0a7"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "@floating-ui/react-dom@2.1.9",
       "type": "library",
       "name": "@floating-ui/react-dom",
@@ -2714,6 +2661,44 @@
         {
           "alg": "SHA-512",
           "content": "2438c41460a9226c43080ec924abe203433df91b6625d8f49bf35553920c8012be026668b80410efffb618b1f41975d8d18330f685cf07c84a75b3d883940b62"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@floating-ui/react@0.27.20",
+      "type": "library",
+      "name": "@floating-ui/react",
+      "version": "0.27.20",
+      "scope": "required",
+      "author": "atomiks",
+      "description": "Floating UI for React",
+      "purl": "pkg:npm/%40floating-ui/react@0.27.20",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@floating-ui/react/-/react-0.27.20.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/floating-ui/floating-ui.git"
+        },
+        {
+          "type": "website",
+          "url": "https://floating-ui.com/docs/react"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "08ca8ccbb39a5e5f56d1eab5532ecbee2d98fda9cfbc798598449dd82130d2de58bd985c5427a8e0c05ebc09acc119655fb63674489d038a3318fba72d24d0a7"
         }
       ],
       "licenses": [
@@ -2817,47 +2802,6 @@
         {
           "alg": "SHA-512",
           "content": "2b24ba757a08716b1dfafde0c1dea79d95b4e0cefb75fe57b2d3cd90ec2aa03c70ba77328286c437bc6c7f4c763e676f950750c9168b9b6485e2bd466591919c"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "lib0@0.2.119",
-      "type": "library",
-      "name": "lib0",
-      "version": "0.2.119",
-      "scope": "required",
-      "author": "Kevin Jahns <kevin.jahns@protonmail.com>",
-      "purl": "pkg:npm/lib0@0.2.119",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/lib0/-/lib0-0.2.119.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/dmonad/lib0.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/dmonad/lib0#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/dmonad/lib0/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "be1f9389e8d5cbc5e6fa109d9d17e7f41b6118dbcd5197445e5b4d8d564bdd3cd120a3f7b35967421f2959dfd0d300a063414f0065558c51786621d45772c580"
         }
       ],
       "licenses": [
@@ -4376,43 +4320,6 @@
       ]
     },
     {
-      "bom-ref": "@types/use-sync-external-store@0.0.6",
-      "type": "library",
-      "name": "@types/use-sync-external-store",
-      "version": "0.0.6",
-      "scope": "required",
-      "description": "TypeScript definitions for use-sync-external-store",
-      "purl": "pkg:npm/%40types/use-sync-external-store@0.0.6",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@types/use-sync-external-store/-/use-sync-external-store-0.0.6.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/use-sync-external-store"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "cc50c00feb65a5fdabe1ab2e1c48f45c7ea963a8b483935e0073e7fb5e70937055e8903af5e1111570b58321938439156b5cc2c8aaf98e8c75fb62db57f00c2e"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "@types/hast@3.0.5",
       "type": "library",
       "name": "@types/hast",
@@ -4534,43 +4441,6 @@
       ]
     },
     {
-      "bom-ref": "@types/react@19.3.0",
-      "type": "library",
-      "name": "@types/react",
-      "version": "19.3.0",
-      "scope": "required",
-      "description": "TypeScript definitions for react",
-      "purl": "pkg:npm/%40types/react@19.3.0",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/@types/react/-/react-19.3.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "374ac50ae1fd628c46f7f9bad65f4c7e924a7e62ce554d1e9bb8a9233e9346049292f45e2c1f6f2fce4607ecabf01b3995eaa9be0f7a252c05e194b5b38be242"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "@types/react-dom@19.3.0",
       "type": "library",
       "name": "@types/react-dom",
@@ -4608,6 +4478,43 @@
       ]
     },
     {
+      "bom-ref": "@types/react@19.3.0",
+      "type": "library",
+      "name": "@types/react",
+      "version": "19.3.0",
+      "scope": "required",
+      "description": "TypeScript definitions for react",
+      "purl": "pkg:npm/%40types/react@19.3.0",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/react/-/react-19.3.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "374ac50ae1fd628c46f7f9bad65f4c7e924a7e62ce554d1e9bb8a9233e9346049292f45e2c1f6f2fce4607ecabf01b3995eaa9be0f7a252c05e194b5b38be242"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
       "bom-ref": "@types/unist@3.0.3",
       "type": "library",
       "name": "@types/unist",
@@ -4634,6 +4541,43 @@
         {
           "alg": "SHA-512",
           "content": "928fe0205251bf5efb5e066c65c0709ea24de71fc689e9fca8d3a7d03e5b414ff303355ff59b7706571488baa157dcb801193419b4f7b675223cd8274d7cdcfd"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "@types/use-sync-external-store@0.0.6",
+      "type": "library",
+      "name": "@types/use-sync-external-store",
+      "version": "0.0.6",
+      "scope": "required",
+      "description": "TypeScript definitions for use-sync-external-store",
+      "purl": "pkg:npm/%40types/use-sync-external-store@0.0.6",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@types/use-sync-external-store/-/use-sync-external-store-0.0.6.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/use-sync-external-store"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "cc50c00feb65a5fdabe1ab2e1c48f45c7ea963a8b483935e0073e7fb5e70937055e8903af5e1111570b58321938439156b5cc2c8aaf98e8c75fb62db57f00c2e"
         }
       ],
       "licenses": [
@@ -4729,6 +4673,21 @@
       ]
     },
     {
+      "bom-ref": "@workspace/web@0.1.0",
+      "type": "library",
+      "name": "web",
+      "version": "0.1.0",
+      "scope": "required",
+      "purl": "pkg:npm/%40workspace/web@0.1.0",
+      "properties": [
+        {
+          "name": "cdx:npm:package:private",
+          "value": "true"
+        }
+      ],
+      "externalReferences": []
+    },
+    {
       "bom-ref": "abstract-logging@2.0.1",
       "type": "library",
       "name": "abstract-logging",
@@ -4760,40 +4719,6 @@
         {
           "alg": "SHA-512",
           "content": "d818d14d9c533ef85e3af19b06c94549839492bf928cfb4e9eb2cfdf77fe54858bcdecd0a5972a560ee36b72f87415e6cf38304fe6b4dbd8d1c793c28b726e88"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "ajv@8.20.0",
-      "type": "library",
-      "name": "ajv",
-      "version": "8.20.0",
-      "scope": "required",
-      "author": "Evgeny Poberezkin",
-      "description": "Another JSON Schema Validator",
-      "purl": "pkg:npm/ajv@8.20.0",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz"
-        },
-        {
-          "type": "website",
-          "url": "https://ajv.js.org"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "4e16e58be3a53a3fa230f60505505f2773a60809da4b2367e0cd6fcfd4fa1a46b926df5b6bf1c8479ea3a32eb9b58ea4c7f142179557341f35f58eff194ac118"
         }
       ],
       "licenses": [
@@ -4847,43 +4772,35 @@
       ]
     },
     {
-      "bom-ref": "fast-uri@3.1.8",
+      "bom-ref": "ajv@8.20.0",
       "type": "library",
-      "name": "fast-uri",
-      "version": "3.1.8",
+      "name": "ajv",
+      "version": "8.20.0",
       "scope": "required",
-      "author": "Vincent Le Goff <vince.legoff@gmail.com> (https://github.com/zekth)",
-      "description": "Dependency-free RFC 3986 URI toolbox",
-      "purl": "pkg:npm/fast-uri@3.1.8",
+      "author": "Evgeny Poberezkin",
+      "description": "Another JSON Schema Validator",
+      "purl": "pkg:npm/ajv@8.20.0",
       "properties": [],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/fastify/fast-uri.git"
+          "url": "https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz"
         },
         {
           "type": "website",
-          "url": "https://github.com/fastify/fast-uri"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/fastify/fast-uri/issues"
+          "url": "https://ajv.js.org"
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "19932d6544cd4693952040a85f02cd652e7150613e99535b4c1f21ffb4708764c559c05088fcd3832662d39045f543192a42c9bfc5c14494e553bce0f3e65f32"
+          "content": "4e16e58be3a53a3fa230f60505505f2773a60809da4b2367e0cd6fcfd4fa1a46b926df5b6bf1c8479ea3a32eb9b58ea4c7f142179557341f35f58eff194ac118"
         }
       ],
       "licenses": [
         {
           "license": {
-            "id": "BSD-3-Clause"
+            "id": "MIT"
           }
         }
       ]
@@ -5336,6 +5253,36 @@
         {
           "alg": "SHA-512",
           "content": "647ff45ecf6b30815608e9867664bd78705317adaaa9060dcf89d58d08647483bf6b47c23f8508337991cffc22a8bd0bd78620033ff5c62a3839a498e3e38dfc"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "cookie@1.1.1",
+      "type": "library",
+      "name": "cookie",
+      "version": "1.1.1",
+      "scope": "required",
+      "author": "Roman Shtylman <shtylman@gmail.com>",
+      "description": "HTTP server cookie parsing and serialization",
+      "purl": "pkg:npm/cookie@1.1.1",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/cookie/-/cookie-1.1.1.tgz"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7a2f00a2cee36b4c1e469173267100f541c9ffb5d09aa8256d1c277f60138dc07d5aaf3be15287f647e38e2acce94854dbf1397c561a77297284595d72a4a275"
         }
       ],
       "licenses": [
@@ -6161,6 +6108,48 @@
       ]
     },
     {
+      "bom-ref": "fast-uri@3.1.8",
+      "type": "library",
+      "name": "fast-uri",
+      "version": "3.1.8",
+      "scope": "required",
+      "author": "Vincent Le Goff <vince.legoff@gmail.com> (https://github.com/zekth)",
+      "description": "Dependency-free RFC 3986 URI toolbox",
+      "purl": "pkg:npm/fast-uri@3.1.8",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/fastify/fast-uri.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/fastify/fast-uri"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/fastify/fast-uri/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "19932d6544cd4693952040a85f02cd652e7150613e99535b4c1f21ffb4708764c559c05088fcd3832662d39045f543192a42c9bfc5c14494e553bce0f3e65f32"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ]
+    },
+    {
       "bom-ref": "fast-uri@4.2.1",
       "type": "library",
       "name": "fast-uri",
@@ -6203,48 +6192,6 @@
       ]
     },
     {
-      "bom-ref": "fastify@5.12.5",
-      "type": "library",
-      "name": "fastify",
-      "version": "5.12.5",
-      "scope": "required",
-      "author": "Matteo Collina <hello@matteocollina.com>",
-      "description": "Fast and low overhead web framework, for Node.js",
-      "purl": "pkg:npm/fastify@5.12.5",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/fastify/-/fastify-5.12.5.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/fastify/fastify.git"
-        },
-        {
-          "type": "website",
-          "url": "https://fastify.dev/"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/fastify/fastify/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "381da4d5d971b39fcd00006a78a5761541e4483d816c436c09a93cc942d57329a7ddf1c83c355af532374839c9496612965666498b995f2da04e7b13f92badd4"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "fastify-plugin@6.0.0",
       "type": "library",
       "name": "fastify-plugin",
@@ -6276,6 +6223,48 @@
         {
           "alg": "SHA-512",
           "content": "7d93adcbbcf73bbbce96217a77c6c7137c22121d4a70d9ca1107a7b1281393d0b50ef37a9d12d2fbe5d577ceafdf71f0ffcbbd527f00d730eb43cba37100c712"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "fastify@5.12.5",
+      "type": "library",
+      "name": "fastify",
+      "version": "5.12.5",
+      "scope": "required",
+      "author": "Matteo Collina <hello@matteocollina.com>",
+      "description": "Fast and low overhead web framework, for Node.js",
+      "purl": "pkg:npm/fastify@5.12.5",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/fastify/-/fastify-5.12.5.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/fastify/fastify.git"
+        },
+        {
+          "type": "website",
+          "url": "https://fastify.dev/"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/fastify/fastify/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "381da4d5d971b39fcd00006a78a5761541e4483d816c436c09a93cc942d57329a7ddf1c83c355af532374839c9496612965666498b995f2da04e7b13f92badd4"
         }
       ],
       "licenses": [
@@ -6756,6 +6745,44 @@
       ]
     },
     {
+      "bom-ref": "jose@6.2.12",
+      "type": "library",
+      "name": "jose",
+      "version": "6.2.12",
+      "scope": "required",
+      "author": "Filip Skokan <panva.ip@gmail.com>",
+      "description": "JWA, JWS, JWE, JWT, JWK, JWKS for Node.js, Browser, Cloudflare Workers, Deno, Bun, and other Web-interoperable runtimes",
+      "purl": "pkg:npm/jose@6.2.12",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/jose/-/jose-6.2.12.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/panva/jose"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/panva/jose"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f4d88598911ec74b32d83939f23d94181487814b36ca917d7994aee0beaf8ce5f70e9f7a4b0d45dee2fe1fe0f5b31d368d965dcd44f41e0bc2cb9f42baf5dc5b"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
       "bom-ref": "jsdom@29.1.1",
       "type": "library",
       "name": "jsdom",
@@ -6945,6 +6972,47 @@
       ]
     },
     {
+      "bom-ref": "lib0@0.2.119",
+      "type": "library",
+      "name": "lib0",
+      "version": "0.2.119",
+      "scope": "required",
+      "author": "Kevin Jahns <kevin.jahns@protonmail.com>",
+      "purl": "pkg:npm/lib0@0.2.119",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/lib0/-/lib0-0.2.119.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/dmonad/lib0.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/dmonad/lib0#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/dmonad/lib0/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "be1f9389e8d5cbc5e6fa109d9d17e7f41b6118dbcd5197445e5b4d8d564bdd3cd120a3f7b35967421f2959dfd0d300a063414f0065558c51786621d45772c580"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
       "bom-ref": "lib0@1.0.0-rc.22",
       "type": "library",
       "name": "lib0",
@@ -7023,78 +7091,6 @@
         {
           "license": {
             "id": "BSD-3-Clause"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "cookie@1.1.1",
-      "type": "library",
-      "name": "cookie",
-      "version": "1.1.1",
-      "scope": "required",
-      "author": "Roman Shtylman <shtylman@gmail.com>",
-      "description": "HTTP server cookie parsing and serialization",
-      "purl": "pkg:npm/cookie@1.1.1",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/cookie/-/cookie-1.1.1.tgz"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "7a2f00a2cee36b4c1e469173267100f541c9ffb5d09aa8256d1c277f60138dc07d5aaf3be15287f647e38e2acce94854dbf1397c561a77297284595d72a4a275"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "process-warning@4.0.1",
-      "type": "library",
-      "name": "process-warning",
-      "version": "4.0.1",
-      "scope": "required",
-      "author": "Tomas Della Vedova",
-      "description": "A small utility for creating warnings and emitting them.",
-      "purl": "pkg:npm/process-warning@4.0.1",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/process-warning/-/process-warning-4.0.1.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/fastify/process-warning.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/fastify/fastify-warning#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/fastify/fastify-warning/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "ddcd8bcd0deb63d77485cd5e99cb0785f4fd270cf47028626ff40df3da0c136478e75c397f2ddfd1a7c0844445640c2b6c3538df0935d9dd0e441a4354c139d1"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
           }
         }
       ]
@@ -7404,6 +7400,44 @@
       ]
     },
     {
+      "bom-ref": "oauth4webapi@3.8.8",
+      "type": "library",
+      "name": "oauth4webapi",
+      "version": "3.8.8",
+      "scope": "required",
+      "author": "Filip Skokan <panva.ip@gmail.com>",
+      "description": "Low-Level OAuth 2 / OpenID Connect Client API for JavaScript Runtimes",
+      "purl": "pkg:npm/oauth4webapi@3.8.8",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/oauth4webapi/-/oauth4webapi-3.8.8.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/panva/oauth4webapi"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/panva/oauth4webapi"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f0ddbc13e6bfa317d758180e32df993ff2547ff5d1f8815bbe40043cfde0ce75ce32ff41a400308888f44c5373ded1933dcd1943cce65813603759c0cacd209e"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
       "bom-ref": "on-exit-leak-free@2.1.2",
       "type": "library",
       "name": "on-exit-leak-free",
@@ -7473,6 +7507,44 @@
         {
           "alg": "SHA-512",
           "content": "37862d49826a82156ee227a4d9952f70dff46aa1f59110ee36acdcc9c0f184e52983b19dbcb6b61770e04bac8136122786fdabffa234165927ec2a8bf3e9c873"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "openid-client@6.8.8",
+      "type": "library",
+      "name": "openid-client",
+      "version": "6.8.8",
+      "scope": "required",
+      "author": "Filip Skokan <panva.ip@gmail.com>",
+      "description": "OAuth 2 / OpenID Connect Client API for JavaScript Runtimes",
+      "purl": "pkg:npm/openid-client@6.8.8",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/openid-client/-/openid-client-6.8.8.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/panva/openid-client"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/panva/openid-client"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "66cb9c240e40774e14bfb60de2a97eb381973666fdb80610c32253b09c7b087fcc5f72598a82c4da954a8b5482f98adb48b0383f1dc68b7d1d32380e66d6faa4"
         }
       ],
       "licenses": [
@@ -7593,44 +7665,6 @@
         {
           "license": {
             "id": "BlueOak-1.0.0"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "pg@8.23.0",
-      "type": "library",
-      "name": "pg",
-      "version": "8.23.0",
-      "scope": "required",
-      "author": "Brian Carlson <brian.m.carlson@gmail.com>",
-      "description": "PostgreSQL client - pure javascript & libpq with the same API",
-      "purl": "pkg:npm/pg@8.23.0",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/pg/-/pg-8.23.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git://github.com/brianc/node-postgres.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/brianc/node-postgres"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "229d844029e0a3024b18e7c2c241613d753bfe58e5867e91c659b2e1761f2f663ebf244ce7dfbcb91db1a9158a75899b5e6c4214e0262b106e49409d177e2a2e"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
           }
         }
       ]
@@ -7861,6 +7895,44 @@
       ]
     },
     {
+      "bom-ref": "pg@8.23.0",
+      "type": "library",
+      "name": "pg",
+      "version": "8.23.0",
+      "scope": "required",
+      "author": "Brian Carlson <brian.m.carlson@gmail.com>",
+      "description": "PostgreSQL client - pure javascript & libpq with the same API",
+      "purl": "pkg:npm/pg@8.23.0",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/pg/-/pg-8.23.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git://github.com/brianc/node-postgres.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/brianc/node-postgres"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "229d844029e0a3024b18e7c2c241613d753bfe58e5867e91c659b2e1761f2f663ebf244ce7dfbcb91db1a9158a75899b5e6c4214e0262b106e49409d177e2a2e"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
       "bom-ref": "pgpass@1.0.5",
       "type": "library",
       "name": "pgpass",
@@ -7920,48 +7992,6 @@
         {
           "license": {
             "id": "ISC"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "pino@10.3.1",
-      "type": "library",
-      "name": "pino",
-      "version": "10.3.1",
-      "scope": "required",
-      "author": "Matteo Collina <hello@matteocollina.com>",
-      "description": "super fast, all natural json logger",
-      "purl": "pkg:npm/pino@10.3.1",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/pino/-/pino-10.3.1.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/pinojs/pino.git"
-        },
-        {
-          "type": "website",
-          "url": "https://getpino.io"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/pinojs/pino/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "af7e321ff1a54292996d4d41bc516a3a3848491a3530dc75b5662c62f9a3e8a2111d23cc4f6fb21ce11bd521ba34cbd1a07445d1ad3b9023a8c7ff726a4975be"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
           }
         }
       ]
@@ -8051,39 +8081,43 @@
       ]
     },
     {
-      "bom-ref": "playwright@1.63.0",
+      "bom-ref": "pino@10.3.1",
       "type": "library",
-      "name": "playwright",
-      "version": "1.63.0",
-      "scope": "optional",
-      "author": "Microsoft Corporation",
-      "description": "A high-level API to automate web browsers",
-      "purl": "pkg:npm/playwright@1.63.0",
+      "name": "pino",
+      "version": "10.3.1",
+      "scope": "required",
+      "author": "Matteo Collina <hello@matteocollina.com>",
+      "description": "super fast, all natural json logger",
+      "purl": "pkg:npm/pino@10.3.1",
       "properties": [],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/playwright/-/playwright-1.63.0.tgz"
+          "url": "https://registry.npmjs.org/pino/-/pino-10.3.1.tgz"
         },
         {
           "type": "vcs",
-          "url": "git+https://github.com/microsoft/playwright.git"
+          "url": "git+https://github.com/pinojs/pino.git"
         },
         {
           "type": "website",
-          "url": "https://playwright.dev"
+          "url": "https://getpino.io"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/pinojs/pino/issues"
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "fbbce204b89d4b835a34276de7b4940d3fb062699de5f9a241e8d489cfe46fe62c61208fc8e384f6c79bccc8cd990aec9cda4326a778587bd5ffc95f29f50352"
+          "content": "af7e321ff1a54292996d4d41bc516a3a3848491a3530dc75b5662c62f9a3e8a2111d23cc4f6fb21ce11bd521ba34cbd1a07445d1ad3b9023a8c7ff726a4975be"
         }
       ],
       "licenses": [
         {
           "license": {
-            "id": "Apache-2.0"
+            "id": "MIT"
           }
         }
       ]
@@ -8116,6 +8150,44 @@
         {
           "alg": "SHA-512",
           "content": "ad80ac045fcce478d4721e766dbb5538d1058efe97bbcb26f21ef674d951e5bcc81357ef0bf6f182ca7392349f53e3307843263ccf0a25e6c6ea79f2c68e660a"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "playwright@1.63.0",
+      "type": "library",
+      "name": "playwright",
+      "version": "1.63.0",
+      "scope": "optional",
+      "author": "Microsoft Corporation",
+      "description": "A high-level API to automate web browsers",
+      "purl": "pkg:npm/playwright@1.63.0",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/playwright/-/playwright-1.63.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/microsoft/playwright.git"
+        },
+        {
+          "type": "website",
+          "url": "https://playwright.dev"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "fbbce204b89d4b835a34276de7b4940d3fb062699de5f9a241e8d489cfe46fe62c61208fc8e384f6c79bccc8cd990aec9cda4326a778587bd5ffc95f29f50352"
         }
       ],
       "licenses": [
@@ -8313,6 +8385,48 @@
         {
           "alg": "SHA-512",
           "content": "23b0088396e802be51d0516d27aac27c3f8b16c587a7cd5da25ac50fc4bbf54f6d6fc033da71ab2677273129f2b3e6e94097d1533aacf619c0f35380037842b9"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "process-warning@4.0.1",
+      "type": "library",
+      "name": "process-warning",
+      "version": "4.0.1",
+      "scope": "required",
+      "author": "Tomas Della Vedova",
+      "description": "A small utility for creating warnings and emitting them.",
+      "purl": "pkg:npm/process-warning@4.0.1",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/process-warning/-/process-warning-4.0.1.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/fastify/process-warning.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/fastify/fastify-warning#readme"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/fastify/fastify-warning/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ddcd8bcd0deb63d77485cd5e99cb0785f4fd270cf47028626ff40df3da0c136478e75c397f2ddfd1a7c0844445640c2b6c3538df0935d9dd0e441a4354c139d1"
         }
       ],
       "licenses": [
@@ -8913,43 +9027,6 @@
       ]
     },
     {
-      "bom-ref": "react@19.3.0",
-      "type": "library",
-      "name": "react",
-      "version": "19.3.0",
-      "scope": "required",
-      "description": "React is a JavaScript library for building user interfaces.",
-      "purl": "pkg:npm/react@19.3.0",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/react/-/react-19.3.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/react/react.git"
-        },
-        {
-          "type": "website",
-          "url": "https://react.dev/"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "13c2d471bb415addb46db9766281dfc7864305dc554df38ab42667f5c0d227897afe7ba8029729201723e3bb76c19a155fc836647b8c1db892860091d53e52a2"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "react-dom@19.3.0",
       "type": "library",
       "name": "react-dom",
@@ -9033,36 +9110,6 @@
       ]
     },
     {
-      "bom-ref": "react-remove-scroll@2.7.2",
-      "type": "library",
-      "name": "react-remove-scroll",
-      "version": "2.7.2",
-      "scope": "required",
-      "author": "Anton Korzunov <thekashey@gmail.com>",
-      "description": "Disables scroll outside of `children` node.",
-      "purl": "pkg:npm/react-remove-scroll@2.7.2",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/react-remove-scroll/-/react-remove-scroll-2.7.2.tgz"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "22a6fd3630824ede877febce74d21919d4e21f5412aabdbb1ff124f6cbff6bdee07ee788ff9875b37c918b59e783331468e393a229f9748d5d5ca757885faed1"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "react-remove-scroll-bar@2.3.8",
       "type": "library",
       "name": "react-remove-scroll-bar",
@@ -9082,6 +9129,36 @@
         {
           "alg": "SHA-512",
           "content": "f6bfb28bdfa6814df700a723e886d3f684423bbf16ae24a3eadfdc17c0d605927d68e18f393103bdd503cf51702a29bb4175b0987aad7479d125f840c441b8e9"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "react-remove-scroll@2.7.2",
+      "type": "library",
+      "name": "react-remove-scroll",
+      "version": "2.7.2",
+      "scope": "required",
+      "author": "Anton Korzunov <thekashey@gmail.com>",
+      "description": "Disables scroll outside of `children` node.",
+      "purl": "pkg:npm/react-remove-scroll@2.7.2",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react-remove-scroll/-/react-remove-scroll-2.7.2.tgz"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "22a6fd3630824ede877febce74d21919d4e21f5412aabdbb1ff124f6cbff6bdee07ee788ff9875b37c918b59e783331468e393a229f9748d5d5ca757885faed1"
         }
       ],
       "licenses": [
@@ -9135,6 +9212,43 @@
       ]
     },
     {
+      "bom-ref": "react@19.3.0",
+      "type": "library",
+      "name": "react",
+      "version": "19.3.0",
+      "scope": "required",
+      "description": "React is a JavaScript library for building user interfaces.",
+      "purl": "pkg:npm/react@19.3.0",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/react/-/react-19.3.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/react/react.git"
+        },
+        {
+          "type": "website",
+          "url": "https://react.dev/"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "13c2d471bb415addb46db9766281dfc7864305dc554df38ab42667f5c0d227897afe7ba8029729201723e3bb76c19a155fc836647b8c1db892860091d53e52a2"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
       "bom-ref": "real-require@0.2.0",
       "type": "library",
       "name": "real-require",
@@ -9166,6 +9280,48 @@
         {
           "alg": "SHA-512",
           "content": "e7b7ebac633f3824cba8b3808749a1540f5504c1ddfbd53b65bd931cc19d054a1954eb466c9ce3c6c6060c9dc0f4061808fe219facb54d56da39fcd6b66e4616"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "real-require@1.0.0",
+      "type": "library",
+      "name": "real-require",
+      "version": "1.0.0",
+      "scope": "required",
+      "author": "Paolo Insogna <shogun@cowtech.it>",
+      "description": "Keep require and import consistent after bundling or transpiling",
+      "purl": "pkg:npm/real-require@1.0.0",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/real-require/-/real-require-1.0.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/pinojs/real-require.git"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/pinojs/real-require"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/pinojs/real-require/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "3f89db41841f78f271452998faffca20dc55b9c9b8345de9decee926f78c4eda26e76151e181a5b5440b07c89d0d7c030d65be798ad60c56eecd49e3a161c5ee"
         }
       ],
       "licenses": [
@@ -10116,37 +10272,37 @@
       ]
     },
     {
-      "bom-ref": "real-require@1.0.0",
+      "bom-ref": "tldts-core@7.4.16",
       "type": "library",
-      "name": "real-require",
-      "version": "1.0.0",
+      "name": "tldts-core",
+      "version": "7.4.16",
       "scope": "required",
-      "author": "Paolo Insogna <shogun@cowtech.it>",
-      "description": "Keep require and import consistent after bundling or transpiling",
-      "purl": "pkg:npm/real-require@1.0.0",
+      "author": "Rémi Berson",
+      "description": "tldts core primitives (internal module)",
+      "purl": "pkg:npm/tldts-core@7.4.16",
       "properties": [],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/real-require/-/real-require-1.0.0.tgz"
+          "url": "https://registry.npmjs.org/tldts-core/-/tldts-core-7.4.16.tgz"
         },
         {
           "type": "vcs",
-          "url": "git+https://github.com/pinojs/real-require.git"
+          "url": "git+ssh://git@github.com/remusao/tldts.git"
         },
         {
           "type": "website",
-          "url": "https://github.com/pinojs/real-require"
+          "url": "https://github.com/remusao/tldts#readme"
         },
         {
           "type": "issue-tracker",
-          "url": "https://github.com/pinojs/real-require/issues"
+          "url": "https://github.com/remusao/tldts/issues"
         }
       ],
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "3f89db41841f78f271452998faffca20dc55b9c9b8345de9decee926f78c4eda26e76151e181a5b5440b07c89d0d7c030d65be798ad60c56eecd49e3a161c5ee"
+          "content": "303a257da489b6548ae58d00d71977dbbede92e6d9c286e9063ba09270e2cc8f4ee519bad1ad66f24e0808af8c46c083ccfca04fcd66a770417f944a0e51517c"
         }
       ],
       "licenses": [
@@ -10189,48 +10345,6 @@
         {
           "alg": "SHA-512",
           "content": "43004447928c47ce88223a4888eec7fd9dc83093ec67503a44a3c0ab34d380ec944144adf4576729caa14da266918e8756b828b991d94749dc2b9431be69d07a"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
-      "bom-ref": "tldts-core@7.4.16",
-      "type": "library",
-      "name": "tldts-core",
-      "version": "7.4.16",
-      "scope": "required",
-      "author": "Rémi Berson",
-      "description": "tldts core primitives (internal module)",
-      "purl": "pkg:npm/tldts-core@7.4.16",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/tldts-core/-/tldts-core-7.4.16.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+ssh://git@github.com/remusao/tldts.git"
-        },
-        {
-          "type": "website",
-          "url": "https://github.com/remusao/tldts#readme"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/remusao/tldts/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "303a257da489b6548ae58d00d71977dbbede92e6d9c286e9063ba09270e2cc8f4ee519bad1ad66f24e0808af8c46c083ccfca04fcd66a770417f944a0e51517c"
         }
       ],
       "licenses": [
@@ -10541,47 +10655,6 @@
       ]
     },
     {
-      "bom-ref": "undici@7.30.0",
-      "type": "library",
-      "name": "undici",
-      "version": "7.30.0",
-      "scope": "required",
-      "description": "An HTTP/1.1 client, written from scratch for Node.js",
-      "purl": "pkg:npm/undici@7.30.0",
-      "properties": [],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://registry.npmjs.org/undici/-/undici-7.30.0.tgz"
-        },
-        {
-          "type": "vcs",
-          "url": "git+https://github.com/nodejs/undici.git"
-        },
-        {
-          "type": "website",
-          "url": "https://undici.nodejs.org"
-        },
-        {
-          "type": "issue-tracker",
-          "url": "https://github.com/nodejs/undici/issues"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-512",
-          "content": "764ad05de1d26a86a69c8b6561b9b31b4c0562b3346700f108883403b68a8d3cb2861f6cbd1cc234513357e566d39ff27a18c2ce30d9df52977c6123612ced0d"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ]
-    },
-    {
       "bom-ref": "undici-types@8.9.0",
       "type": "library",
       "name": "undici-types",
@@ -10617,6 +10690,47 @@
         {
           "alg": "SHA-512",
           "content": "2930f2453617f2c5a629702290f1c74b273adc244f11331cb728ca16ea5c0ba3812d74f7c6c3747bd685ee6fa6217bad156a545ee79db68c06ee22cece9d2442"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "undici@7.30.0",
+      "type": "library",
+      "name": "undici",
+      "version": "7.30.0",
+      "scope": "required",
+      "description": "An HTTP/1.1 client, written from scratch for Node.js",
+      "purl": "pkg:npm/undici@7.30.0",
+      "properties": [],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/undici/-/undici-7.30.0.tgz"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/nodejs/undici.git"
+        },
+        {
+          "type": "website",
+          "url": "https://undici.nodejs.org"
+        },
+        {
+          "type": "issue-tracker",
+          "url": "https://github.com/nodejs/undici/issues"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "764ad05de1d26a86a69c8b6561b9b31b4c0562b3346700f108883403b68a8d3cb2861f6cbd1cc234513357e566d39ff27a18c2ce30d9df52977c6123612ced0d"
         }
       ],
       "licenses": [
@@ -11200,52 +11314,6 @@
   ],
   "dependencies": [
     {
-      "ref": "openjm-workspace@0.1.0",
-      "dependsOn": [
-        "@workspace/web@0.1.0",
-        "@aws-sdk/client-s3@3.1142.0",
-        "@blocknote/core@0.55.0",
-        "@blocknote/mantine@0.55.0",
-        "@blocknote/react@0.55.0",
-        "@blocknote/server-util@0.55.0",
-        "@fastify/cookie@11.1.2",
-        "@fastify/helmet@13.1.1",
-        "@fastify/multipart@10.1.2",
-        "@fastify/rate-limit@11.2.0",
-        "@fastify/swagger@9.9.0",
-        "@fastify/swagger-ui@6.1.1",
-        "@hocuspocus/provider@4.7.0",
-        "@hocuspocus/server@4.7.0",
-        "csv-parse@7.0.3",
-        "csv-stringify@6.9.0",
-        "fastify@5.12.5",
-        "ioredis@6.0.0",
-        "lucide-react@1.48.0",
-        "next@16.3.6",
-        "pg@8.23.0",
-        "react@19.3.0",
-        "react-dom@19.3.0",
-        "tsx@4.23.15",
-        "y-prosemirror@1.3.7",
-        "y-protocols@1.0.6",
-        "yjs@13.6.33",
-        "zod@4.6.5",
-        "@electric-sql/pglite@0.5.8",
-        "@electric-sql/pglite-socket@0.2.11",
-        "@playwright/test@1.63.0",
-        "@types/node@26.6.3",
-        "@types/pg@8.23.1",
-        "@types/react@19.3.0",
-        "@types/react-dom@19.3.0",
-        "prettier@3.6.2",
-        "typescript@7.0.2"
-      ]
-    },
-    {
-      "ref": "@workspace/web@0.1.0",
-      "dependsOn": []
-    },
-    {
       "ref": "@asamuzakjp/css-color@5.1.11",
       "dependsOn": [
         "@asamuzakjp/generational-cache@1.0.1",
@@ -11586,10 +11654,6 @@
       "dependsOn": []
     },
     {
-      "ref": "@electric-sql/pglite@0.5.8",
-      "dependsOn": []
-    },
-    {
       "ref": "@electric-sql/pglite-age@0.0.9",
       "dependsOn": [
         "@electric-sql/pglite@0.5.8"
@@ -11643,6 +11707,10 @@
         "@electric-sql/pglite-pg_uuidv7@0.0.9",
         "@electric-sql/pglite-pgtap@0.0.9"
       ]
+    },
+    {
+      "ref": "@electric-sql/pglite@0.5.8",
+      "dependsOn": []
     },
     {
       "ref": "@emnapi/runtime@1.11.3",
@@ -11765,20 +11833,20 @@
       ]
     },
     {
-      "ref": "@fastify/swagger@9.9.0",
+      "ref": "@fastify/swagger-ui@6.1.1",
       "dependsOn": [
+        "@fastify/static@10.1.5",
         "fastify-plugin@6.0.0",
-        "json-schema-resolver@3.0.0",
         "openapi-types@12.1.3",
         "rfdc@1.4.1",
         "yaml@2.9.1"
       ]
     },
     {
-      "ref": "@fastify/swagger-ui@6.1.1",
+      "ref": "@fastify/swagger@9.9.0",
       "dependsOn": [
-        "@fastify/static@10.1.5",
         "fastify-plugin@6.0.0",
+        "json-schema-resolver@3.0.0",
         "openapi-types@12.1.3",
         "rfdc@1.4.1",
         "yaml@2.9.1"
@@ -11798,6 +11866,14 @@
       ]
     },
     {
+      "ref": "@floating-ui/react-dom@2.1.9",
+      "dependsOn": [
+        "react@19.3.0",
+        "react-dom@19.3.0",
+        "@floating-ui/dom@1.8.0"
+      ]
+    },
+    {
       "ref": "@floating-ui/react@0.27.20",
       "dependsOn": [
         "react@19.3.0",
@@ -11805,14 +11881,6 @@
         "tabbable@6.5.0",
         "@floating-ui/react-dom@2.1.9",
         "@floating-ui/utils@0.2.12"
-      ]
-    },
-    {
-      "ref": "@floating-ui/react-dom@2.1.9",
-      "dependsOn": [
-        "react@19.3.0",
-        "react-dom@19.3.0",
-        "@floating-ui/dom@1.8.0"
       ]
     },
     {
@@ -11833,12 +11901,6 @@
       "ref": "@hocuspocus/common@4.7.0",
       "dependsOn": [
         "lib0@0.2.119"
-      ]
-    },
-    {
-      "ref": "lib0@0.2.119",
-      "dependsOn": [
-        "isomorphic.js@0.2.5"
       ]
     },
     {
@@ -12108,10 +12170,6 @@
       ]
     },
     {
-      "ref": "@types/use-sync-external-store@0.0.6",
-      "dependsOn": []
-    },
-    {
       "ref": "@types/hast@3.0.5",
       "dependsOn": [
         "@types/unist@3.0.3"
@@ -12132,19 +12190,23 @@
       ]
     },
     {
-      "ref": "@types/react@19.3.0",
-      "dependsOn": [
-        "csstype@3.2.3"
-      ]
-    },
-    {
       "ref": "@types/react-dom@19.3.0",
       "dependsOn": [
         "@types/react@19.3.0"
       ]
     },
     {
+      "ref": "@types/react@19.3.0",
+      "dependsOn": [
+        "csstype@3.2.3"
+      ]
+    },
+    {
       "ref": "@types/unist@3.0.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "@types/use-sync-external-store@0.0.6",
       "dependsOn": []
     },
     {
@@ -12156,8 +12218,18 @@
       "dependsOn": []
     },
     {
+      "ref": "@workspace/web@0.1.0",
+      "dependsOn": []
+    },
+    {
       "ref": "abstract-logging@2.0.1",
       "dependsOn": []
+    },
+    {
+      "ref": "ajv-formats@3.0.1",
+      "dependsOn": [
+        "ajv@8.20.0"
+      ]
     },
     {
       "ref": "ajv@8.20.0",
@@ -12167,16 +12239,6 @@
         "json-schema-traverse@1.0.0",
         "require-from-string@2.0.2"
       ]
-    },
-    {
-      "ref": "ajv-formats@3.0.1",
-      "dependsOn": [
-        "ajv@8.20.0"
-      ]
-    },
-    {
-      "ref": "fast-uri@3.1.8",
-      "dependsOn": []
     },
     {
       "ref": "async-mutex@0.5.0",
@@ -12237,6 +12299,10 @@
     },
     {
       "ref": "content-disposition@3.0.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "cookie@1.1.1",
       "dependsOn": []
     },
     {
@@ -12351,7 +12417,15 @@
       ]
     },
     {
+      "ref": "fast-uri@3.1.8",
+      "dependsOn": []
+    },
+    {
       "ref": "fast-uri@4.2.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "fastify-plugin@6.0.0",
       "dependsOn": []
     },
     {
@@ -12373,10 +12447,6 @@
         "semver@7.8.5",
         "toad-cache@3.7.4"
       ]
-    },
-    {
-      "ref": "fastify-plugin@6.0.0",
-      "dependsOn": []
     },
     {
       "ref": "fastq@1.20.3",
@@ -12456,6 +12526,10 @@
       "dependsOn": []
     },
     {
+      "ref": "jose@6.2.12",
+      "dependsOn": []
+    },
+    {
       "ref": "jsdom@29.1.1",
       "dependsOn": [
         "@asamuzakjp/css-color@5.1.11",
@@ -12504,6 +12578,12 @@
       "dependsOn": []
     },
     {
+      "ref": "lib0@0.2.119",
+      "dependsOn": [
+        "isomorphic.js@0.2.5"
+      ]
+    },
+    {
       "ref": "lib0@1.0.0-rc.22",
       "dependsOn": []
     },
@@ -12514,14 +12594,6 @@
         "process-warning@4.0.1",
         "set-cookie-parser@2.7.2"
       ]
-    },
-    {
-      "ref": "cookie@1.1.1",
-      "dependsOn": []
-    },
-    {
-      "ref": "process-warning@4.0.1",
-      "dependsOn": []
     },
     {
       "ref": "lru-cache@11.5.3",
@@ -12577,12 +12649,66 @@
       ]
     },
     {
+      "ref": "oauth4webapi@3.8.8",
+      "dependsOn": []
+    },
+    {
       "ref": "on-exit-leak-free@2.1.2",
       "dependsOn": []
     },
     {
       "ref": "openapi-types@12.1.3",
       "dependsOn": []
+    },
+    {
+      "ref": "openid-client@6.8.8",
+      "dependsOn": [
+        "jose@6.2.12",
+        "oauth4webapi@3.8.8"
+      ]
+    },
+    {
+      "ref": "openjm-workspace@0.1.0",
+      "dependsOn": [
+        "@aws-sdk/client-s3@3.1142.0",
+        "@blocknote/core@0.55.0",
+        "@blocknote/mantine@0.55.0",
+        "@blocknote/react@0.55.0",
+        "@blocknote/server-util@0.55.0",
+        "@electric-sql/pglite-socket@0.2.11",
+        "@electric-sql/pglite@0.5.8",
+        "@fastify/cookie@11.1.2",
+        "@fastify/helmet@13.1.1",
+        "@fastify/multipart@10.1.2",
+        "@fastify/rate-limit@11.2.0",
+        "@fastify/swagger-ui@6.1.1",
+        "@fastify/swagger@9.9.0",
+        "@hocuspocus/provider@4.7.0",
+        "@hocuspocus/server@4.7.0",
+        "@playwright/test@1.63.0",
+        "@types/node@26.6.3",
+        "@types/pg@8.23.1",
+        "@types/react-dom@19.3.0",
+        "@types/react@19.3.0",
+        "@workspace/web@0.1.0",
+        "csv-parse@7.0.3",
+        "csv-stringify@6.9.0",
+        "fastify@5.12.5",
+        "ioredis@6.0.0",
+        "lucide-react@1.48.0",
+        "next@16.3.6",
+        "openid-client@6.8.8",
+        "pg@8.23.0",
+        "prettier@3.6.2",
+        "react-dom@19.3.0",
+        "react@19.3.0",
+        "tsx@4.23.15",
+        "typescript@7.0.2",
+        "y-prosemirror@1.3.7",
+        "y-protocols@1.0.6",
+        "yjs@13.6.33",
+        "zod@4.6.5"
+      ]
     },
     {
       "ref": "orderedmap@2.1.1",
@@ -12599,17 +12725,6 @@
       "dependsOn": [
         "lru-cache@11.5.3",
         "minipass@7.1.3"
-      ]
-    },
-    {
-      "ref": "pg@8.23.0",
-      "dependsOn": [
-        "pg-connection-string@2.14.0",
-        "pg-pool@3.14.0",
-        "pg-protocol@1.16.0",
-        "pg-types@2.2.0",
-        "pgpass@1.0.5",
-        "pg-cloudflare@1.4.0"
       ]
     },
     {
@@ -12645,6 +12760,17 @@
       ]
     },
     {
+      "ref": "pg@8.23.0",
+      "dependsOn": [
+        "pg-connection-string@2.14.0",
+        "pg-pool@3.14.0",
+        "pg-protocol@1.16.0",
+        "pg-types@2.2.0",
+        "pgpass@1.0.5",
+        "pg-cloudflare@1.4.0"
+      ]
+    },
+    {
       "ref": "pgpass@1.0.5",
       "dependsOn": [
         "split2@4.2.0"
@@ -12652,6 +12778,16 @@
     },
     {
       "ref": "picocolors@1.1.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "pino-abstract-transport@3.0.0",
+      "dependsOn": [
+        "split2@4.2.0"
+      ]
+    },
+    {
+      "ref": "pino-std-serializers@7.1.0",
       "dependsOn": []
     },
     {
@@ -12671,13 +12807,7 @@
       ]
     },
     {
-      "ref": "pino-abstract-transport@3.0.0",
-      "dependsOn": [
-        "split2@4.2.0"
-      ]
-    },
-    {
-      "ref": "pino-std-serializers@7.1.0",
+      "ref": "playwright-core@1.63.0",
       "dependsOn": []
     },
     {
@@ -12685,10 +12815,6 @@
       "dependsOn": [
         "playwright-core@1.63.0"
       ]
-    },
-    {
-      "ref": "playwright-core@1.63.0",
-      "dependsOn": []
     },
     {
       "ref": "postcss@8.5.23",
@@ -12718,6 +12844,10 @@
     },
     {
       "ref": "prettier@3.6.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "process-warning@4.0.1",
       "dependsOn": []
     },
     {
@@ -12844,10 +12974,6 @@
       "dependsOn": []
     },
     {
-      "ref": "react@19.3.0",
-      "dependsOn": []
-    },
-    {
       "ref": "react-dom@19.3.0",
       "dependsOn": [
         "react@19.3.0",
@@ -12859,6 +12985,15 @@
       "dependsOn": [
         "react@19.3.0",
         "react-dom@19.3.0"
+      ]
+    },
+    {
+      "ref": "react-remove-scroll-bar@2.3.8",
+      "dependsOn": [
+        "react@19.3.0",
+        "@types/react@19.3.0",
+        "react-style-singleton@2.2.3",
+        "tslib@2.8.1"
       ]
     },
     {
@@ -12874,15 +13009,6 @@
       ]
     },
     {
-      "ref": "react-remove-scroll-bar@2.3.8",
-      "dependsOn": [
-        "react@19.3.0",
-        "@types/react@19.3.0",
-        "react-style-singleton@2.2.3",
-        "tslib@2.8.1"
-      ]
-    },
-    {
       "ref": "react-style-singleton@2.2.3",
       "dependsOn": [
         "react@19.3.0",
@@ -12892,7 +13018,15 @@
       ]
     },
     {
+      "ref": "react@19.3.0",
+      "dependsOn": []
+    },
+    {
       "ref": "real-require@0.2.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "real-require@1.0.0",
       "dependsOn": []
     },
     {
@@ -13015,7 +13149,7 @@
       ]
     },
     {
-      "ref": "real-require@1.0.0",
+      "ref": "tldts-core@7.4.16",
       "dependsOn": []
     },
     {
@@ -13023,10 +13157,6 @@
       "dependsOn": [
         "tldts-core@7.4.16"
       ]
-    },
-    {
-      "ref": "tldts-core@7.4.16",
-      "dependsOn": []
     },
     {
       "ref": "toad-cache@3.7.4",
@@ -13071,11 +13201,11 @@
       ]
     },
     {
-      "ref": "undici@7.30.0",
+      "ref": "undici-types@8.9.0",
       "dependsOn": []
     },
     {
-      "ref": "undici-types@8.9.0",
+      "ref": "undici@7.30.0",
       "dependsOn": []
     },
     {
