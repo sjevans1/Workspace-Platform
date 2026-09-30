@@ -51,11 +51,17 @@ PR #10 passed the complete CI gate in GitHub Actions run 36662255850 and was squ
 
 The verified slice adds explicit machine-readable OpenAPI request/query/path/response schemas for the core external integration surface: resource listing, canonical page content read/write, permission policy and end-user permission recheck, event polling, import submission and import job status. A regression test inspects the generated `/api/docs/json` contract itself. Remaining human/admin routes still require complete SDK-grade body/response schemas before the API-contract item can be considered fully closed.
 
+## Verified hardening slice: operational service health
+
+PR #11 passed the complete CI gate in GitHub Actions run 36663742897 and was squash-merged to `main` at `cef9cb0a075780799d507b8e4c5e32c10e0bfec6`. The backend job passed 29 native PostgreSQL tests, TypeScript and the production build. The deployment job passed Docker configuration/image build, migrations/startup, simultaneous healthy status for API/collaboration/worker, and both deployed Chromium workflows.
+
+The verified slice adds internal health listeners for collaboration and worker processes, collaboration database-writer lease verification, worker tick completion/failure/stuck detection, Docker health checks, Caddy startup dependency on healthy collaboration, an owner/admin tenant operations endpoint for import/event/webhook/object-cleanup backlogs, and CI enforcement that the three core application services are genuinely healthy before browser acceptance starts. The internal health listeners are not routed through Caddy.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning and host hardening, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning, external metrics/alerts and real host/TLS recovery validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
