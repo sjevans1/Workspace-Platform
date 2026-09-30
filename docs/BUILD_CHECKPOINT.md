@@ -57,11 +57,17 @@ PR #11 passed the complete CI gate in GitHub Actions run 36663742897 and was squ
 
 The verified slice adds internal health listeners for collaboration and worker processes, collaboration database-writer lease verification, worker tick completion/failure/stuck detection, Docker health checks, Caddy startup dependency on healthy collaboration, an owner/admin tenant operations endpoint for import/event/webhook/object-cleanup backlogs, and CI enforcement that the three core application services are genuinely healthy before browser acceptance starts. The internal health listeners are not routed through Caddy.
 
+## Verified hardening slice: migration integrity and recovery
+
+PR #13 passed the complete CI gate in GitHub Actions run 36665630835 and was squash-merged to `main` at `1cc3575056b120f7a30cd9775d756024ffbdab55`. The backend job passed 30 native PostgreSQL tests, TypeScript and the production build. The deployment job passed Docker configuration/image build, healthy service startup and both deployed Chromium workflows.
+
+The migration runner now records SHA-256 checksums for applied migration files, adopts checksums for legacy rows on first post-upgrade run, and rejects later modification of an already-applied migration. A dedicated disposable-database regression proves that a migration which fails after partial DDL is rolled back atomically, is not recorded as applied, can be corrected and retried successfully, remains idempotent on subsequent runs, and then becomes immutable through checksum verification.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning, external metrics/alerts and real host/TLS recovery validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and host-level migration/recovery execution. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning, external metrics/alerts and real host/TLS recovery validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
