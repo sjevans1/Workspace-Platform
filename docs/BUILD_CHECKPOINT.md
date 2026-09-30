@@ -83,19 +83,27 @@ The identity slice adds deployment-level OpenID Connect/Keycloak sign-in using a
 
 CI includes a disposable real OIDC issuer that exercises discovery, confidential-client code exchange, PKCE transmission, signed ID-token verification, nonce validation and verified-email rejection, in addition to application-level tests for account linking, invitation provisioning, browser-state mismatch and replay rejection. Real Keycloak host/browser acceptance has now passed using the bounded WSL procedure in `docs/HERMES_KEYCLOAK_ACCEPTANCE.md`. The remaining identity gap is immediate Workspace-session revocation/offboarding lifecycle after IdP disablement or membership deactivation.
 
+## Verified hardening slice: OIDC back-channel session revocation
+
+PR #15 passed the complete final-head CI gate in GitHub Actions run 36792189577 and was squash-merged to `main` at `bd6b0c4a053a93f9dd060003c44a7adaa95768b2`. The backend job passed 35 native PostgreSQL tests, TypeScript and the production build. The deployment job passed Docker configuration/image build, healthy startup and both deployed Chromium workflows.
+
+The slice adds standards-based OIDC Back-Channel Logout. OIDC-created Workspace sessions now retain issuer/subject/session-ID metadata. The public back-channel endpoint validates signed logout JWTs against the configured provider JWKS, enforces issuer/audience/iat/exp/jti/events plus `sub` or `sid`, rejects `nonce`, returns HTTP 400 for invalid tokens, and makes repeated logout-JTI delivery idempotent. A `sid` logout revokes only the matching OIDC-created Workspace session; a subject-only logout revokes OIDC sessions for that issuer/subject. Unrelated local/password break-glass sessions are preserved.
+
+Workspace administrator membership deactivation already revokes that tenant's active sessions, so the remaining enterprise lifecycle gap is directory-originated offboarding when the external IdP does not emit a back-channel logout event. The next acceptance step is a focused real-Keycloak host exercise configuring the client's Backchannel logout URL and proving an already-active Workspace SSO session is invalidated.
+
 ## Independent Keycloak host acceptance — passed
 
 Hermes reported complete real-provider acceptance against Workspace `1702779fa5d31a8de159ee6d476e451d90e316f3` using `quay.io/keycloak/keycloak:26.7.4` on the isolated WSL2 `openjm_workspace_sso` project. OIDC discovery used `http://keycloak.localhost:18081/realms/openjm-test` because local port 18080 was occupied.
 
 The host exercise passed existing-owner SSO linking without duplicate accounts, repeat issuer/subject login, administrator-invited passwordless member provisioning, mismatched-invitation rejection, SSO-only mode with local password login disabled, disabled-Keycloak-user rejection for new authentication, and operational health/log review. All Workspace services remained healthy with no restart loops or OIDC errors.
 
-The expected lifecycle boundary was confirmed: disabling a user at Keycloak prevents a new IdP login, but an already-issued Workspace session is not immediately revoked. This remains the next identity-hardening target rather than a Keycloak interoperability defect.
+The earlier Keycloak exercise confirmed that disabling a user prevents new IdP login but does not by itself guarantee revocation of an already-issued Workspace session. Back-channel logout support is now implemented and verified in CI; a focused real-Keycloak test must next prove logout/session termination emits the token and invalidates the active Workspace SSO session. Directory disable/offboarding without such an event remains a separate SCIM/lifecycle concern.
 
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next host-level acceptance phase is a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery and operational status have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; real-provider SSO acceptance, directory/offboarding lifecycle, operational tenant-provisioning, external metrics/alerts and real trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+The next host-level acceptance phase is a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery and operational status have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; real-provider back-channel logout acceptance, directory/SCIM offboarding lifecycle, operational tenant-provisioning, external metrics/alerts and real trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
