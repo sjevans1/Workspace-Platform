@@ -11,6 +11,7 @@ import { z } from "zod";
 import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
 import { stringify } from "csv-stringify/sync";
 import { Database, one, type Query } from "../../../packages/database/index.ts";
+import { oidcFromEnv, type OidcProvider } from "../../../packages/auth/oidc.ts";
 import {
   authenticate,
   admin,
@@ -99,17 +100,32 @@ const cookies = () => ({
   path: "/",
   maxAge: 43200,
 });
+const oidcCookies = () => ({
+  ...cookies(),
+  path: "/api/v1/auth/oidc",
+  maxAge: 600,
+});
+const safeReturnTo = (value: unknown) => {
+  const path = typeof value === "string" ? value : "/";
+  return path.startsWith("/") && !path.startsWith("//") && path.length <= 1000
+    ? path
+    : "/";
+};
 export async function buildApp(
   db: Database,
   storage: Storage = createStorage(),
   logging = true,
+  oidc: OidcProvider | null = oidcFromEnv(),
 ) {
   assert(
     /^[a-f0-9]{64}$/i.test(process.env.ENCRYPTION_KEY || ""),
     500,
     "Set ENCRYPTION_KEY to 64 hexadecimal characters",
   );
-  const dummyPasswordHash = await passwordHash("dummy-password-constant");
+  const dummyPasswordHash = await passwordHash("dummy-password-constant"),
+    localAuth = process.env.LOCAL_AUTH_ENABLED !== "false",
+    appUrl = process.env.APP_URL || "http://localhost:3000",
+    oidcRedirectUri = new URL("/api/v1/auth/oidc/callback", appUrl).href;
   const app = Fastify({
     logger: logging
       ? {
@@ -227,6 +243,182 @@ export async function buildApp(
     }
   });
   app.get("/api/v1/branding", async () => defaultBranding());
+  app.get("/api/v1/auth/methods", async () => ({
+    local: localAuth,
+    oidc: oidc ? { enabled: true, label: oidc.label } : { enabled: false },
+  }));
+  app.get(
+    "/api/v1/auth/oidc/start",
+    {
+      config: { rateLimit: { max: 20, timeWindow: "5 minutes" } },
+      logLevel: "warn",
+    },
+    async (r, reply) => {
+      assert(oidc, 404, "OIDC sign-in is not configured");
+      const p = query(r),
+        invite = p.invite
+          ? z.string().min(20).max(200).parse(p.invite)
+          : undefined,
+        started = await oidc.start(oidcRedirectUri);
+      await db.systemTransaction(async (q) => {
+        await q.query("DELETE FROM oidc_login_states WHERE expires_at<=now()");
+        await q.query(
+          "INSERT INTO oidc_login_states(state_hash,code_verifier,nonce,invite_token_hash,return_to) VALUES($1,$2,$3,$4,$5)",
+          [
+            hash(started.state),
+            started.codeVerifier,
+            started.nonce,
+            invite ? hash(invite) : null,
+            safeReturnTo(p.return_to),
+          ],
+        );
+      });
+      reply.setCookie("workspace_oidc_state", started.state, oidcCookies());
+      return reply.redirect(started.url);
+    },
+  );
+  app.get(
+    "/api/v1/auth/oidc/callback",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "5 minutes" } },
+      logLevel: "warn",
+    },
+    async (r, reply) => {
+      assert(oidc, 404, "OIDC sign-in is not configured");
+      const state = z.string().min(20).max(500).parse(query(r).state),
+        browserState = r.cookies.workspace_oidc_state || "";
+      assert(
+        browserState && equal(browserState, state),
+        400,
+        "OIDC browser state mismatch",
+      );
+      reply.clearCookie("workspace_oidc_state", {
+        path: "/api/v1/auth/oidc",
+      });
+      const pending = await db.system((q) =>
+        one(
+          q,
+          "DELETE FROM oidc_login_states WHERE state_hash=$1 AND expires_at>now() RETURNING *",
+          [hash(state)],
+        ),
+      );
+      assert(pending, 400, "OIDC login state expired or already used");
+
+      const profile = await oidc.finish(new URL(r.url, appUrl), {
+          state,
+          codeVerifier: pending.code_verifier,
+          nonce: pending.nonce,
+        }),
+        sessionToken = await db.systemTransaction(async (q) => {
+          let identity = await one(
+              q,
+              "SELECT user_id FROM oidc_identities WHERE issuer=$1 AND subject=$2",
+              [profile.issuer, profile.subject],
+            ),
+            user = identity
+              ? await one(
+                  q,
+                  "SELECT id,email,is_service FROM users WHERE id=$1",
+                  [identity.user_id],
+                )
+              : await one(
+                  q,
+                  "SELECT id,email,is_service FROM users WHERE email=$1",
+                  [profile.email],
+                ),
+            invitation = pending.invite_token_hash
+              ? await one(q, "SELECT * FROM invitation_context($1)", [
+                  pending.invite_token_hash,
+                ])
+              : null;
+
+          if (pending.invite_token_hash) {
+            assert(invitation, 400, "Invitation invalid or expired");
+            assert(
+              invitation.email === profile.email,
+              403,
+              "SSO email does not match the invitation",
+            );
+          }
+
+          if (!user) {
+            assert(
+              invitation,
+              403,
+              "SSO account has no provisioned Workspace access",
+            );
+            user = { id: randomUUID(), email: profile.email, is_service: false };
+            await q.query(
+              "INSERT INTO users(id,email,name,password_hash) VALUES($1,$2,$3,NULL)",
+              [user.id, profile.email, profile.name],
+            );
+          }
+          assert(!user.is_service, 403, "Service principals cannot use SSO");
+
+          if (invitation) {
+            await q.query("SELECT set_config('app.tenant_id',$1,true)", [
+              invitation.tenant_id,
+            ]);
+            const consumed = await one(
+              q,
+              "DELETE FROM invitations WHERE token_hash=$1 AND expires_at>now() RETURNING tenant_id,role",
+              [pending.invite_token_hash],
+            );
+            assert(consumed, 400, "Invitation already used");
+            await q.query(
+              "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(tenant_id,user_id) DO UPDATE SET active=true",
+              [invitation.tenant_id, user.id, invitation.role],
+            );
+          }
+
+          if (!identity) {
+            await q.query(
+              "INSERT INTO oidc_identities(issuer,subject,user_id,email) VALUES($1,$2,$3,$4)",
+              [profile.issuer, profile.subject, user.id, profile.email],
+            );
+            identity = { user_id: user.id };
+          }
+          assert(
+            identity.user_id === user.id,
+            409,
+            "OIDC identity is already linked to another account",
+          );
+          await q.query(
+            "UPDATE oidc_identities SET email=$3,last_login_at=now() WHERE issuer=$1 AND subject=$2",
+            [profile.issuer, profile.subject, profile.email],
+          );
+
+          const memberships = (
+            await q.query("SELECT * FROM user_tenants($1)", [user.id])
+          ).rows;
+          assert(memberships.length, 403, "No active membership");
+          const selected =
+            (invitation &&
+              memberships.find(
+                (m: any) => m.tenant_id === invitation.tenant_id,
+              )) ||
+            memberships[0];
+
+          await q.query("SELECT set_config('app.tenant_id',$1,true)", [
+            selected.tenant_id,
+          ]);
+          await q.query(
+            "INSERT INTO audit_events(id,tenant_id,actor_id,action,request_id) VALUES($1,$2,$3,$4,$5)",
+            [
+              randomUUID(),
+              selected.tenant_id,
+              user.id,
+              "auth.oidc_login",
+              r.id,
+            ],
+          );
+          return createSession(q, selected.tenant_id, user.id);
+        });
+
+      reply.setCookie("workspace_session", sessionToken, cookies());
+      return reply.redirect(pending.return_to);
+    },
+  );
   app.get("/api/v1/setup", async () => ({
     required: !(
       await db.system((q) => q.query("SELECT id FROM worker_tenants() LIMIT 1"))
@@ -304,6 +496,7 @@ export async function buildApp(
     "/api/v1/auth/login",
     { config: { rateLimit: { max: 10, timeWindow: "5 minutes" } } },
     async (r, reply) => {
+      assert(localAuth, 403, "Password sign-in is disabled");
       const v = body(
         z
           .object({
@@ -342,6 +535,7 @@ export async function buildApp(
     "/api/v1/auth/accept-invite",
     { config: { rateLimit: { max: 10, timeWindow: "5 minutes" } } },
     async (r, reply) => {
+      assert(localAuth, 403, "Password invitation acceptance is disabled");
       const v = body(
           z
             .object({
@@ -396,6 +590,10 @@ export async function buildApp(
       organisation: o,
       branding: { ...defaultBranding(), ...o.branding },
       csrf: a.scopes ? null : csrf(r.sessionToken),
+      authentication: {
+        local: localAuth,
+        oidc: oidc ? { enabled: true, label: oidc.label } : { enabled: false },
+      },
       organisations: (
         await q.query("SELECT * FROM user_tenants($1)", [a.user_id])
       ).rows,
@@ -432,6 +630,7 @@ export async function buildApp(
     "Change password and revoke other sessions",
     async (q, a, r) => {
       assert(!a.scopes, 403, "Human session required");
+      assert(localAuth, 403, "Local password authentication is disabled");
       const v = body(
           z.object({ current: z.string(), password: z.string() }),
           r,

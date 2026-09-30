@@ -65,37 +65,44 @@ export default function Settings({
               {me.user.name} · {me.user.email} ·{" "}
               <span className="tag">{me.user.role}</span>
             </p>
-            <form
-              className="form narrow"
-              onSubmit={submit(async (v) => {
-                await api("/auth/password", "POST", {
-                  current: v.current,
-                  password: v.password,
-                });
-                notify(
-                  "Password changed. Other sessions have been signed out.",
-                );
-              })}
-            >
-              <Field label="Current password">
-                <input
-                  name="current"
-                  type="password"
-                  required
-                  autoComplete="current-password"
-                />
-              </Field>
-              <Field label="New password (at least 12 characters)">
-                <input
-                  name="password"
-                  type="password"
-                  required
-                  minLength={12}
-                  autoComplete="new-password"
-                />
-              </Field>
-              <button className="button">Update password</button>
-            </form>
+            {me.authentication?.local !== false ? (
+              <form
+                className="form narrow"
+                onSubmit={submit(async (v) => {
+                  await api("/auth/password", "POST", {
+                    current: v.current,
+                    password: v.password,
+                  });
+                  notify(
+                    "Password changed. Other sessions have been signed out.",
+                  );
+                })}
+              >
+                <Field label="Current password">
+                  <input
+                    name="current"
+                    type="password"
+                    required
+                    autoComplete="current-password"
+                  />
+                </Field>
+                <Field label="New password (at least 12 characters)">
+                  <input
+                    name="password"
+                    type="password"
+                    required
+                    minLength={12}
+                    autoComplete="new-password"
+                  />
+                </Field>
+                <button className="button">Update password</button>
+              </form>
+            ) : (
+              <p className="muted">
+                Local password sign-in is disabled for this deployment. Use
+                your configured single sign-on provider.
+              </p>
+            )}
           </section>
           <section className="settings-section">
             <h2>Organisation</h2>

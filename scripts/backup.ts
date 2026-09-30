@@ -9,6 +9,7 @@ const tables = [
   "users",
   "memberships",
   "sessions",
+  "oidc_identities",
   "invitations",
   "resources",
   "acl",
