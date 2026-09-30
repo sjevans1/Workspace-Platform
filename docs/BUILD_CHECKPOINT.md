@@ -45,6 +45,12 @@ PR #9 passed the complete CI gate in GitHub Actions run 36661773259 and was squa
 
 The verified slice adds optimistic ACL revisions and stale-write rejection, serializes access-policy updates under the tenant tree lock, rejects duplicate, cross-tenant and inactive principals, updates the access-management UI to submit revision preconditions, and adds a bounded administrator-only CSV audit export with spreadsheet-formula neutralization. Regression coverage includes simultaneous conflicting ACL saves and requires exactly one success and one HTTP 409 conflict.
 
+## Verified hardening slice: integration OpenAPI contracts
+
+PR #10 passed the complete CI gate in GitHub Actions run 36662255850 and was squash-merged to `main` at `e1b2cbd8174ecb528a9c7af89d8ca0026f5aae3d`. The backend job passed 28 native PostgreSQL tests, TypeScript and the production build. The deployment job passed Docker image build, startup/readiness and both deployed Chromium workflows.
+
+The verified slice adds explicit machine-readable OpenAPI request/query/path/response schemas for the core external integration surface: resource listing, canonical page content read/write, permission policy and end-user permission recheck, event polling, import submission and import job status. A regression test inspects the generated `/api/docs/json` contract itself. Remaining human/admin routes still require complete SDK-grade body/response schemas before the API-contract item can be considered fully closed.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
