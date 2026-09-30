@@ -160,4 +160,4 @@ CI covers:
 - verified-email enforcement;
 - normal non-SSO Docker and Chromium workflows.
 
-A real Keycloak deployment test remains a separate host-level acceptance step.
+A real Keycloak 26.7.4 deployment test has now passed on WSL2, including owner linking, repeat login, passwordless invited-user provisioning, invitation mismatch rejection, SSO-only mode and disabled-user rejection for new authentication. The remaining verified gap is immediate Workspace-session revocation/offboarding after identity-provider disablement.
