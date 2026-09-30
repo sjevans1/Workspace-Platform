@@ -21,6 +21,7 @@ Both jobs passed in [GitHub Actions run 36611129995](https://github.com/sjevans1
 | Signed webhook dispatch and failed-delivery retry | Pass |
 | Markdown/CSV imports and permission recheck | Pass |
 | Trash cascade and restore | Pass |
+| Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
 | Native PostgreSQL 17 test suite | 23 passed; clean process shutdown |
 | Docker image, migrations and full Compose startup | Pass; readiness endpoint healthy |
@@ -47,7 +48,7 @@ The repository contains a connected interface, API, collaboration server, import
 | Offline and scale | Offline edits are memory-only until acknowledged; no durable local offline queue. Single collaboration writer, no horizontal coordination. Load/concurrency and reconnect fault-injection benchmarks remain. |
 | Databases | No formulas, relations, rollups, advanced cross-database queries or import mapping wizard. Property schema changes validate existing data; destructive schema transformations need explicit migration support. Board keyboard updates use selectors. |
 | Permissions and tenancy | API/WS/job/file/search policy checks and forced tenant RLS exist. Add broader adversarial testing, ACL concurrency tests, audit export and operational tenant-provisioning tooling before customer rollout. |
-| Retention | Retention/permanent-purge/object-cleanup implementation is under verification in PR #8. Until that PR passes the full gate and merges, the verified baseline remains soft delete/restore only. Search and trashed-item lists are bounded. |
+| Retention | Permanent administrator purge, configurable 1–3650 day trash retention (or disabled), automatic expired resource/file cleanup, durable retry/dead object deletion, and backup coverage are implemented and passed CI run 36660728414. Search and trash listings remain bounded; customer-specific legal/retention policy validation remains deployment work. |
 | Files | No antivirus, quarantine, content disarm or resumable upload. Maximum upload 25 MiB. Authenticated SeaweedFS 4.47 interoperability and recovery are exercised in CI; production-provider validation, antivirus, quarantine, content disarm and resumable upload remain. |
 | Import/export | Markdown/CSV imports capped at 2 MiB; CSV at 2,000 rows/100 columns. Synchronous exports cap at 10,000 records. No bulk zipped workspace export or large streamed job output. |
 | Integrations | No actual OpenJM Intelligence deployment connected. Stable event cursor, reconciliation API, receiver secret rotation and dead-letter replay UI remain. The example documents mandatory permission recheck. |
