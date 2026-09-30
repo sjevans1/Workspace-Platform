@@ -110,6 +110,68 @@ export async function createResource(
   await emit(q, a, `${v.kind}.created`, id);
   return one(q, "SELECT * FROM resources WHERE id=$1", [id]);
 }
+export async function purgeDeletedResource(
+  q: Query,
+  tenantId: string,
+  resourceId: string,
+  actor?: Pick<Actor, "user_id" | "requestId">,
+) {
+  await treeLock(q, tenantId);
+  const root = await one(
+    q,
+    "SELECT id,kind,deleted_at FROM resources WHERE id=$1 FOR UPDATE",
+    [resourceId],
+  );
+  assert(root?.deleted_at, 404, "Trashed resource not found");
+
+  const subtree = (
+    await q.query(
+      "WITH RECURSIVE tree AS(SELECT id,kind,0 depth FROM resources WHERE id=$1 UNION ALL SELECT r.id,r.kind,t.depth+1 FROM resources r JOIN tree t ON r.parent_id=t.id) SELECT * FROM tree ORDER BY depth DESC,id",
+      [resourceId],
+    )
+  ).rows;
+  const ids = subtree.map((row: any) => row.id);
+  const files = (
+    await q.query(
+      "SELECT object_key FROM files WHERE resource_id=ANY($1::uuid[])",
+      [ids],
+    )
+  ).rows;
+
+  for (const file of files)
+    await q.query(
+      "INSERT INTO object_deletions(id,tenant_id,object_key,reason) VALUES($1,$2,$3,'resource_purge') ON CONFLICT(tenant_id,object_key) DO NOTHING",
+      [randomUUID(), tenantId, file.object_key],
+    );
+
+  await q.query("DELETE FROM notifications WHERE resource_id=ANY($1::uuid[])", [
+    ids,
+  ]);
+  await q.query("DELETE FROM bookmarks WHERE resource_id=ANY($1::uuid[])", [ids]);
+
+  for (const row of subtree)
+    await q.query("DELETE FROM resources WHERE id=$1", [row.id]);
+
+  if (actor) {
+    await q.query(
+      "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id,request_id) VALUES($1,$2,$3,'resource.purged',$4,$5)",
+      [
+        randomUUID(),
+        tenantId,
+        actor.user_id,
+        resourceId,
+        actor.requestId || null,
+      ],
+    );
+  } else {
+    await q.query(
+      "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id) VALUES($1,$2,NULL,'retention.resource_purged',$3)",
+      [randomUUID(), tenantId, resourceId],
+    );
+  }
+  return { resources: subtree.length, objects: files.length };
+}
+
 export async function validatePeople(q: Query, props: Property[], values: any) {
   for (const p of props.filter((p) => p.type === "person"))
     if (values[p.id])
