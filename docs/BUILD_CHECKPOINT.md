@@ -63,6 +63,10 @@ PR #13 passed the complete CI gate in GitHub Actions run 36665630835 and was squ
 
 The migration runner now records SHA-256 checksums for applied migration files, adopts checksums for legacy rows on first post-upgrade run, and rejects later modification of an already-applied migration. A dedicated disposable-database regression proves that a migration which fails after partial DDL is rolled back atomically, is not recorded as applied, can be corrected and retried successfully, remains idempotent on subsequent runs, and then becomes immutable through checksum verification.
 
+## Hermes real-host acceptance package
+
+A bounded independent host-validation procedure is now committed at `docs/HERMES_HOST_ACCEPTANCE.md`. It is intended for Hermes on a disposable WSL/Linux host and covers fresh deployment, browser acceptance, restart persistence, TLS/LAN, migration checksum verification, backup, separate-target recovery and operational queue review. It explicitly forbids destructive testing against the source deployment, production data, unknown Docker volumes or production buckets.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
