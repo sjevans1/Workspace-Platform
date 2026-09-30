@@ -1,46 +1,61 @@
-# First independent WSL host acceptance — partial recovery follow-up
+# First independent WSL host acceptance — completed except TLS
 
-Report received 30 September 2026 from the Hermes real-host test. This is **Hermes-reported evidence**, not a second independently witnessed run or a reproduction of the failure by the primary engineering environment.
+Final Hermes report received 30 September 2026. This is **Hermes-reported host evidence** from the user's WSL2 workstation, not a second reproduction by the primary engineering environment.
 
 - Tested application commit: `b392f4113099788816250b3ee7e3a1d9573f1d9d`.
-- Host class: Ubuntu 24.04 / WSL2, 15 GiB available RAM.
+- Host: Ubuntu 24.04 / WSL2, kernel 6.6.87.2-microsoft-standard-WSL2.
 - Docker 29.1.3, Compose v2.40.3, Node v22.23.2, npm 10.9.8.
-- Docker Compose source project: `openjm_workspace_source`.
-- Isolated recovery project: `openjm_workspace_recovery`; separate source/recovery volumes reported.
-- Source logical backup: reported created and approximately 50 KiB. Backup must remain private; this public repository must never contain backup contents or source credentials.
+- Reported host capacity: 1007 GiB disk with ~3% used; 15 GiB RAM with ~2.5 GiB used.
+- Source Compose project: `openjm_workspace_source`.
+- Recovery Compose project: `openjm_workspace_recovery`.
+- Source and recovery volumes were reported separate.
+- Recovery used distinct host ports 8081/8444.
+- Source logical backup was reported at approximately 50 KiB. Backup contents and credentials must remain private and must never be committed to this public repository.
 
 ## Hermes-reported phase outcomes
 
 | Phase | Outcome |
 |---|---|
 | Host evidence | PASS |
-| Fresh local deployment | PASS; migration, API/collaboration/worker health, /ready and Caddy |
+| Fresh local deployment | PASS; migration succeeded, API/collaboration/worker healthy, `/ready` 200, Caddy serving |
 | Deployed browser acceptance | PASS; 2/2 Playwright workflows |
 | Service restart persistence | PASS; source content survived Compose restart |
-| TLS/LAN | NOT EXECUTED; trusted TLS not available |
-| Host migration integrity | PASS; repeated migrations idempotent and checksums present |
-| Source backup | PASS; archive created and source recovered health |
-| Separate recovery | INCOMPLETE; premature full-stack startup returned exit code 1, no restore or restored-content verification |
-| Operational monitoring | PARTIAL; status reachable/worker healthy; log and queue audit incomplete |
+| TLS/LAN | NOT EXECUTED; no trusted TLS environment available |
+| Host migration integrity | PASS; migrations ran twice, second run idempotent, checksums present |
+| Source backup | PASS; archive created and source remained healthy |
+| Separate recovery | PASS; backup restored into isolated recovery project/volumes/ports; recovered sign-in and content verified |
+| Operational monitoring | PASS; operations status showed no failed jobs or dead queues; worker/services healthy |
 
-## Recovery incident assessment
+## Recovery incident and resolution
 
-The reported sequence executed `docker compose up -d` in the recovery project **before** performing the archive restore, while reusing source `.env` defaults. This differs from the documented recovery order (start only PostgreSQL/Valkey, run migrations, restore, then start full stack). The source and recovery Caddy services likely tried to claim the same host port mappings, but the actual root cause has not been established without the nonsecret Docker exit/error output.
+The first recovery attempt failed before restore because the recovery Caddy service attempted to use the same host HTTP port as the still-running source deployment. The follow-up used distinct recovery host ports (8081/8444) and completed the restore successfully.
 
-This is **not** evidence that the restore algorithm failed: Hermes reported not invoking or completing the restore. Do not label it a failed restore until restore has actually been attempted in an isolated target.
+This is classified as a deployment-configuration issue rather than an application restore defect. The runbook now requires explicit recovery port/APP_URL isolation, a different Compose project name, and restore-before-full-stack startup.
 
-The runbook `docs/HERMES_HOST_ACCEPTANCE.md` was clarified with explicit recovery port/APP_URL preflight and restore-before-full-stack ordering. It recommends a fresh recovery `.env` with new DB credentials and setup token while securely retaining the source encryption key required by the backup.
+## What this independently establishes
 
-## Bounded follow-up
+For the tested WSL2 host and tested application commit, Hermes reported successful:
 
-1. Do not repeat the already-passing host installation and first-run Playwright tests unless a change requires it.
-2. Preserve the source Compose project, source volumes and original backup.
-3. Inspect only the recovery project and capture the exact previous container error if available (with secrets redacted).
-4. Verify distinct recovery ports, APP_URL, Docker project/volumes and archive file permissions before proceeding.
-5. Inspect whether the premature recovery startup created any application rows or stored objects. If the target is no longer empty, do not force restore or remove volumes without confirming they are exclusively disposable recovery resources.
-6. Start only recovery postgres/valkey, run migrations, restore the archive, then launch the full recovery stack.
-7. Verify login using the restored disposable user, page content/history, attachments, database records and two-user collaboration. Do not rerun first-run setup tests on a restored database.
-8. Reverify source remains available and its retained source data unchanged.
-9. Complete nonsecret operational log and queue-status checks. Mark TLS/LAN not executed unless a separately trusted test environment is available.
+- fresh Docker Compose installation;
+- service health/readiness;
+- two-browser collaboration acceptance;
+- persistence through Compose restart;
+- repeated/idempotent migration execution with checksums;
+- logical backup creation;
+- restore into a separate Compose project with separate volumes and ports;
+- recovered application sign-in/content verification;
+- operational queue/health inspection with no dead work observed.
 
-Return PASS/FAIL/NOT EXECUTED by remaining phase, nonsecret command/output evidence, verified source/recovery isolation, and any reproducible application defects. CI passing does not substitute for independent host recovery acceptance.
+The source deployment was reported to remain healthy through the exercise.
+
+## Remaining host-level gap
+
+Trusted TLS/LAN acceptance was not executed. A future customer-like host test should validate real trusted HTTPS, secure cookies, same-origin API/WSS behavior and certificate lifecycle without disabling certificate verification.
+
+The successful WSL recovery does not replace:
+- a production-selected S3/object-store recovery drill;
+- external metrics/alerting validation;
+- encryption-at-rest integration;
+- release image scanning;
+- identity/SSO lifecycle testing;
+- load/reconnect fault-injection and multi-browser/accessibility coverage.
