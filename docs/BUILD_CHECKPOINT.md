@@ -33,15 +33,17 @@ Storage increment published: `d53d363cfa8c0d2d6f17b492bd7a7cbb022ded17`. CI http
 
 The second increment added a distinct invited teammate to deployed-browser acceptance, covering live edits, view-only downgrade, upgrade, full revocation, private files, search, tickets, owner edits after revocation and access restoration. The review found that the server enforced read-only changes but the editor retained its initial editability flag. Collaboration now sends permission updates and the open editor applies them; the backend regression covers both directions. This increment was published at `7a7ce9e2ddbb1783556d569b2810607f0ddfca1a` after the deployed two-user browser verification passed.
 
-## Active hardening slice: retention and object lifecycle
+## Verified hardening slice: retention and object lifecycle
 
-Work is isolated on `hardening/retention-object-cleanup` / PR #8 until its full CI gate passes. The slice adds a configurable organisation trash-retention period, administrator-only permanent purge, deepest-first subtree removal, retention of audit/outbox evidence, a tenant-isolated durable object-deletion queue with retry/dead states, cleanup of expired soft-deleted attachments, backup/restore coverage for cleanup state, and regression tests. Do not treat this slice as verified until PR #8 has passed native PostgreSQL, TypeScript/build, Docker and deployed Chromium acceptance and is merged.
+PR #8 passed the complete CI gate in GitHub Actions run 36660728414 and was squash-merged to `main` at `10e8813b83d6969e7dddaa0f4664ea81a0558515`. The backend job passed native PostgreSQL tests, TypeScript and the production build. The deployment job passed Docker image build, migrations/startup/readiness and the complete deployed Chromium workflow.
+
+The verified slice adds a configurable organisation trash-retention period (1–3650 days, or disabled), administrator-only permanent purge, deepest-first subtree removal, preservation of audit/outbox evidence, a tenant-isolated durable object-deletion queue with retry/dead states, cleanup of expired soft-deleted attachments, backup/restore coverage for cleanup state, and regression tests for explicit and automatic purge.
 
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, retention, operational hardening and wider browser/accessibility coverage remain.
+The next acceptance phase is a customer-like evaluation on a TLS-enabled host, including live permission revocation, object-store backup recovery and migration recovery. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational hardening, broader adversarial permission coverage and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
