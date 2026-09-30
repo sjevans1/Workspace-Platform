@@ -101,7 +101,7 @@ Verify sign-in, page content, restored history, files, a table/board record, and
 
 ## Upgrades and health
 
-Back up before each upgrade. Review release notes, build the new image, stop writers, run migrations once, and start the new services. Migrations are transactional and tracked in `schema_migrations`; the migration runner uses an advisory lock. Downgrade is not automatic: recover the matching backup into a separate deployment if needed.
+Back up before each upgrade. Review release notes, build the new image, stop writers, run migrations once, and start the new services. Migrations are transactional, serialized with an advisory lock, and tracked in `schema_migrations` with a SHA-256 checksum of each applied SQL file. Historical migration files are immutable: if a previously applied filename no longer matches its recorded digest, startup migration fails instead of accepting schema drift. Deployments created before checksum tracking adopt the current digest once and then enforce it. Downgrade is not automatic: recover the matching backup into a separate deployment if needed.
 
 - `/health`: API process alive.
 - `/ready`: API database, rate-limit store when configured, and object storage accessible.
