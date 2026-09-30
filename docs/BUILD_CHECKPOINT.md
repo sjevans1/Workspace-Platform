@@ -67,6 +67,12 @@ The migration runner now records SHA-256 checksums for applied migration files, 
 
 A bounded independent host-validation procedure is now committed at `docs/HERMES_HOST_ACCEPTANCE.md`. It is intended for Hermes on a disposable WSL/Linux host and covers fresh deployment, browser acceptance, restart persistence, TLS/LAN, migration checksum verification, backup, separate-target recovery and operational queue review. It explicitly forbids destructive testing against the source deployment, production data, unknown Docker volumes or production buckets.
 
+## Independent WSL host acceptance — partial recovery follow-up
+
+Hermes reported that the WSL host accepted the fresh deployment, 2/2 Playwright tests, source restart persistence, idempotent migrations and source backup against `b392f4113`. Trusted TLS was unavailable. Independent recovery remains **unverified**: Hermes started the complete recovery stack before restoring the archive and likely reused source host ports; the exact bind error was not captured in the report. The source and recovery Compose projects/volumes were reported isolated. This is a procedure/configuration issue under investigation, not an observed backup-restore algorithm failure.
+
+The bounded follow-up and anonymized outcome record are in `docs/HOST_ACCEPTANCE_EVALUATION.md`. `docs/HERMES_HOST_ACCEPTANCE.md` now specifies explicit recovery origin/port overrides, fresh recovery credentials, a restore-before-start ordering and non-destructive preflight checks. Do not mark independent host recovery complete until a separate target is restored and its data and collaboration are functionally verified.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
