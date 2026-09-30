@@ -13,7 +13,11 @@ import { Database, one } from "../packages/database/index.ts";
 import { buildApp } from "../apps/api/src/app.ts";
 import { createCollab } from "../apps/collab/src/server.ts";
 import { tick } from "../apps/worker/src/worker.ts";
-import { createSession, csrf } from "../packages/auth/index.ts";
+import { createSession, csrf, hash } from "../packages/auth/index.ts";
+import type {
+  OidcProfile,
+  OidcProvider,
+} from "../packages/auth/oidc.ts";
 import { signature } from "../packages/events/index.ts";
 let pg: any,
   db: Database,
@@ -30,8 +34,29 @@ let pg: any,
   database: any,
   record: any,
   file: any,
-  service: any;
+  service: any,
+  oidcProfile: OidcProfile;
 const providers: HocuspocusProvider[] = [];
+const fakeOidc: OidcProvider = {
+  label: "Test SSO",
+  issuer: "https://idp.example.test/",
+  async start(redirectUri) {
+    const state = `state-${randomUUID()}`,
+      codeVerifier = `verifier-${randomUUID()}`,
+      nonce = `nonce-${randomUUID()}`,
+      url = new URL("https://idp.example.test/authorize");
+    url.searchParams.set("state", state);
+    url.searchParams.set("redirect_uri", redirectUri);
+    return { url: url.href, state, codeVerifier, nonce };
+  },
+  async finish(currentUrl, expected) {
+    assert.equal(currentUrl.searchParams.get("code"), "test-code");
+    assert.equal(currentUrl.searchParams.get("state"), expected.state);
+    assert.ok(expected.codeVerifier.startsWith("verifier-"));
+    assert.ok(expected.nonce.startsWith("nonce-"));
+    return oidcProfile;
+  },
+};
 const req = async (
   method: string,
   path: string,
@@ -72,6 +97,40 @@ const permissionPatch = async (
 };
 function session(r: any) {
   const cookie = r.headers["set-cookie"].split(";")[0];
+  return { cookie, csrf: csrf(cookie.split("=")[1]) };
+}
+function cookieFrom(r: any, name: string) {
+  const values = Array.isArray(r.headers["set-cookie"])
+    ? r.headers["set-cookie"]
+    : [r.headers["set-cookie"]].filter(Boolean);
+  const value = values
+    .map((v: string) => v.split(";")[0])
+    .find((v: string) => v.startsWith(`${name}=`));
+  assert.ok(value, `Missing ${name} cookie`);
+  return value;
+}
+async function beginOidc(inviteToken?: string) {
+  const params = new URLSearchParams({ return_to: "/" });
+  if (inviteToken) params.set("invite", inviteToken);
+  const r = await app.inject({
+    method: "GET",
+    url: `/api/v1/auth/oidc/start?${params}`,
+  });
+  assert.equal(r.statusCode, 302, r.body);
+  const location = new URL(r.headers.location);
+  return {
+    state: location.searchParams.get("state")!,
+    cookie: cookieFrom(r, "workspace_oidc_state"),
+  };
+}
+async function finishOidc(flow: { state: string; cookie: string }) {
+  const r = await app.inject({
+    method: "GET",
+    url: `/api/v1/auth/oidc/callback?code=test-code&state=${encodeURIComponent(flow.state)}`,
+    headers: { cookie: flow.cookie },
+  });
+  assert.equal(r.statusCode, 302, r.body);
+  const cookie = cookieFrom(r, "workspace_session");
   return { cookie, csrf: csrf(cookie.split("=")[1]) };
 }
 const pause = (n: number) => new Promise((r) => setTimeout(r, n));
@@ -123,7 +182,13 @@ before(async () => {
   pg = await testPostgres(55433);
   await migrate(pg.url);
   db = new Database(pg.url, { serialize: pg.emulated });
-  app = await buildApp(db, undefined, false);
+  oidcProfile = {
+    issuer: fakeOidc.issuer,
+    subject: "owner-subject",
+    email: "owner@example.test",
+    name: "Owner",
+  };
+  app = await buildApp(db, undefined, false, fakeOidc);
   const r = await req(
     "POST",
     "/setup",
@@ -174,6 +239,131 @@ after(async () => {
   await rm(dir, { recursive: true, force: true });
   done();
 });
+test("OIDC links an existing verified account with browser-bound one-time state", async () => {
+  const methods = await ok("GET", "/auth/methods", undefined, null);
+  assert.equal(methods.local, true);
+  assert.deepEqual(methods.oidc, { enabled: true, label: "Test SSO" });
+
+  oidcProfile = {
+    issuer: fakeOidc.issuer,
+    subject: "owner-subject",
+    email: "owner@example.test",
+    name: "Owner",
+  };
+  const flow = await beginOidc();
+
+  const mismatch = await app.inject({
+    method: "GET",
+    url: `/api/v1/auth/oidc/callback?code=test-code&state=${encodeURIComponent(flow.state)}`,
+    headers: { cookie: "workspace_oidc_state=wrong-browser-state-value" },
+  });
+  assert.equal(mismatch.statusCode, 400);
+
+  const actor = await finishOidc(flow);
+  const me = await ok("GET", "/me", undefined, actor);
+  assert.equal(me.user.email, "owner@example.test");
+  assert.equal(me.user.role, "owner");
+  assert.equal(me.authentication.oidc.enabled, true);
+
+  const identity = await db.system((q) =>
+    one(
+      q,
+      "SELECT user_id,email FROM oidc_identities WHERE issuer=$1 AND subject=$2",
+      [fakeOidc.issuer, "owner-subject"],
+    ),
+  );
+  assert.equal(identity.user_id, owner.id);
+  assert.equal(identity.email, "owner@example.test");
+
+  const replay = await app.inject({
+    method: "GET",
+    url: `/api/v1/auth/oidc/callback?code=test-code&state=${encodeURIComponent(flow.state)}`,
+    headers: { cookie: flow.cookie },
+  });
+  assert.equal(replay.statusCode, 400);
+});
+
+test("OIDC can consume a matching invitation without creating a local password", async () => {
+  const invitation = await ok("POST", "/members/invite", {
+      name: "SSO Member",
+      email: "sso-new@example.test",
+      role: "member",
+    }),
+    invitationToken = new URL(invitation.url).searchParams.get("invite")!;
+  oidcProfile = {
+    issuer: fakeOidc.issuer,
+    subject: "sso-new-subject",
+    email: "sso-new@example.test",
+    name: "SSO Member",
+  };
+
+  const actor = await finishOidc(await beginOidc(invitationToken)),
+    me = await ok("GET", "/me", undefined, actor);
+  assert.equal(me.user.email, "sso-new@example.test");
+  assert.equal(me.user.role, "member");
+
+  const provisioned = await db.system((q) =>
+    one(
+      q,
+      "SELECT u.id,u.password_hash,i.subject FROM users u JOIN oidc_identities i ON i.user_id=u.id WHERE u.email=$1",
+      ["sso-new@example.test"],
+    ),
+  );
+  assert.equal(provisioned.password_hash, null);
+  assert.equal(provisioned.subject, "sso-new-subject");
+  assert.equal(
+    await db.system(async (q) =>
+      Number(
+        (
+          await one(
+            q,
+            "SELECT count(*) n FROM invitations WHERE token_hash=$1",
+            [hash(invitationToken)],
+          )
+        ).n,
+      ),
+    ),
+    0,
+  );
+});
+
+test("OIDC invitation provisioning requires the verified identity email to match", async () => {
+  const invitation = await ok("POST", "/members/invite", {
+      name: "Mismatch",
+      email: "expected-sso@example.test",
+      role: "member",
+    }),
+    invitationToken = new URL(invitation.url).searchParams.get("invite")!;
+  oidcProfile = {
+    issuer: fakeOidc.issuer,
+    subject: "mismatch-subject",
+    email: "different-sso@example.test",
+    name: "Mismatch",
+  };
+  const flow = await beginOidc(invitationToken),
+    response = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/oidc/callback?code=test-code&state=${encodeURIComponent(flow.state)}`,
+      headers: { cookie: flow.cookie },
+    });
+  assert.equal(response.statusCode, 403);
+  assert.match(response.body, /does not match the invitation/);
+  assert.equal(
+    await db.system(async (q) =>
+      Number(
+        (
+          await one(
+            q,
+            "SELECT count(*) n FROM invitations WHERE token_hash=$1",
+            [hash(invitationToken)],
+          )
+        ).n,
+      ),
+    ),
+    1,
+  );
+});
+
 test("setup is one-time and writes require CSRF", async () => {
   assert.equal(
     (
