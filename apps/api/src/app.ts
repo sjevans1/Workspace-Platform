@@ -1611,15 +1611,15 @@ function dataRoutes(route: Route, storage: Storage) {
         where: string[] = [];
       if (p.since) {
         values.push(z.iso.datetime({ offset: true }).parse(p.since));
-        where.push(`e.created_at >= ${values.length}::timestamptz`);
+        where.push(`e.created_at >= $${values.length}::timestamptz`);
       }
       if (p.until) {
         values.push(z.iso.datetime({ offset: true }).parse(p.until));
-        where.push(`e.created_at <= ${values.length}::timestamptz`);
+        where.push(`e.created_at <= $${values.length}::timestamptz`);
       }
       if (p.action) {
         values.push(z.string().max(200).parse(p.action));
-        where.push(`e.action = ${values.length}`);
+        where.push(`e.action = $${values.length}`);
       }
       values.push(limit);
       const rows = (
@@ -1628,7 +1628,7 @@ function dataRoutes(route: Route, storage: Storage) {
            FROM audit_events e LEFT JOIN users u ON u.id=e.actor_id
            ${where.length ? "WHERE " + where.join(" AND ") : ""}
            ORDER BY e.created_at DESC,e.id
-           LIMIT ${values.length}`,
+           LIMIT $${values.length}`,
           values,
         )
       ).rows;
