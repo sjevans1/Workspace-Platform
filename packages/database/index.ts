@@ -31,6 +31,22 @@ export class Database {
   system<T>(fn: (q: Query) => Promise<T>) {
     return this.guard(() => fn(this.pool));
   }
+  systemTransaction<T>(fn: (q: Query) => Promise<T>) {
+    return this.guard(async () => {
+      const c = await this.pool.connect();
+      try {
+        await c.query("BEGIN");
+        const result = await fn(c);
+        await c.query("COMMIT");
+        return result;
+      } catch (e) {
+        await c.query("ROLLBACK");
+        throw e;
+      } finally {
+        c.release();
+      }
+    });
+  }
   tenant<T>(id: string, fn: (q: Query) => Promise<T>) {
     return this.guard(async () => {
       const c = await this.pool.connect();
