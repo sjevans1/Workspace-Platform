@@ -257,6 +257,25 @@ export async function createCollab(db: Database, port = 1234) {
   timer.unref();
   return {
     server,
+    health: async () => {
+      if (closing)
+        return {
+          healthy: false,
+          connections: 0,
+          documents: documents.size,
+          status: "stopping",
+        };
+      await lease.query("SELECT 1");
+      let connections = 0;
+      for (const document of documents)
+        connections += document.getConnections().length;
+      return {
+        healthy: true,
+        documents: documents.size,
+        connections,
+        loading_documents: server.hocuspocus.loadingDocuments.size,
+      };
+    },
     close: async () => {
       closing = true;
       clearInterval(timer);
