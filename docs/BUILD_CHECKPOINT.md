@@ -75,11 +75,19 @@ The initial recovery startup failure was traced to a host-port collision with th
 
 The anonymized outcome record is in `docs/HOST_ACCEPTANCE_EVALUATION.md`. `docs/HERMES_HOST_ACCEPTANCE.md` retains the stricter isolation and restore-order safeguards learned from the exercise.
 
+## Verified hardening slice: OIDC / Keycloak SSO foundation
+
+PR #14 passed the complete final-head CI gate in GitHub Actions run 36770930101 and was squash-merged to `main` at `842ee53bbc17f569d0aaba748d8a15ac517b6955`. The backend job passed 34 native PostgreSQL tests, TypeScript and the production build. The deployment job passed Docker configuration/image build, healthy startup and both existing deployed Chromium workflows.
+
+The identity slice adds deployment-level OpenID Connect/Keycloak sign-in using authorization code + PKCE S256, random state, OIDC nonce, browser-bound and server-side single-use login state, signed ID-token validation through `openid-client`, verified-email enforcement, durable issuer/subject identity links, and optional local-password disable. Existing accounts may link by verified email; passwordless new users require an administrator-issued invitation whose email exactly matches the verified IdP email. SSO never invents organisation membership or roles. Durable identity links are backed up; transient login state is not.
+
+CI includes a disposable real OIDC issuer that exercises discovery, confidential-client code exchange, PKCE transmission, signed ID-token verification, nonce validation and verified-email rejection, in addition to application-level tests for account linking, invitation provisioning, browser-state mismatch and replay rejection. A real Keycloak host/browser acceptance remains outstanding before treating the provider integration as deployment-validated.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next host-level acceptance phase is a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery and operational status have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; identity/SSO, operational tenant-provisioning, external metrics/alerts and real host/TLS recovery validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+The next host-level acceptance phase is a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery and operational status have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; real-provider SSO acceptance, directory/offboarding lifecycle, operational tenant-provisioning, external metrics/alerts and real trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
