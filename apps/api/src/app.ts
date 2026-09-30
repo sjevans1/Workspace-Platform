@@ -8,6 +8,7 @@ import swaggerUI from "@fastify/swagger-ui";
 import Redis from "ioredis";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
 import { stringify } from "csv-stringify/sync";
 import { Database, one, type Query } from "../../../packages/database/index.ts";
 import {
@@ -204,6 +205,7 @@ export async function buildApp(
         summary,
         tags: [p.split("/")[1]],
         security: [{ session: [] }, { serviceToken: [] }],
+        ...(integrationOpenApi[`${method} ${p}`] || {}),
       },
       preHandler: auth,
       handler: async (req, reply) => {
