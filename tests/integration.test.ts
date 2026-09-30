@@ -202,6 +202,37 @@ test("setup is one-time and writes require CSRF", async () => {
     403,
   );
 });
+test("OpenAPI publishes machine-readable integration contracts", async () => {
+  const response = await app.inject({ method: "GET", url: "/api/docs/json" });
+  assert.equal(response.statusCode, 200, response.body);
+  const spec = response.json();
+  assert.equal(spec.openapi, "3.0.3");
+  const pageContent = spec.paths["/api/v1/pages/{id}/content"];
+  assert.equal(pageContent.get.parameters[0].schema.format, "uuid");
+  assert.deepEqual(
+    pageContent.patch.requestBody.content["application/json"].schema.required,
+    ["blocks", "expected_revision"],
+  );
+  const permissionCheck =
+    spec.paths["/api/v1/resources/{id}/permissions/check"].get;
+  assert.ok(
+    permissionCheck.parameters.some(
+      (p: any) => p.name === "user_id" && p.required === true,
+    ),
+  );
+  const imports = spec.paths["/api/v1/imports"].post;
+  assert.deepEqual(
+    imports.requestBody.content["application/json"].schema.required,
+    ["parent_id", "format", "name", "content"],
+  );
+  assert.equal(
+    spec.paths["/api/v1/events"].get.responses["200"].content[
+      "application/json"
+    ].schema.type,
+    "array",
+  );
+});
+
 test("native row-level policies and known IDs isolate tenants", async () => {
   assert.equal(
     (await req("GET", `/resources/${page.id}`, undefined, other)).statusCode,
