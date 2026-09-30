@@ -157,7 +157,7 @@ export async function buildApp(
     { parseAs: "string", bodyLimit: 20000 },
     (_request, payload, done) => {
       try {
-        done(null, Object.fromEntries(new URLSearchParams(payload)));
+        done(null, Object.fromEntries(new URLSearchParams(String(payload))));
       } catch (error) {
         done(error as Error);
       }
