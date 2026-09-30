@@ -1,6 +1,6 @@
 import * as client from "openid-client";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { assert } from "../contracts/index.ts";
+import { assert, HttpError } from "../contracts/index.ts";
 
 export type OidcProfile = {
   issuer: string;
@@ -154,16 +154,21 @@ export function oidcFromEnv(): OidcProvider | null {
       assert(jwksUri, 500, "OIDC provider does not publish a JWKS URI");
       logoutKeys ||= createRemoteJWKSet(new URL(jwksUri));
       const algorithms =
-          metadata.id_token_signing_alg_values_supported?.filter(
-            (value) => value !== "none",
-          ) || ["RS256"],
+        metadata.id_token_signing_alg_values_supported?.filter(
+          (value) => value !== "none",
+        ) || ["RS256"];
+      let verified;
+      try {
         verified = await jwtVerify(logoutToken, logoutKeys, {
           issuer,
           audience: clientId,
           algorithms,
           clockTolerance: 5,
-        }),
-        p = verified.payload,
+        });
+      } catch {
+        throw new HttpError(400, "Invalid OIDC logout token");
+      }
+      const p = verified.payload,
         event =
           p.events &&
           typeof p.events === "object" &&
