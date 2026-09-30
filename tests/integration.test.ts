@@ -35,7 +35,8 @@ let pg: any,
   record: any,
   file: any,
   service: any,
-  oidcProfile: OidcProfile;
+  oidcProfile: OidcProfile,
+  oidcLogout: any;
 const providers: HocuspocusProvider[] = [];
 const fakeOidc: OidcProvider = {
   label: "Test SSO",
@@ -55,6 +56,9 @@ const fakeOidc: OidcProvider = {
     assert.ok(expected.codeVerifier.startsWith("verifier-"));
     assert.ok(expected.nonce.startsWith("nonce-"));
     return oidcProfile;
+  },
+  async validateBackchannelLogout() {
+    return oidcLogout;
   },
 };
 const req = async (
@@ -188,6 +192,12 @@ before(async () => {
     email: "owner@example.test",
     name: "Owner",
   };
+  oidcLogout = {
+    issuer: fakeOidc.issuer,
+    subject: "owner-subject",
+    jti: "initial-logout",
+    expiresAt: new Date(Date.now() + 300000),
+  };
   app = await buildApp(db, undefined, false, fakeOidc);
   const r = await req(
     "POST",
@@ -281,6 +291,49 @@ test("OIDC links an existing verified account with browser-bound one-time state"
     headers: { cookie: flow.cookie },
   });
   assert.equal(replay.statusCode, 400);
+});
+
+test("OIDC back-channel logout revokes OIDC sessions but preserves local break-glass session", async () => {
+  oidcProfile = {
+    issuer: fakeOidc.issuer,
+    subject: "owner-subject",
+    email: "owner@example.test",
+    name: "Owner",
+    sid: "owner-idp-session",
+  };
+  const actor = await finishOidc(await beginOidc());
+  assert.equal((await req("GET", "/me", undefined, actor)).statusCode, 200);
+
+  oidcLogout = {
+    issuer: fakeOidc.issuer,
+    subject: "owner-subject",
+    sid: "owner-idp-session",
+    jti: `logout-${randomUUID()}`,
+    expiresAt: new Date(Date.now() + 300000),
+  };
+  const payload = new URLSearchParams({
+    logout_token: "signed-test-logout-token-placeholder",
+  }).toString();
+  const logout = await app.inject({
+    method: "POST",
+    url: "/api/v1/auth/oidc/backchannel-logout",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    payload,
+  });
+  assert.equal(logout.statusCode, 200, logout.body);
+  assert.equal(logout.json().revoked, 1);
+  assert.equal((await req("GET", "/me", undefined, actor)).statusCode, 401);
+  assert.equal((await req("GET", "/me", undefined, owner)).statusCode, 200);
+
+  const replay = await app.inject({
+    method: "POST",
+    url: "/api/v1/auth/oidc/backchannel-logout",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    payload,
+  });
+  assert.equal(replay.statusCode, 200, replay.body);
+  assert.equal(replay.json().replayed, true);
+  assert.equal(replay.json().revoked, 0);
 });
 
 test("OIDC can consume a matching invitation without creating a local password", async () => {

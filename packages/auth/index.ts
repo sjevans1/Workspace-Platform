@@ -52,11 +52,22 @@ export async function createSession(
   u: string,
   scopes: string[] | null = null,
   label: string | null = null,
+  oidc?: { issuer: string; subject: string; sid?: string | null },
 ) {
   const value = token();
   await q.query(
-    "INSERT INTO sessions(token_hash,tenant_id,user_id,scopes,label,expires_at) VALUES($1,$2,$3,$4,$5,now()+$6::interval)",
-    [hash(value), t, u, scopes, label, scopes ? "90 days" : "12 hours"],
+    "INSERT INTO sessions(token_hash,tenant_id,user_id,scopes,label,expires_at,oidc_issuer,oidc_subject,oidc_sid) VALUES($1,$2,$3,$4,$5,now()+$6::interval,$7,$8,$9)",
+    [
+      hash(value),
+      t,
+      u,
+      scopes,
+      label,
+      scopes ? "90 days" : "12 hours",
+      oidc?.issuer || null,
+      oidc?.subject || null,
+      oidc?.sid || null,
+    ],
   );
   return value;
 }

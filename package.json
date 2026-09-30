@@ -51,7 +51,8 @@
     "y-protocols": "1.0.6",
     "yjs": "13.6.33",
     "zod": "4.6.5",
-    "openid-client": "6.8.8"
+    "openid-client": "6.8.8",
+    "jose": "6.2.12"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",

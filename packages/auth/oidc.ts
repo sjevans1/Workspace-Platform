@@ -1,11 +1,21 @@
 import * as client from "openid-client";
-import { assert } from "../contracts/index.ts";
+import { createRemoteJWKSet, jwtVerify } from "jose";
+import { assert, HttpError } from "../contracts/index.ts";
 
 export type OidcProfile = {
   issuer: string;
   subject: string;
   email: string;
   name: string;
+  sid?: string;
+};
+
+export type OidcLogout = {
+  issuer: string;
+  subject?: string;
+  sid?: string;
+  jti: string;
+  expiresAt: Date;
 };
 
 export type OidcStart = {
@@ -23,6 +33,7 @@ export interface OidcProvider {
     currentUrl: URL,
     expected: { state: string; codeVerifier: string; nonce: string },
   ): Promise<OidcProfile>;
+  validateBackchannelLogout(logoutToken: string): Promise<OidcLogout>;
 }
 
 export function oidcFromEnv(): OidcProvider | null {
@@ -48,7 +59,8 @@ export function oidcFromEnv(): OidcProvider | null {
     "OIDC issuer must use HTTPS unless OIDC_ALLOW_INSECURE=true",
   );
 
-  let configuration: Promise<client.Configuration> | undefined;
+  let configuration: Promise<client.Configuration> | undefined,
+    logoutKeys: ReturnType<typeof createRemoteJWKSet> | undefined;
   const getConfiguration = () =>
     (configuration ||= client.discovery(
       new URL(issuer),
@@ -127,6 +139,67 @@ export function oidcFromEnv(): OidcProvider | null {
         subject: claims.sub,
         email,
         name,
+        ...(typeof claims.sid === "string" ? { sid: claims.sid } : {}),
+      };
+    },
+    async validateBackchannelLogout(logoutToken) {
+      assert(
+        typeof logoutToken === "string" && logoutToken.length <= 16384,
+        400,
+        "Invalid OIDC logout token",
+      );
+      const config = await getConfiguration(),
+        metadata = config.serverMetadata(),
+        jwksUri = metadata.jwks_uri;
+      assert(jwksUri, 500, "OIDC provider does not publish a JWKS URI");
+      logoutKeys ||= createRemoteJWKSet(new URL(jwksUri));
+      const algorithms =
+        metadata.id_token_signing_alg_values_supported?.filter(
+          (value) => value !== "none",
+        ) || ["RS256"];
+      let verified;
+      try {
+        verified = await jwtVerify(logoutToken, logoutKeys, {
+          issuer,
+          audience: clientId,
+          algorithms,
+          clockTolerance: 5,
+        });
+      } catch {
+        throw new HttpError(400, "Invalid OIDC logout token");
+      }
+      const p = verified.payload,
+        event =
+          p.events &&
+          typeof p.events === "object" &&
+          (p.events as Record<string, unknown>)[
+            "http://schemas.openid.net/event/backchannel-logout"
+          ];
+
+      assert(
+        event && typeof event === "object",
+        400,
+        "OIDC logout event is missing",
+      );
+      assert(!("nonce" in p), 400, "OIDC logout token must not contain nonce");
+      assert(
+        typeof p.iat === "number" &&
+          typeof p.exp === "number" &&
+          typeof p.jti === "string" &&
+          p.jti.length > 0,
+        400,
+        "OIDC logout token is missing required claims",
+      );
+      const subject = typeof p.sub === "string" ? p.sub : undefined,
+        sid = typeof p.sid === "string" ? p.sid : undefined;
+      assert(subject || sid, 400, "OIDC logout token must contain sub or sid");
+
+      return {
+        issuer,
+        ...(subject ? { subject } : {}),
+        ...(sid ? { sid } : {}),
+        jti: p.jti,
+        expiresAt: new Date(p.exp * 1000),
       };
     },
   };
