@@ -48,6 +48,18 @@ The OIDC client secret belongs in the deployment secret environment and is passe
 
 A successful IdP login does not grant tenant access by itself. Existing membership or a matching administrator-issued invitation is required.
 
+### Keycloak back-channel logout
+
+For Keycloak deployments, configure the client's Backchannel logout URL to:
+
+```
+${APP_URL}/api/v1/auth/oidc/backchannel-logout
+```
+
+Enable Keycloak's back-channel session-ID option when available so Workspace can revoke the precise OIDC-created session by `sid`. The endpoint is public by design but accepts only a provider-signed logout JWT with the expected issuer/audience and back-channel event claims. It does not use the Workspace CSRF/session cookie.
+
+Workspace administrator membership deactivation already invalidates that user's tenant sessions. External directory disablement is different: if the identity provider does not send a logout event, use Workspace deactivation until SCIM/directory lifecycle automation is implemented.
+
 ## Branding
 
 Set PRODUCT_NAME, PRIMARY_ACCENT, LOGO_LIGHT, LOGO_DARK, FAVICON, LOGIN_BACKGROUND, SUPPORT_NAME, SUPPORT_URL, LEGAL_NAME, PRIVACY_URL and TERMS_URL for deployment-wide sign-in defaults. Administrators can override those fields for their signed-in organisation through Settings → Branding. Use HTTPS asset URLs or same-origin paths. The current interface uses the light logo; the dark logo is retained in configuration for a future dark theme.
