@@ -70,6 +70,14 @@ services:
     environment:
       <<: *runtime
       TRUST_PROXY: "true"
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_LABEL: ${OIDC_LABEL:-Single sign-on}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid profile email}
+      OIDC_REQUIRE_VERIFIED_EMAIL: ${OIDC_REQUIRE_VERIFIED_EMAIL:-true}
+      OIDC_ALLOW_INSECURE: ${OIDC_ALLOW_INSECURE:-false}
+      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
     depends_on:
       migrate: { condition: service_completed_successfully }
       valkey: { condition: service_healthy }
