@@ -561,6 +561,38 @@ test("ACL writes reject stale, duplicate and cross-tenant grants and serialize c
   await permissionPatch(path, { inherit: true, grants: [] });
 });
 
+test("operational status is admin-only and reports queue health", async () => {
+  const status = await ok("GET", "/operations/status");
+  assert.equal(typeof status.attention_required, "boolean");
+  assert.equal(typeof status.generated_at, "string");
+  for (const queue of [
+    status.queues.imports,
+    status.queues.webhooks,
+    status.queues.object_deletions,
+    status.queues.events,
+  ])
+    assert.equal(typeof queue.pending, "number");
+
+  assert.equal(
+    (await req("GET", "/operations/status", undefined, guest)).statusCode,
+    403,
+  );
+
+  const dead = randomUUID();
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO object_deletions(id,tenant_id,object_key,reason,status) VALUES($1,$2,$3,'upload_rollback','dead')",
+      [dead, owner.tenant, `health/${dead}`],
+    ),
+  );
+  const attention = await ok("GET", "/operations/status");
+  assert.equal(attention.attention_required, true);
+  assert.ok(attention.queues.object_deletions.dead >= 1);
+  await db.tenant(owner.tenant, (q) =>
+    q.query("DELETE FROM object_deletions WHERE id=$1", [dead]),
+  );
+});
+
 test("audit export is admin-only, bounded/filterable and spreadsheet safe", async () => {
   const adminExport = await req("GET", "/audit/export?limit=25");
   assert.equal(adminExport.statusCode, 200, adminExport.body);
