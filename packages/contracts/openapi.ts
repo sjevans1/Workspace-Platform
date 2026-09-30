@@ -200,7 +200,7 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
           id: uuid,
           user_id: uuid,
           resource_id: uuid,
-          status: { enum: ["pending", "running", "completed", "failed"] },
+          status: { enum: ["pending", "completed", "failed"] },
           result: {},
         },
         additionalProperties: false,
