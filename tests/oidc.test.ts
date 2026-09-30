@@ -59,6 +59,7 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
           email_verified: emailVerified,
           name: "OIDC User",
           nonce: expectedNonce,
+          sid: "oidc-session-123",
         })
           .setProtectedHeader({ alg: "RS256", kid: jwk.kid })
           .setIssuer(issuer)
@@ -135,8 +136,54 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
       subject: "oidc-user-subject",
       email: "oidc-user@example.test",
       name: "OIDC User",
+      sid: "oidc-session-123",
     });
     assert.equal(tokenRequests, 1);
+
+    const now = Math.floor(Date.now() / 1000),
+      logoutToken = await new SignJWT({
+        sid: "oidc-session-123",
+        events: {
+          "http://schemas.openid.net/event/backchannel-logout": {},
+        },
+      })
+        .setProtectedHeader({
+          alg: "RS256",
+          kid: jwk.kid,
+          typ: "logout+jwt",
+        })
+        .setIssuer(issuer)
+        .setAudience("workspace-test-client")
+        .setSubject("oidc-user-subject")
+        .setJti("logout-event-123")
+        .setIssuedAt(now)
+        .setExpirationTime(now + 300)
+        .sign(privateKey),
+      logout = await provider.validateBackchannelLogout(logoutToken);
+    assert.equal(logout.issuer, issuer);
+    assert.equal(logout.subject, "oidc-user-subject");
+    assert.equal(logout.sid, "oidc-session-123");
+    assert.equal(logout.jti, "logout-event-123");
+
+    const invalidLogout = await new SignJWT({
+      sid: "oidc-session-123",
+      nonce: "prohibited",
+      events: {
+        "http://schemas.openid.net/event/backchannel-logout": {},
+      },
+    })
+      .setProtectedHeader({ alg: "RS256", kid: jwk.kid })
+      .setIssuer(issuer)
+      .setAudience("workspace-test-client")
+      .setSubject("oidc-user-subject")
+      .setJti("logout-event-invalid")
+      .setIssuedAt(now)
+      .setExpirationTime(now + 300)
+      .sign(privateKey);
+    await assert.rejects(
+      provider.validateBackchannelLogout(invalidLogout),
+      /must not contain nonce/i,
+    );
 
     emailVerified = false;
     const second = await provider.start(redirectUri),
