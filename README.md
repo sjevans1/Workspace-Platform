@@ -35,7 +35,7 @@ Open **http://localhost:8080** and use `SETUP_TOKEN` from the generated `.env`. 
 - Organisations, multiple workspaces, spaces, nested pages, favourites, search and trash.
 - BlockNote Core editing, Yjs/Hocuspocus collaboration, presence, durable save acknowledgements and revision restore.
 - Typed databases with table and board views, inline edits, filtering, sorting, column settings and records that open as full pages.
-- Local authentication, one-time invitations, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.
+- Local authentication plus optional OpenID Connect/Keycloak SSO, invitation-backed SSO provisioning, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.
 - Page discussions and mentions, private file attachments, Markdown/CSV imports and Markdown/CSV/JSON exports.
 - Runtime branding, scoped REST API, transactional event outbox, signed webhooks with retries, and audit records.
 - Local and S3-compatible storage adapters, migrations, logical backup/restore, container configuration and CI.
@@ -66,6 +66,7 @@ npm run test:e2e
 The tests use isolated PGlite instances by default. Set `TEST_DATABASE_URL` to an administrative PostgreSQL connection to run them against native PostgreSQL; each test suite creates and drops its own temporary database. CI exercises native PostgreSQL, two browser sessions, and the Docker deployment.
 
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)
+- [Identity and enterprise SSO](docs/IDENTITY.md)
 - [API and Intelligence integration](docs/INTEGRATION.md)
 - [Operations and restore procedure](docs/OPERATIONS.md)
 - [Acceptance and known gaps](docs/ACCEPTANCE.md)
