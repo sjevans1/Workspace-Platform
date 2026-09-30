@@ -207,7 +207,7 @@ Do not paste backup contents into chat. The archive contains sensitive applicati
 
 Create a second directory, for example `Workspace-Platform-Recovery`. **Before running any recovery Compose command**, set `export COMPOSE_PROJECT_NAME=openjm_workspace_recovery` in the recovery terminal and verify it differs from `openjm_workspace_source`. Explicitly use a unique Compose project name because `compose.yaml` otherwise has a fixed top-level name. The recovery instance must have separate Docker volumes, a separate S3 bucket if applicable, and unused host ports. Never use `down -v` against the source project.
 
-Copy the backup file and securely copy the source configuration values needed for recovery, including the original encryption key. Do not share those values in evidence.
+Copy the backup file into the recovery checkout's `backups/` directory. Prefer running `node scripts/init-env.mjs` in the fresh recovery checkout to generate **new** recovery database passwords and setup token; then securely replace only its `ENCRYPTION_KEY` with the original source encryption key required by the backup (and separately configure any isolated S3 recovery bucket). Do not indiscriminately reuse the source `.env` and do not share any values in evidence.
 
 In the recovery directory, configure fresh PostgreSQL/file volumes and **different host ports and APP_URL**. Copy the original ENCRYPTION_KEY privately and preserve the same application/migration version. Do not copy the source `.env` without adjusting the recovery configuration. Set these shell overrides in the **recovery terminal**, which take precedence over `.env`; use different ports if 8081/8444 are already occupied:
 
@@ -250,9 +250,10 @@ Acceptance:
 - page content/history are present;
 - attachments open;
 - database/table records are present;
-- collaboration works from two browser sessions.
+- collaboration works from two browser sessions;
+- source deployment still reaches `/ready` and retained source content remains readable after recovery.
 
-If testing S3-compatible storage, the recovery target must use a separate empty bucket.
+Do **not** rerun the first-run Playwright setup workflow against the restored database: it expects a fresh instance and may produce a misleading failure. Test recovery by signing in with the already-restored disposable source test account and directly verifying data and collaboration. If testing S3-compatible storage, the recovery target must use a separate empty bucket.
 
 ## Phase 8 — operational status
 
