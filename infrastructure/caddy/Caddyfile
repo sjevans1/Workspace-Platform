@@ -1,4 +1,5 @@
 {$CADDY_ADDRESS::80} {
+  {$CADDY_TLS_DIRECTIVE:}
   encode zstd gzip
   header {
     -Server
@@ -6,6 +7,7 @@
     Referrer-Policy strict-origin-when-cross-origin
     Permissions-Policy "camera=(), microphone=(), geolocation=()"
     X-Frame-Options SAMEORIGIN
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
   }
   handle /collaboration* {
     reverse_proxy collab:1234

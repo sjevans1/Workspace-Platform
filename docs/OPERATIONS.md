@@ -36,7 +36,30 @@ HTTPS_PORT=443
 COOKIE_SECURE=true
 ```
 
-Then run `docker compose up -d`. Caddy obtains and renews the certificate. Its data volume must persist. The UI uses same-origin HTTPS for the API and WSS for `/collaboration`. If you use a private LAN name without public certificates, provide your organisation's trusted certificate or use Caddy internal PKI and distribute its root trust through your normal device-management process. Change `APP_URL` to the exact browser origin; it is also used for invitation links and CSRF origin validation.
+Then run `docker compose up -d`. Caddy obtains and renews the certificate. Its data volume must persist. The UI uses same-origin HTTPS for the API and WSS for `/collaboration`. For a public DNS name, leave `CADDY_TLS_DIRECTIVE` empty. Caddy will use normal automatic HTTPS and ACME certificate renewal.
+
+For a private/LAN hostname that cannot receive a public certificate, use Caddy's internal CA:
+
+```dotenv
+APP_URL=https://workspace.internal.example
+CADDY_ADDRESS=workspace.internal.example
+CADDY_TLS_DIRECTIVE=tls internal
+BIND_ADDRESS=0.0.0.0
+HTTP_PORT=80
+HTTPS_PORT=443
+COOKIE_SECURE=true
+```
+
+Start the deployment, then export only the generated public root certificate:
+
+```bash
+docker compose up -d
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./openjm-workspace-root.crt
+```
+
+Distribute `openjm-workspace-root.crt` through the organisation's normal trusted-root/device-management process before users browse to Workspace. Do **not** export or distribute the internal CA private key. Keep the `caddy_data` volume persistent; losing it creates a new internal CA and requires clients to trust the replacement root. Validate the browser without certificate-warning bypasses. The Workspace session cookie must be Secure/HttpOnly and collaboration must use WSS.
+
+Change `APP_URL` to the exact browser origin; it is also used for invitation links and CSRF origin validation. Caddy sends HSTS from the edge. HTTP is retained only to redirect clients to HTTPS when automatic HTTPS is active.
 
 The application CSP allows inline scripts required by this Next.js build and inline editor styles. It does not permit embedded arbitrary HTML. A nonce-based CSP is a remaining hardening item. Avoid adding arbitrary third-party scripts to the deployment.
 
@@ -74,7 +97,7 @@ A SCIM connector belongs to one organisation. `active:false` or SCIM DELETE deac
 
 Connector metadata and SCIM user mappings are included in logical backups. Raw tokens are never stored; because the hash is restored, an identity provider holding the existing raw token can continue authenticating after a successful restore of the same deployment data.
 
-The first slice implements Users only. SCIM Groups, group-role mapping, Bulk, full filter grammar, ETag concurrency and password changes are not implemented. See [SCIM directory lifecycle](SCIM.md).
+SCIM Users and Groups are implemented, including explicit owner/admin-controlled Group mapping to only `member` or `guest`. Bulk, full filter grammar, ETag concurrency and password changes are not implemented. See [SCIM directory lifecycle](SCIM.md).
 
 ## Branding
 
@@ -149,7 +172,7 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 
 The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users lifecycle are implemented. Trusted-TLS acceptance, SCIM Groups/provider compatibility and the other release-hardening items remain.
+Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance, broader provider compatibility and the other release-hardening items remain.
 
 ## Real-host acceptance
 

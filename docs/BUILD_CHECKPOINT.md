@@ -135,6 +135,12 @@ During review, two defects in the interrupted branch were corrected before accep
 
 PR #18 passed final-head GitHub Actions run 36807221040 and was squash-merged to `main` at `ab5abd5be176a4658bc40cc7fce561cc689cc637`. The backend passed 37/37 native PostgreSQL tests under restricted `workspace_runtime`/`NOBYPASSRLS`, TypeScript and the production build. The deployment job passed configuration/image build, startup/health and deployed Chromium, including the Settings-driven Group role-mapping workflow.
 
+## Active hardening slice: trusted TLS / customer-like edge deployment
+
+The next production-hardening slice is running the existing Docker/Caddy deployment on a real HTTPS origin rather than introducing a parallel test proxy. Public-domain deployments continue to use Caddy automatic HTTPS. Private/LAN deployments can set `CADDY_TLS_DIRECTIVE=tls internal`, persist Caddy state and distribute only the generated root certificate through normal device trust.
+
+CI now re-runs the deployed stack on `https://workspace.test` with Caddy's internal CA, installs that CA into the runner/browser trust stores without disabling certificate verification, and verifies HTTPS readiness, HTTP→HTTPS redirect, HSTS, a Secure/HttpOnly SameSite=Lax Workspace session cookie, no browser HTTP requests and WSS collaboration. This slice remains **in progress** until the final PR head passes native PostgreSQL, build, ordinary Docker/Chromium acceptance and the new trusted-TLS browser gate.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
