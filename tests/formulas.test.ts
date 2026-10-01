@@ -33,8 +33,7 @@ test("W06 rejects arbitrary expressions, unexpected fields and cycles", () => {
     "eval(1)", "process.env.API_KEY", "[name]", "[gross]",
     "[__proto__]", "1;2", "1/0**2", "4+", "2 3",
     "(".repeat(14) + "1" + ")".repeat(14),
-  ]) assert.throws(() => compileFormula(expression, props), undefined,
-    expression);
+  ]) assert.throws(() => compileFormula(expression, props));
   assert.throws(() => validateValues(props,
     { name: "No formula writes", gross: 25 }));
   const invalid = properties.parse([
