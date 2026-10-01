@@ -30,6 +30,10 @@ export function PropertyInput({
   databaseId?: string;
   save: (v: any) => void;
 }) {
+  if (p.type === "formula")
+    return <output aria-label={p.name} className="formula-result">
+      {value === null || value === undefined ? "—" : String(value)}
+    </output>;
   if (p.type === "relation")
     return <RelationInput p={p} value={value} disabled={disabled}
       save={save} databaseId={databaseId} />;
@@ -974,6 +978,12 @@ function PropertiesDialog({
                   )
                     ? { options: p.options || ["Option 1"] }
                     : { options: undefined }),
+                  // Never retain a previously configured target or formula
+                  // when the property's type changes.
+                  target_database_id: e.target.value === "relation"
+                    ? p.target_database_id : undefined,
+                  formula: e.target.value === "formula"
+                    ? p.formula || "0" : undefined,
                 })
               }
             >
@@ -990,6 +1000,7 @@ function PropertiesDialog({
                 "url",
                 "email",
                 "relation",
+                "formula",
               ].map((t) => (
                 <option key={t}>{t}</option>
               ))}
@@ -1053,6 +1064,13 @@ function PropertiesDialog({
                 {p.target_unavailable &&
                   <span className="muted">Target inaccessible; contact an administrator.</span>}
               </div>
+            )}
+            {p.type === "formula" && (
+              <input aria-label={`${p.name} formula expression`}
+                value={p.formula || ""} disabled={!editable}
+                placeholder="[unit_cost] * [quantity]"
+                onChange={(e) => update(i, { formula: e.target.value })}
+              />
             )}
             {["select", "status", "multi_select"].includes(p.type) && (
               <input
