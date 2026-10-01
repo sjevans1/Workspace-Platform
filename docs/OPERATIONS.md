@@ -182,7 +182,11 @@ Verify sign-in, page content, restored history, files, a table/board record, and
 
 ## Upgrades and health
 
-Back up before each upgrade. Review release notes, build the new image, stop writers, run migrations once, and start the new services. Migrations are transactional and tracked in `schema_migrations`; the migration runner uses an advisory lock. Downgrade is not automatic: recover the matching backup into a separate deployment if needed.
+Back up before each upgrade. Review release notes, build the new image, stop writers, run migrations once, and start the new services.
+
+**Upgrade note for deployments created before encrypted backups:** older `.env` files do not contain `BACKUP_ENCRYPTION_KEY`. Normal service startup remains allowed, but the backup CLI fails closed until a separate 64-hex-character key is added. Generate a fresh independent 256-bit value locally (do not copy `ENCRYPTION_KEY`), store it through the approved secret/recovery process, then create and test a new encrypted backup before relying on it for recovery.
+
+Review release notes, build the new image, stop writers, run migrations once, and start the new services. Migrations are transactional and tracked in `schema_migrations`; the migration runner uses an advisory lock. Downgrade is not automatic: recover the matching backup into a separate deployment if needed.
 
 - `/health`: API process alive.
 - `/ready`: API database, rate-limit store when configured, and object storage accessible.
