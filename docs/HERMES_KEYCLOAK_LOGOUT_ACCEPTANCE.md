@@ -1,5 +1,26 @@
 # Hermes Keycloak back-channel logout acceptance
 
+## Final status — CLOSED
+
+The no-workaround regression retest passed on Workspace `9894b95686c6229a956b93c0a2263e4434aae184` with Keycloak 26.7.4.
+
+Final evidence:
+
+- `workspace_runtime` was `rolsuper=false, rolbypassrls=false` before and after the test;
+- the previous diagnostic `BYPASSRLS` workaround was removed;
+- Keycloak administrator session termination returned HTTP 204 and emitted genuine signed back-channel logout requests;
+- two fresh `auth.oidc_backchannel_logout` audit events and two fresh logout-event rows were recorded for the two active member sessions;
+- matching OIDC Workspace sessions were deleted;
+- the old Workspace SSO session returned HTTP 401;
+- the independent local/password break-glass owner session remained HTTP 200;
+- a fresh SSO login succeeded while the old session remained invalid;
+- no HTTP 500, RLS violation, audit insertion failure, validation loop or service restart loop occurred;
+- source and recovery deployments remained untouched.
+
+Real-Keycloak OIDC Back-Channel Logout acceptance is **closed**. This document is retained as acceptance history and a reproducible future regression procedure. It is not the current identity work item.
+
+The next enterprise identity slice is directory/SCIM lifecycle and automated offboarding. Keycloak account disablement was separately observed not to terminate an existing session or emit back-channel logout, which is the lifecycle gap SCIM must address.
+
 This is a focused continuation of the already-passed real-Keycloak SSO acceptance. Do not repeat the full SSO provisioning exercise unless a prerequisite is missing.
 
 ## Objective
