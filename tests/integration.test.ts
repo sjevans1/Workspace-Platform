@@ -19,6 +19,11 @@ import type {
   OidcProvider,
 } from "../packages/auth/oidc.ts";
 import { signature } from "../packages/events/index.ts";
+import {
+  AntivirusUnavailableError,
+  type Antivirus,
+  type AntivirusScanResult,
+} from "../packages/security/antivirus.ts";
 let pg: any,
   db: Database,
   app: any,
@@ -36,8 +41,22 @@ let pg: any,
   file: any,
   service: any,
   oidcProfile: OidcProfile,
-  oidcLogout: any;
+  oidcLogout: any,
+  antivirusResult: AntivirusScanResult = { status: "clean" },
+  antivirusUnavailable = false;
 const providers: HocuspocusProvider[] = [];
+const fakeAntivirus: Antivirus = {
+  enabled: true,
+  async health() {
+    if (antivirusUnavailable)
+      throw new AntivirusUnavailableError("test scanner unavailable");
+  },
+  async scan() {
+    if (antivirusUnavailable)
+      throw new AntivirusUnavailableError("test scanner unavailable");
+    return antivirusResult;
+  },
+};
 const fakeOidc: OidcProvider = {
   label: "Test SSO",
   issuer: "https://idp.example.test/",
@@ -207,7 +226,7 @@ before(async () => {
     jti: "initial-logout",
     expiresAt: new Date(Date.now() + 300000),
   };
-  app = await buildApp(db, undefined, false, fakeOidc);
+  app = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
   const r = await req(
     "POST",
     "/setup",
@@ -1098,6 +1117,55 @@ test("comments create mentions and block unauthorized moderation", async () => {
     member,
   );
 });
+test("malware scanning blocks infected uploads before storage and fails closed when unavailable", async () => {
+  const upload = async (content: string, filename = "scan.txt") => {
+    const boundary = `----workspace-scan-${randomUUID()}`,
+      data = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/plain\r\n\r\n${content}\r\n--${boundary}--\r\n`;
+    return req("POST", `/resources/${page.id}/files`, data, owner, {
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+    });
+  };
+  const before = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT count(*)::int AS count FROM files WHERE resource_id=$1", [
+      page.id,
+    ]),
+  );
+
+  antivirusResult = { status: "infected", signature: "Eicar-Signature" };
+  const infected = await upload("infected test payload");
+  assert.equal(infected.statusCode, 422, infected.body);
+  assert.match(infected.body, /File rejected by malware scanner/);
+
+  let after = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT count(*)::int AS count FROM files WHERE resource_id=$1", [
+      page.id,
+    ]),
+  );
+  assert.equal(after.rows[0].count, before.rows[0].count);
+  const blockedAudit = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT action FROM audit_events WHERE tenant_id=$1 AND resource_id=$2 AND action='file.malware_blocked' ORDER BY created_at DESC LIMIT 1",
+      [owner.tenant, page.id],
+    ),
+  );
+  assert.equal(blockedAudit.action, "file.malware_blocked");
+
+  antivirusUnavailable = true;
+  const unavailable = await upload("scanner unavailable payload");
+  assert.equal(unavailable.statusCode, 503, unavailable.body);
+  assert.match(unavailable.body, /Malware scanner unavailable/);
+  after = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT count(*)::int AS count FROM files WHERE resource_id=$1", [
+      page.id,
+    ]),
+  );
+  assert.equal(after.rows[0].count, before.rows[0].count);
+
+  antivirusUnavailable = false;
+  antivirusResult = { status: "clean" };
+});
+
 test("private uploads validate type and authorize parent on every download", async () => {
   const boundary = "test-boundary";
   const data = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="evidence.txt"\r\nContent-Type: text/plain\r\n\r\nPrivate evidence\r\n--${boundary}--\r\n`;
