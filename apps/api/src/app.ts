@@ -1376,7 +1376,7 @@ export async function buildApp(
       Object.entries(templates).map(([id, t]) => ({ id, title: t.title })),
     "workspace.read",
   );
-  dataRoutes(route, storage);
+  dataRoutes(route, storage, antivirus, antivirusMetrics);
   await registerScim(app, db);
   app.addHook("onClose", async () => {
     try {
@@ -1387,7 +1387,12 @@ export async function buildApp(
   });
   return app;
 }
-function dataRoutes(route: Route, storage: Storage) {
+function dataRoutes(
+  route: Route,
+  storage: Storage,
+  antivirus: Antivirus,
+  antivirusMetrics: { clean: number; infected: number; error: number },
+) {
   route(
     "GET",
     "/databases/:id",
