@@ -15,6 +15,7 @@ const output = template
   .replaceAll("GENERATE_OWNER_PASSWORD", randomBytes(24).toString("hex"))
   .replaceAll("GENERATE_RUNTIME_PASSWORD", randomBytes(24).toString("hex"))
   .replaceAll("GENERATE_ENCRYPTION_KEY", randomBytes(32).toString("hex"))
+  .replaceAll("GENERATE_BACKUP_ENCRYPTION_KEY", randomBytes(32).toString("hex"))
   .replaceAll("GENERATE_SETUP_TOKEN", randomBytes(24).toString("base64url"))
   .replaceAll("GENERATE_METRICS_TOKEN", randomBytes(32).toString("base64url"));
 await writeFile(path, output, { mode: 0o600, flag: "wx" });
