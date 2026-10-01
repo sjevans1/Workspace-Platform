@@ -755,6 +755,65 @@ test("OIDC links an existing verified account with browser-bound one-time state"
   assert.equal(replay.statusCode, 400);
 });
 
+test("organisation switching cannot downgrade an OIDC session to unbound local credentials", async () => {
+  oidcProfile = {
+    issuer: fakeOidc.issuer,
+    subject: "owner-subject",
+    email: "owner@example.test",
+    name: "Owner",
+    sid: "switch-bound-idp-session",
+  };
+  const sso = await finishOidc(await beginOidc());
+  const origin = await ok("GET", "/me", undefined, sso);
+  const targetTenant =
+    origin.organisation.id === owner.tenant ? other.tenant : owner.tenant;
+  const denied = await req(
+    "POST",
+    "/auth/switch",
+    { tenant_id: targetTenant },
+    sso,
+  );
+  assert.equal(denied.statusCode, 403, denied.body);
+  assert.match(denied.body, /SSO sessions cannot switch organisations/);
+  const stillAuthenticated = await ok("GET", "/me", undefined, sso);
+  assert.equal(stillAuthenticated.organisation.id, origin.organisation.id);
+  const oidcSource = await db.tenant(origin.organisation.id, (q) =>
+    one(
+      q,
+      "SELECT oidc_issuer,oidc_subject,oidc_sid FROM sessions WHERE token_hash=$1",
+      [hash(sso.cookie.split("=")[1])],
+    ),
+  );
+  assert.equal(oidcSource.oidc_issuer, fakeOidc.issuer);
+  assert.equal(oidcSource.oidc_subject, "owner-subject");
+  assert.equal(oidcSource.oidc_sid, "switch-bound-idp-session");
+
+  // Independently authenticated local sessions retain supported switching.
+  const localToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, owner.id),
+  );
+  const local = {
+    cookie: "workspace_session=" + localToken,
+    csrf: csrf(localToken),
+  };
+  const switched = await req(
+    "POST",
+    "/auth/switch",
+    { tenant_id: other.tenant },
+    local,
+  );
+  assert.equal(switched.statusCode, 200, switched.body);
+  const destination = session(switched);
+  assert.equal(
+    (await ok("GET", "/me", undefined, destination)).organisation.id,
+    other.tenant,
+  );
+  assert.equal(
+    (await req("GET", "/me", undefined, local)).statusCode,
+    401,
+  );
+});
+
 test("OIDC back-channel logout revokes OIDC sessions but preserves local break-glass session", async () => {
   oidcProfile = {
     issuer: fakeOidc.issuer,
