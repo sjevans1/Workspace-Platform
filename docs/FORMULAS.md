@@ -1,6 +1,6 @@
 # W06 — Safe, deterministic numeric Formula properties
 
-**Implementation status:** Candidate under review. Do not treat this feature as released until W06's exact final-head native PostgreSQL and deployed CI gates pass and the PR is merged. Tracker: [#62](https://github.com/sjevans1/Workspace-Platform/issues/62).
+**Implementation status:** Accepted in [PR #66](https://github.com/sjevans1/Workspace-Platform/pull/66), merged after exact-head backend and deployed CI success in [run 36941994555](https://github.com/sjevans1/Workspace-Platform/actions/runs/36941994555). Tracker: [#62](https://github.com/sjevans1/Workspace-Platform/issues/62).
 
 ## User behavior
 
