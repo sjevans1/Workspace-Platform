@@ -895,7 +895,23 @@ function PropertiesDialog({
     [visible, setVisible] = useState<string[]>(
       view.config.visible || data.properties.map((p: any) => p.id),
     ),
-    [widths, setWidths] = useState(view.config.widths || {});
+    [widths, setWidths] = useState(view.config.widths || {}),
+    [targetSearch, setTargetSearch] = useState(""),
+    [targetOffset, setTargetOffset] = useState(0),
+    [targetOptions, setTargetOptions] = useState<any[]>([]),
+    [moreTargets, setMoreTargets] = useState(false);
+  useEffect(() => {
+    let canceled = false;
+    void api(`/databases/${data.id}/relation-targets?search=${encodeURIComponent(targetSearch)}&offset=${targetOffset}&limit=30`)
+      .then((result) => {
+        if (!canceled) {
+          setTargetOptions(result.items);
+          setMoreTargets(result.has_more);
+        }
+      })
+      .catch(() => { if (!canceled) { setTargetOptions([]); setMoreTargets(false); } });
+    return () => { canceled = true; };
+  }, [data.id, targetSearch, targetOffset]);
   const update = (i: number, v: any) =>
     setProps((p) => p.map((x, j) => (i === j ? { ...x, ...v } : x)));
   return (
@@ -905,7 +921,9 @@ function PropertiesDialog({
         onSubmit={(e) => {
           e.preventDefault();
           run(async () => {
-            await api(`/databases/${data.id}`, "PATCH", { properties: props });
+            await api(`/databases/${data.id}`, "PATCH", {
+              properties: props.map(({ target_unavailable: _hidden, ...rest }) => rest),
+            });
             await api(`/databases/${data.id}/views/${view.id}`, "PATCH", {
               name: view.name,
               config: {
@@ -949,6 +967,8 @@ function PropertiesDialog({
               onChange={(e) =>
                 update(i, {
                   type: e.target.value,
+                  target_database_id: e.target.value === "relation"
+                    ? p.target_database_id : undefined,
                   ...(["select", "status", "multi_select"].includes(
                     e.target.value,
                   )
@@ -969,6 +989,7 @@ function PropertiesDialog({
                 "person",
                 "url",
                 "email",
+                "relation",
               ].map((t) => (
                 <option key={t}>{t}</option>
               ))}
@@ -999,6 +1020,40 @@ function PropertiesDialog({
             >
               <ArrowUp size={15} />
             </button>
+            {p.type === "relation" && (
+              <div className="relation-target-selector">
+                <label htmlFor={`relation-target-${p.id}`}>Related database</label>
+                <input
+                  aria-label="Search target databases"
+                  placeholder="Find target database"
+                  value={targetSearch}
+                  onChange={(event) => {
+                    setTargetSearch(event.target.value); setTargetOffset(0);
+                  }}
+                />
+                <select id={`relation-target-${p.id}`}
+                  aria-label={`Related database for ${p.name}`}
+                  value={p.target_database_id || ""}
+                  disabled={!editable || p.target_unavailable}
+                  onChange={(event) =>
+                    update(i, { target_database_id: event.target.value || undefined })
+                  }
+                >
+                  <option value="">Choose a permitted database</option>
+                  {p.target_database_id &&
+                    !targetOptions.some((db) => db.id === p.target_database_id) &&
+                    <option value={p.target_database_id}>Current permitted target</option>}
+                  {targetOptions.map((database) =>
+                    <option key={database.id} value={database.id}>{database.title}</option>)}
+                </select>
+                {moreTargets && <button type="button" className="button quiet"
+                  onClick={() => setTargetOffset(targetOffset + 30)}>
+                  More databases
+                </button>}
+                {p.target_unavailable &&
+                  <span className="muted">Target inaccessible; contact an administrator.</span>}
+              </div>
+            )}
             {["select", "status", "multi_select"].includes(p.type) && (
               <input
                 className="options-input"
