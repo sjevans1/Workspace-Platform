@@ -172,7 +172,7 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 
 The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance, broader provider compatibility and the other release-hardening items remain.
+Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance is now CI-verified. Production object-store validation, broader provider compatibility and the other release-hardening items remain.
 
 ## Real-host acceptance
 

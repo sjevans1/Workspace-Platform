@@ -135,17 +135,17 @@ During review, two defects in the interrupted branch were corrected before accep
 
 PR #18 passed final-head GitHub Actions run 36807221040 and was squash-merged to `main` at `ab5abd5be176a4658bc40cc7fce561cc689cc637`. The backend passed 37/37 native PostgreSQL tests under restricted `workspace_runtime`/`NOBYPASSRLS`, TypeScript and the production build. The deployment job passed configuration/image build, startup/health and deployed Chromium, including the Settings-driven Group role-mapping workflow.
 
-## Active hardening slice: trusted TLS / customer-like edge deployment
+## Verified hardening slice: trusted TLS / customer-like edge deployment
 
 The next production-hardening slice is running the existing Docker/Caddy deployment on a real HTTPS origin rather than introducing a parallel test proxy. Public-domain deployments continue to use Caddy automatic HTTPS. Private/LAN deployments can set `CADDY_TLS_DIRECTIVE=tls internal`, persist Caddy state and distribute only the generated root certificate through normal device trust.
 
-CI now re-runs the deployed stack on `https://workspace.test` with Caddy's internal CA, installs that CA into the runner/browser trust stores without disabling certificate verification, and verifies HTTPS readiness, HTTP→HTTPS redirect, HSTS, a Secure/HttpOnly SameSite=Lax Workspace session cookie, no browser HTTP requests and WSS collaboration. This slice remains **in progress** until the final PR head passes native PostgreSQL, build, ordinary Docker/Chromium acceptance and the new trusted-TLS browser gate.
+CI now re-runs the deployed stack on `https://workspace.test` with Caddy's internal CA, installs that CA into the runner/browser trust stores without disabling certificate verification, and verifies HTTPS readiness, HTTP→HTTPS redirect, HSTS, a Secure/HttpOnly SameSite=Lax Workspace session cookie, no browser HTTP requests and WSS collaboration. PR #19 passed final-head GitHub Actions run 36809176797 and was squash-merged to `main` at `b3a258164a516c1a2cbc849002300a4b95da2431`. Native PostgreSQL, TypeScript/build, ordinary Docker/Chromium acceptance and the trusted-HTTPS browser gate all passed.
 
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-SCIM Groups/group-role mapping is closed and verified. The next host-level operations acceptance remains a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; provider compatibility, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+SCIM Groups/group-role mapping is closed and verified. Trusted TLS/customer-like edge acceptance is closed in CI. The next host-level operations acceptance is validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; provider compatibility, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
