@@ -1477,6 +1477,46 @@ function dataRoutes(
         assert(v, 404, "View not found");
         c = view.parse(v.config);
       }
+      if (c.type === "calendar") {
+        assert(
+          typeof p.month === "string" &&
+            /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(p.month),
+          400,
+          "Calendar view requires YYYY-MM month",
+        );
+        await requireAccess(q, a, id(r));
+        const definition = await one(
+          q,
+          "SELECT properties FROM databases WHERE resource_id=$1",
+          [id(r)],
+        );
+        assert(
+          definition?.properties.some(
+            (field: any) => field.id === c.dateBy && field.type === "date",
+          ),
+          400,
+          "Calendar view requires a valid date property",
+        );
+        const start = new Date(p.month + "-01T00:00:00.000Z"),
+          previous = new Date(start.getTime() - 86400000)
+            .toISOString()
+            .slice(0, 10),
+          next = new Date(
+            Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1),
+          )
+            .toISOString()
+            .slice(0, 10);
+        c = {
+          ...c,
+          filters: [
+            ...c.filters,
+            { property: c.dateBy!, op: "after", value: previous },
+            { property: c.dateBy!, op: "before", value: next },
+          ],
+        };
+      } else {
+        assert(!p.month, 400, "Month filter requires a calendar view");
+      }
       return records(
         q,
         a,
@@ -1570,7 +1610,7 @@ function dataRoutes(
     route(
       method,
       `/databases/:id/views${method === "PATCH" ? "/:view" : ""}`,
-      "Save a table or board view",
+      "Save a table, board or calendar view",
       async (q, a, r) => {
         await requireAccess(q, a, id(r), 3);
         const v = body(z.object({ name: title, config: view }).strict(), r),
@@ -1586,8 +1626,17 @@ function dataRoutes(
           ...v.config.sort.map((s) => s.property),
           ...(v.config.visible || []),
           ...(v.config.order || []),
+          ...(v.config.dateBy ? [v.config.dateBy] : []),
         ])
           assert(keys.includes(k), 400, "Unknown view property");
+        if (v.config.type === "calendar")
+          assert(
+            d.properties.some(
+              (p: any) => p.id === v.config.dateBy && p.type === "date",
+            ),
+            400,
+            "Calendar view requires a date property",
+          );
         if (v.config.type === "board")
           assert(
             d.properties.some(
