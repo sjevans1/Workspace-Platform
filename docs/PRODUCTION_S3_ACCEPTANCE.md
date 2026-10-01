@@ -19,6 +19,23 @@ export S3_ACCEPT_WRITE_CONFIRMATION=I_UNDERSTAND_THIS_WRITES_TEST_OBJECTS
 
 Do not paste provider secrets into chat, tickets, screenshots or CI logs.
 
+## Fast provider preflight
+
+Before the full two-bucket recovery drill, you can run a bounded single-object compatibility check using the normal Workspace S3 settings:
+
+```bash
+export STORAGE_PROVIDER=s3
+export S3_ENDPOINT='https://object.example.com'
+export S3_BUCKET='openjm-workspace-acceptance-source'
+export S3_REGION='us-east-1'
+export S3_ACCESS_KEY='...'
+export S3_SECRET_KEY='...'
+export S3_FORCE_PATH_STYLE='true'
+npm run verify:s3-provider -- --write-test
+```
+
+The preflight creates one randomized object, verifies authenticated read/write, requires an existing-key overwrite to be rejected, deletes the object and confirms object-not-found afterwards. It never creates/deletes buckets or lists bucket contents. A PASS here proves basic provider compatibility only; it does **not** replace the full source/recovery acceptance below.
+
 ## Required provider configuration
 
 The harness requires:
