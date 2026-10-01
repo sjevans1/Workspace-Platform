@@ -81,7 +81,7 @@ jobs:
       - run: npm run build
   deployment:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -127,7 +127,7 @@ jobs:
       - name: Generate ClamAV runtime SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          image: clamav/clamav:1.5.4-debian13-slim
+          image: clamav/clamav:1.5.4-debian13-slim@sha256:df80497be841a8ad57f95e04f978216241457f8f8ad608f1f682e3cd0fe63c45
           format: cyclonedx-json
           output-file: openjm-workspace-clamav-sbom.cdx.json
           artifact-name: openjm-workspace-clamav-sbom
@@ -135,7 +135,7 @@ jobs:
       - name: Scan ClamAV runtime image for fixable high/critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: clamav/clamav:1.5.4-debian13-slim
+          image-ref: clamav/clamav:1.5.4-debian13-slim@sha256:df80497be841a8ad57f95e04f978216241457f8f8ad608f1f682e3cd0fe63c45
           format: table
           exit-code: "1"
           ignore-unfixed: true
