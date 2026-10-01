@@ -16,7 +16,7 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
     expectedNonce = "",
     expectedChallenge = "",
     emailVerified = true,
-    tokenAuthMethod: "client_secret_basic" | "client_secret_post" =
+    tokenAuthMethod: "client_secret_basic" | "client_secret_post" | "none" =
       "client_secret_basic",
     tokenRequests = 0;
 
@@ -52,7 +52,12 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
       } else {
         assert.equal(req.headers.authorization, undefined);
         assert.equal(form.get("client_id"), "workspace-test-client");
-        assert.equal(form.get("client_secret"), "workspace-test-secret");
+        assert.equal(
+          form.get("client_secret"),
+          tokenAuthMethod === "client_secret_post"
+            ? "workspace-test-secret"
+            : null,
+        );
       }
       const verifier = form.get("code_verifier") || "",
         actualChallenge = createHash("sha256")
@@ -246,6 +251,30 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
       /does not advertise the configured token authentication method/,
     );
     assert.equal(tokenRequests, 3);
+
+    // A public OIDC client can still prove PKCE+nonce without transmitting
+    // a client secret. The selected discovery metadata must permit "none".
+    tokenAuthMethod = "none";
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "none";
+    process.env.OIDC_CLIENT_SECRET = "";
+    const publicProvider = oidcFromEnv();
+    assert.ok(publicProvider);
+    const publicStart = await publicProvider.start(redirectUri);
+    expectedNonce = publicStart.nonce;
+    expectedChallenge =
+      new URL(publicStart.url).searchParams.get("code_challenge") || "";
+    const publicProfile = await publicProvider.finish(
+      new URL(
+        `${redirectUri}?code=test-code&state=${encodeURIComponent(publicStart.state)}`,
+      ),
+      {
+        state: publicStart.state,
+        codeVerifier: publicStart.codeVerifier,
+        nonce: publicStart.nonce,
+      },
+    );
+    assert.equal(publicProfile.email, "oidc-user@example.test");
+    assert.equal(tokenRequests, 4);
 
     process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post";
     process.env.OIDC_CLIENT_SECRET = "";
