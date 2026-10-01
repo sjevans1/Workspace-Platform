@@ -59,7 +59,10 @@ import {
   inspectFile,
   type Storage,
 } from "../../../packages/storage/index.ts";
-import { registerScim } from "./scim.ts";
+import {
+  registerScim,
+  setScimGroupRoleMapping,
+} from "./scim.ts";
 import {
   createResource,
   createRecord,
@@ -1717,6 +1720,52 @@ function dataRoutes(route: Route, storage: Storage) {
       assert(changed, 404, "SCIM connector not found");
       await emit(q, a, "scim.connector_revoked", null);
       return { ok: true };
+    },
+  );
+  route(
+    "GET",
+    "/scim/groups",
+    "List SCIM groups and role mappings",
+    async (q, a) => {
+      admin(a);
+      return (
+        await q.query(
+          `SELECT g.id,g.display_name,g.external_id,g.created_at,g.updated_at,
+             rm.role AS mapped_role,
+             count(gm.scim_user_id)::int AS member_count
+           FROM scim_groups g
+           LEFT JOIN scim_group_role_mappings rm ON rm.group_id=g.id
+           LEFT JOIN scim_group_members gm ON gm.group_id=g.id
+           WHERE g.deleted_at IS NULL
+           GROUP BY g.id,rm.role
+           ORDER BY lower(g.display_name),g.id`,
+        )
+      ).rows;
+    },
+  );
+  route(
+    "PATCH",
+    "/scim/groups/:id/role",
+    "Map SCIM group to Workspace role",
+    async (q, a, r) => {
+      admin(a);
+      const v = body(
+        z
+          .object({
+            role: z.enum(["member", "guest"]).nullable(),
+          })
+          .strict(),
+        r,
+      );
+      await setScimGroupRoleMapping(
+        q,
+        a.tenant_id,
+        id(r),
+        v.role,
+        a.user_id,
+      );
+      await emit(q, a, "scim.group_role_mapping_updated", null);
+      return { ok: true, role: v.role };
     },
   );
   route(
