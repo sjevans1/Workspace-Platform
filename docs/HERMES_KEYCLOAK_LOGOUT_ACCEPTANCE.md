@@ -9,8 +9,9 @@ Prove end to end that a real Keycloak logout/session-termination event reaches O
 Runtime implementation under test:
 
 - Back-channel logout merge: `bd6b0c4a053a93f9dd060003c44a7adaa95768b2`
-- CI gate: https://github.com/sjevans1/Workspace-Platform/actions/runs/36792189577
-- Native PostgreSQL tests: 35 passed
+- RLS defect fix: `8965a7dfab6dce3c39d66332cd71aee2f8ad993a`
+- Current authoritative CI gate: https://github.com/sjevans1/Workspace-Platform/actions/runs/36797135204
+- Native PostgreSQL tests: 36 passed with the application running as `workspace_runtime`, `rolbypassrls=false`
 - Existing non-SSO deployed Chromium workflows: passed
 
 Read first:
@@ -18,6 +19,66 @@ Read first:
 - `docs/IDENTITY.md`
 - `docs/HERMES_KEYCLOAK_ACCEPTANCE.md`
 - `docs/BUILD_CHECKPOINT.md`
+
+## Status of the first host execution
+
+The first execution of this runbook proved that Keycloak 26.7.4 emits a real signed back-channel logout token when an administrator terminates the user's Keycloak session. It also exposed a Workspace defect: the tenant-scoped `audit_events` insert ran inside a system transaction without setting `app.tenant_id`, so FORCE RLS rejected the insert and rolled back the session deletion.
+
+A temporary `ALTER ROLE workspace_runtime BYPASSRLS` was used only in the disposable SSO database to finish protocol observation. **That workaround is not an accepted production configuration and the resulting host run is not a production-role PASS.**
+
+PR #16 fixed the application without weakening RLS. The handler now sets transaction-local tenant context before the audit insert, and native CI runs the application as `workspace_runtime` with `NOBYPASSRLS`.
+
+The next host execution is therefore a short regression retest. Do not repeat owner linking, invitation provisioning, mismatch testing or SSO-only mode unless a prerequisite has been lost.
+
+## Mandatory precondition for the no-workaround retest
+
+If the disposable SSO database still contains the previous workaround, restore the runtime role before testing. Run this against the disposable SSO PostgreSQL container using its database-owner/admin connection:
+
+```bash
+export COMPOSE_PROJECT_NAME=openjm_workspace_sso
+docker compose exec -T postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "ALTER ROLE workspace_runtime NOBYPASSRLS;" -c "SELECT rolname,rolsuper,rolbypassrls FROM pg_roles WHERE rolname='''workspace_runtime''';"'
+```
+
+Acceptance requires:
+
+- `rolsuper = false`;
+- `rolbypassrls = false`.
+
+If either is not false, stop and report FAIL. Do not continue by granting elevated privileges.
+
+After restoring the role, recreate the disposable application services so all database connections are fresh:
+
+```bash
+docker compose up --build -d api collab worker caddy
+docker compose ps
+curl --fail http://localhost:8082/ready
+```
+
+Use a fresh OIDC member login created after this restart.
+
+## Short regression retest after PR #16
+
+For the post-fix retest, execute only the following unless a prerequisite is missing:
+
+1. Pull latest `main` and record the exact SHA. It must contain `8965a7dfab6dce3c39d66332cd71aee2f8ad993a`.
+2. Verify `workspace_runtime` is `NOSUPERUSER NOBYPASSRLS` as above.
+3. Confirm the Keycloak client still has:
+   - Front-channel logout OFF;
+   - Backchannel logout URL `http://caddy/api/v1/auth/oidc/backchannel-logout`;
+   - Backchannel logout session required ON.
+4. Establish a fresh local/password owner break-glass Workspace session and confirm `GET /api/v1/me` -> 200.
+5. Establish a fresh Keycloak SSO member session and confirm `GET /api/v1/me` -> 200.
+6. If possible, leave the SSO member in an editable page and make a small pre-logout edit to prove collaboration is active.
+7. From a separate Keycloak administrator context, terminate that member's active Keycloak session using Keycloak's normal session controls or official Admin REST endpoint. Do not manually manufacture or POST a logout token.
+8. Confirm Workspace processes the back-channel request with HTTP 200 and **no RLS/audit error or HTTP 500**.
+9. Confirm an `auth.oidc_backchannel_logout` audit event exists.
+10. Using the exact pre-logout member Workspace cookie/session, confirm `GET /api/v1/me` -> 401.
+11. If the editor remained open, attempt a post-logout edit and directly verify that the revoked session cannot continue authenticated persistence after collaboration's session recheck. Do not infer this solely from REST behavior.
+12. Confirm the independent local owner break-glass session still returns 200.
+13. Re-check `workspace_runtime` after the test and prove it is still `NOBYPASSRLS`.
+14. Confirm API/collaboration/worker/Caddy are healthy with zero restart loops and source/recovery deployments were untouched.
+
+A PASS on this short retest closes real-Keycloak back-channel logout acceptance. Directory account disablement remains separate: the first host exercise already proved that simply disabling the user does not terminate the existing Keycloak session or emit back-channel logout.
 
 ## Existing disposable environment
 
@@ -68,7 +129,7 @@ curl --fail http://localhost:8082/ready
 
 Acceptance:
 
-- the tested SHA contains or follows `bd6b0c4a053a93f9dd060003c44a7adaa95768b2`;
+- the tested SHA contains or follows `8965a7dfab6dce3c39d66332cd71aee2f8ad993a`;
 - migration `005_oidc_backchannel.sql` is applied;
 - API/collaboration/worker are healthy;
 - Keycloak remains on the disposable SSO network;
