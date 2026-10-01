@@ -2346,10 +2346,19 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
 
 
 test("reconciliation enumerates only currently accessible resources with encrypted scan positions", async () => {
+  const reconcileUser = randomUUID();
   const hiddenId = "00000000-0000-4000-8000-000000000001";
   const publicId = "00000000-0000-4000-8000-000000000002";
   const laterId = "00000000-0000-4000-8000-000000000003";
   await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,'Reconcile User',true)",
+      [reconcileUser, reconcileUser + '@service.internal'],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, reconcileUser],
+    );
     for (const [id, name] of [
       [hiddenId, "reconcile-hidden"],
       [publicId, "reconcile-public"],
@@ -2364,11 +2373,11 @@ test("reconciliation enumerates only currently accessible resources with encrypt
     await q.query(
       "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
       " VALUES($1,$2,$3,0)",
-      [owner.tenant, hiddenId, member.id],
+      [owner.tenant, hiddenId, reconcileUser],
     );
   });
   const token = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, member.id,
+    createSession(q, owner.tenant, reconcileUser,
       ["events.read", "workspace.read", "pages.read", "databases.read"],
       "Reconcile reader"),
   );
@@ -2420,12 +2429,12 @@ test("reconciliation enumerates only currently accessible resources with encrypt
   assert.equal((await read("/events/reconcile?cursor=" +
     "x".repeat(2050))).statusCode, 400);
   const noEventScope = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, member.id, ["pages.read"],
+    createSession(q, owner.tenant, reconcileUser, ["pages.read"],
       "No event scope"),
   );
   assert.equal((await read("/events/reconcile", noEventScope)).statusCode, 403);
   const noPageScope = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, member.id, ["events.read", "workspace.read"],
+    createSession(q, owner.tenant, reconcileUser, ["events.read", "workspace.read"],
       "No page scope"),
   );
   const restricted = await read("/events/reconcile?limit=100", noPageScope);
@@ -2437,13 +2446,13 @@ test("reconciliation enumerates only currently accessible resources with encrypt
   // a partial pass is never authoritative to delete cached evidence.
   await db.tenant(owner.tenant, (q) => q.query(
     "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
-    [owner.tenant, hiddenId, member.id],
+    [owner.tenant, hiddenId, reconcileUser],
   ));
   assert.ok((await scan(null)).seen.includes(hiddenId));
   await db.tenant(owner.tenant, (q) => q.query(
     "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
     " VALUES($1,$2,$3,0)",
-    [owner.tenant, hiddenId, member.id],
+    [owner.tenant, hiddenId, reconcileUser],
   ));
   const revoked = await scan();
   assert.ok(!revoked.seen.includes(hiddenId));
