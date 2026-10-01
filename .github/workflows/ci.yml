@@ -47,6 +47,15 @@ jobs:
       - run: npm run typecheck
       - run: npm test
         timeout-minutes: 3
+      - name: Verify S3 provider acceptance command
+        env:
+          STORAGE_PROVIDER: s3
+          S3_ENDPOINT: http://127.0.0.1:8333
+          S3_BUCKET: workspace-ci
+          S3_ACCESS_KEY: workspace-ci
+          S3_SECRET_KEY: workspace-ci-secret
+          S3_FORCE_PATH_STYLE: "true"
+        run: npm run verify:s3-provider -- --write-test
       - run: npm run build
   deployment:
     runs-on: ubuntu-latest
