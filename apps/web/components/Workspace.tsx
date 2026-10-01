@@ -667,6 +667,7 @@ function SearchDialog({ close }: { close: () => void }) {
         <Search size={20} aria-hidden="true" />
         <input
           autoFocus
+          data-initial-focus
           role="combobox"
           aria-label="Search workspace"
           aria-autocomplete="list"
