@@ -54,7 +54,7 @@ Current accepted tool releases:
 
 The corresponding commit pins are recorded directly in `.github/workflows/ci.yml`.
 
-The active file-security slice also generates a CycloneDX SBOM and applies the same fixable HIGH/CRITICAL Trivy policy to the exact digest-pinned ClamAV runtime image. Final-head CI evidence is required before that scanner-image gate is considered closed.
+The active file-security slice also generates a CycloneDX SBOM and applies the same fixable HIGH/CRITICAL Trivy policy to the version-pinned ClamAV runtime image. Malware signatures are intentionally refreshed operational data in the persistent scanner database volume. Final-head CI evidence is required before that scanner-image gate is considered closed.
 
 ## Current boundaries
 
