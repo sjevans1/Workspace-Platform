@@ -77,7 +77,7 @@ Allowlisting a private/internal origin is still an explicit deployment-administr
 
 This slice does not close every production-security item. Remaining work includes:
 
-- final-head acceptance of required malware scanning; retained quarantine/CDR remain separate future controls;
+- retained quarantine/CDR, retroactive rescanning and false-positive release procedures remain separate future controls;
 - nonce/hash-based CSP and removal of `unsafe-inline` where compatible;
 - release container/base-OS vulnerability scanning and signed release artifacts;
 - broader browser-engine/accessibility coverage;
