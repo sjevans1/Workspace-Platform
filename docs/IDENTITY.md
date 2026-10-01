@@ -184,7 +184,7 @@ Not yet implemented:
 
 MFA can be required by the external IdP, but Workspace does not yet independently verify or require a particular MFA authentication-context claim.
 
-Workspace accepts standards-based signed OIDC back-channel logout tokens and revokes matching OIDC-created sessions. SCIM User lifecycle supplies the separate directory offboarding path when an IdP account state changes without emitting logout: SCIM `active:false` deactivates the tenant membership and revokes its Workspace sessions. SCIM Groups now synchronize directory membership separately from access state, with explicit owner/admin-controlled mapping to `member` or `guest`. Remaining identity work is broader provider compatibility, per-tenant IdPs, privileged authentication policy and non-SCIM claim mapping where required.
+Workspace accepts standards-based signed OIDC back-channel logout tokens and revokes matching OIDC-created sessions. SCIM User lifecycle supplies the separate directory offboarding path when an IdP account state changes without emitting logout: SCIM `active:false` deactivates the tenant membership and revokes its Workspace sessions. SCIM Groups now synchronize directory membership separately from access state, with explicit owner/admin-controlled mapping to `member` or `guest`. The deployment-level Basic/POST/public-client interoperability methods passed PR #36 final-head run `36827473659` and merged as `12ab73d333243a1ac3068bac6f1560d632b8afd3`. Remaining identity work includes per-tenant IdPs, additional client authentication methods where required, privileged authentication-context policy and non-SCIM claim mapping where expressly approved.
 
 ## Verification
 
