@@ -63,7 +63,7 @@ Private download acceptance also verifies:
 - sandboxed `Content-Security-Policy`;
 - non-image files are served as attachments.
 
-The active file-security slice adds required ClamAV malware inspection before encrypted storage/publication, with fail-closed scanner outages and blocked-upload audit evidence. It does not add sandbox detonation, retained forensic quarantine or content disarm/reconstruction; those remain separate controls.
+Required ClamAV inspection before encrypted storage/publication, fail-closed scanner outages, and blocked-upload audit evidence are verified by PR #35 final-head Actions run `36823852010` (49/49 backend tests, live EICAR and HTTP upload rejection, browser and TLS acceptance). This does not add sandbox detonation, retained forensic quarantine, or content disarm/reconstruction; those remain separate controls.
 
 ## Webhook redirects and SSRF boundary
 
