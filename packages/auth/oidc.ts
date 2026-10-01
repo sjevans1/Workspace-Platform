@@ -36,23 +36,58 @@ export interface OidcProvider {
   validateBackchannelLogout(logoutToken: string): Promise<OidcLogout>;
 }
 
+// Keep provider configuration instance-local. A subsequent tenant-aware router may
+// select an explicit configuration, but it must bind that selection to the
+// authorization request; simply exposing another issuer on the login page is
+// not sufficient to isolate tenants.
+export type OidcProviderSettings = {
+  issuer: string;
+  clientId: string;
+  clientSecret?: string;
+  label?: string;
+  scopes?: readonly string[];
+  allowInsecure?: boolean;
+  requireVerifiedEmail?: boolean;
+  tokenEndpointAuthMethod?: string;
+};
+
 export function oidcFromEnv(): OidcProvider | null {
-  const rawIssuer = process.env.OIDC_ISSUER?.trim(),
+  const issuer = process.env.OIDC_ISSUER?.trim(),
     clientId = process.env.OIDC_CLIENT_ID?.trim(),
     clientSecret = process.env.OIDC_CLIENT_SECRET?.trim();
 
-  if (!rawIssuer && !clientId && !clientSecret) return null;
+  if (!issuer && !clientId && !clientSecret) return null;
+  return oidcFromConfig({
+    issuer: issuer || "",
+    clientId: clientId || "",
+    clientSecret,
+    label: process.env.OIDC_LABEL,
+    scopes: (process.env.OIDC_SCOPES || "openid profile email")
+      .split(/\s+/)
+      .filter(Boolean),
+    allowInsecure: process.env.OIDC_ALLOW_INSECURE === "true",
+    requireVerifiedEmail: process.env.OIDC_REQUIRE_VERIFIED_EMAIL !== "false",
+    tokenEndpointAuthMethod:
+      process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD?.trim(),
+  });
+}
+
+export function oidcFromConfig(settings: Readonly<OidcProviderSettings>): OidcProvider {
+  const rawIssuer = settings.issuer?.trim(),
+    clientId = settings.clientId?.trim(),
+    clientSecret = settings.clientSecret?.trim();
+
   assert(rawIssuer && clientId, 500, "OIDC_ISSUER and OIDC_CLIENT_ID are required");
 
   const issuer = new URL(rawIssuer).href,
-    label = process.env.OIDC_LABEL?.trim() || "Single sign-on",
-    scopes = (process.env.OIDC_SCOPES || "openid profile email")
-      .split(/\s+/)
-      .filter(Boolean),
-    allowInsecure = process.env.OIDC_ALLOW_INSECURE === "true",
-    requireVerifiedEmail = process.env.OIDC_REQUIRE_VERIFIED_EMAIL !== "false",
+    label = settings.label?.trim() || "Single sign-on",
+    scopes = [...(settings.scopes || ["openid", "profile", "email"])].filter(
+      Boolean,
+    ),
+    allowInsecure = settings.allowInsecure === true,
+    requireVerifiedEmail = settings.requireVerifiedEmail !== false,
     tokenAuthMethod =
-      process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD?.trim() ||
+      settings.tokenEndpointAuthMethod?.trim() ||
       (clientSecret ? "client_secret_basic" : "none");
 
   assert(
