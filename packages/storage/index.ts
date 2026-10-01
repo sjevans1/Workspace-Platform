@@ -142,7 +142,8 @@ function createRawStorage(env: NodeJS.ProcessEnv): Storage {
 }
 
 export function createStorage(env: NodeJS.ProcessEnv = process.env): Storage {
-  const mode = (env.STORAGE_ENCRYPTION_MODE || "off") as StorageEncryptionMode;
+  const mode = (env.STORAGE_ENCRYPTION_MODE ||
+    "legacy-read") as StorageEncryptionMode;
   if (!["off", "legacy-read", "required"].includes(mode))
     throw new Error(
       "STORAGE_ENCRYPTION_MODE must be off, legacy-read, or required",
