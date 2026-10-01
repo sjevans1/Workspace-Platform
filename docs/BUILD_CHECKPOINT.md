@@ -1,6 +1,6 @@
 # Build checkpoint
 
-Updated 30 September 2026. Repository: https://github.com/sjevans1/Workspace-Platform
+Updated 1 October 2026. Repository: https://github.com/sjevans1/Workspace-Platform
 
 ## Scope and authorization
 
@@ -8,10 +8,9 @@ Build the self-hosted OpenJM Workspace first pass from the Astra handoff. The us
 
 ## Verified baseline and evidence
 
-Runtime and tests: `e10d5676795f94a13a831989be3ace1e4b2c76fe`.
-Successful CI: https://github.com/sjevans1/Workspace-Platform/actions/runs/36611129995
+Current verified production-hardening baseline: PR #32 merge `ab9d9fd8cdfded1c558aadc5360bb97ce9081063` with final-head CI https://github.com/sjevans1/Workspace-Platform/actions/runs/36819278521.
 
-- Backend job passed: 23 native PostgreSQL tests, TypeScript and production build.
+- Backend job passed: 45 native PostgreSQL tests, TypeScript, encrypted S3 acceptance and production build.
 - Deployment job passed: Docker image, migrations, full Compose startup and readiness.
 - Complete deployed Chromium scenario passed: setup, page creation, canonical server persistence, two independent browser sessions, shared edits, reload, comments, history, Markdown export, table editing, board movement and mobile navigation/layout.
 - Desktop and mobile screenshots were inspected. Successful-run screenshots remain in the CI browser-results artifact; precise boundaries are in ACCEPTANCE.md. Automatic approval review blocked committing screenshots to the public repository because they contain workspace/user labels. Do not retry that upload without resolving the approval requirement.
@@ -25,7 +24,7 @@ Successful CI: https://github.com/sjevans1/Workspace-Platform/actions/runs/36611
 - Trash traversal skips already-deleted descendants; numeric filters use numeric comparisons; record title limits match resource limits.
 - Docker excludes generated Next.js type references and defaults host bindings to loopback. HTTPS instructions include an explicit public bind address.
 
-## Active next slice: storage recovery and two-user revocation
+## Historical verified slice: storage recovery and two-user revocation
 
 The user authorized continuation after the verified first pass. The next increment adds an authenticated SeaweedFS 4.47 service to CI and a recovery test using separate source/recovery PostgreSQL databases and S3 buckets. It covers anonymous and bad-credential rejection, immutable object writes, canonical Yjs and retained-file recovery, checksum/key/schema checks, collision handling and upload-failure rollback. S3 PUT now uses If-None-Match to match local storage’s no-overwrite contract; storage clients are closed on shutdown.
 
@@ -197,20 +196,19 @@ PR #30 passed final-head GitHub Actions run 36815628321 and was squash-merged to
 
 Workspace now encrypts attachment/object bytes before they reach either local filesystem storage or an S3-compatible provider. The envelope uses AES-256-GCM with a random nonce, a storage-specific HKDF-derived key and the immutable object key as authenticated additional data. New generated deployments use `STORAGE_ENCRYPTION_MODE=required`; existing deployments without the setting enter a bounded `legacy-read` upgrade state where new writes are encrypted while old plaintext objects remain readable only until migration.
 
-The maintenance migration writes encrypted replacements under new immutable keys, atomically repoints file metadata and queues the old plaintext keys for durable deletion using the existing object-deletion mechanism. It is resumable and idempotent. Logical backup files are now written as AES-256-GCM encrypted envelopes derived from the deployment key; legacy plaintext backup archives remain readable for recovery compatibility only.
+The maintenance migration writes encrypted replacements under new immutable keys, atomically repoints file metadata and queues the old plaintext keys for durable deletion using the existing object-deletion mechanism. It is resumable and idempotent. Logical backup files are now written as AES-256-GCM encrypted envelopes derived from the deployment key; legacy plaintext backup archives require an explicit one-time restore opt-in.
 
 Regression coverage includes authenticated object encryption/key binding, real local-filesystem ciphertext verification, wrong-key failure, backup-envelope secrecy/wrong-key rejection, full plaintext-object migration lifecycle/idempotence, S3 recovery with required encryption, and raw-provider ciphertext assertions. PostgreSQL/WAL encryption remains a host/provider deployment control because whole-database field encryption would break RLS/search/query semantics.
 
 PR #32 passed final-head GitHub Actions run `36819278521` and was squash-merged to `main` at `ab9d9fd8cdfded1c558aadc5360bb97ce9081063`. Backend passed 45/45 native PostgreSQL tests plus encrypted S3 acceptance and production build. Deployment passed the production-only runtime check, container SBOM, Trivy HIGH/CRITICAL gate, live Chromium workflow, raw local-volume ciphertext verification, Chromium + Firefox keyboard/semantic acceptance, and trusted HTTPS/secure-cookie/WSS. Legacy plaintext backup restore requires explicit one-time opt-in. This slice is closed.
 
-This slice remains **in progress** until final-head native PostgreSQL tests, production S3 harness, typecheck/build, Docker deployment, Chromium + Firefox accessibility and trusted-TLS gates all pass.
 
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-SCIM Groups/group-role mapping is closed and verified. Trusted TLS/customer-like edge acceptance is closed in CI. The next host-level operations acceptance is validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; provider compatibility, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+SCIM Groups/group-role mapping, trusted TLS, operational tenant provisioning, external monitoring, adversarial security coverage, Chromium + Firefox accessibility, release-image security and encryption at rest are closed and verified. For deployments selecting S3-compatible storage, provider acceptance remains a deployment-specific host gate; local-filesystem deployments do not depend on it. The next cross-deployment engineering gate is file antivirus/quarantine. Follow ACCEPTANCE.md for the remaining identity/provider, offline/scale, product-depth, integration and release-candidate work.
 
 ## Continuity and execution notes
 
-All durable source belongs in this GitHub repository. Commit tested increments and update this checkpoint before any pause. Do not depend on temporary local files or conversational tool stores. Local Chromium cannot launch in the managed execution environment; use GitHub Actions for browser and Docker verification. Local tests use PGlite; CI uses native PostgreSQL. Run shell commands with bash and login disabled. Git fetch works, but authenticated publication uses the GitHub connector tree/commit/ref tools; preserve local edits when aligning with the published head. Never reset hard.
+All durable source belongs in this GitHub repository. Commit tested increments and update this checkpoint before any pause. Keep one active engineering branch/PR at a time: merge only after final-head acceptance, update the checkpoint on `main`, delete the merged branch, then create the next branch. Routine Dependabot version maintenance is grouped monthly by ecosystem; major upgrades remain deliberate engineering slices. Do not depend on temporary local files or conversational tool stores. Local Chromium cannot launch in the managed execution environment; use GitHub Actions for browser and Docker verification. Local tests use PGlite; CI uses native PostgreSQL. Run shell commands with bash and login disabled. Git fetch works, but authenticated publication uses the GitHub connector tree/commit/ref tools; preserve local edits when aligning with the published head. Never reset hard.
