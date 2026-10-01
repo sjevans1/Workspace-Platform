@@ -37,6 +37,10 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     space = randomUUID(),
     page = randomUUID(),
     file = randomUUID(),
+    user = randomUUID(),
+    connector = randomUUID(),
+    scimUser = randomUUID(),
+    scimGroup = randomUUID(),
     key = `${tenant}/${page}/${file}`;
   const state = blocksToState([
     { type: "paragraph", content: "Backup evidence" },
@@ -67,6 +71,34 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
         "INSERT INTO files(id,tenant_id,resource_id,object_key,name,mime,size) VALUES($1,$2,$3,$4,'evidence.txt','text/plain',13)",
         [file, tenant, page, key],
       );
+      await q.query(
+        "INSERT INTO users(id,email,name,password_hash) VALUES($1,'directory@example.test','Directory User',NULL)",
+        [user],
+      );
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'guest',true)",
+        [tenant, user],
+      );
+      await q.query(
+        "INSERT INTO scim_connectors(id,tenant_id,label,token_hash,default_role,created_by) VALUES($1,$2,'Directory','backup-token-hash','guest',$3)",
+        [connector, tenant, user],
+      );
+      await q.query(
+        "INSERT INTO scim_users(id,tenant_id,user_id,external_id,user_name,display_name,base_role) VALUES($1,$2,$3,'backup-user','directory@example.test','Directory User','guest')",
+        [scimUser, tenant, user],
+      );
+      await q.query(
+        "INSERT INTO scim_groups(id,tenant_id,external_id,display_name) VALUES($1,$2,'backup-group','Backup Group')",
+        [scimGroup, tenant],
+      );
+      await q.query(
+        "INSERT INTO scim_group_role_mappings(tenant_id,group_id,role,created_by) VALUES($1,$2,'member',$3)",
+        [tenant, scimGroup, user],
+      );
+      await q.query(
+        "INSERT INTO scim_group_members(tenant_id,group_id,scim_user_id) VALUES($1,$2,$3)",
+        [tenant, scimGroup, scimUser],
+      );
     });
     await source.storage.put(key, Buffer.from("Private bytes"), "text/plain");
     const archive = await backup(pg.url, source.storage);
@@ -84,6 +116,28 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     );
     assert.equal(rows.rows[0].plain_text, "Backup evidence");
     assert(Buffer.from(rows.rows[0].y_state).equals(state));
+    const directory = await db.tenant(tenant, async (q) => ({
+      user: await q.query(
+        "SELECT base_role FROM scim_users WHERE id=$1",
+        [scimUser],
+      ),
+      group: await q.query(
+        "SELECT display_name FROM scim_groups WHERE id=$1",
+        [scimGroup],
+      ),
+      mapping: await q.query(
+        "SELECT role FROM scim_group_role_mappings WHERE group_id=$1",
+        [scimGroup],
+      ),
+      members: await q.query(
+        "SELECT scim_user_id FROM scim_group_members WHERE group_id=$1",
+        [scimGroup],
+      ),
+    }));
+    assert.equal(directory.user.rows[0].base_role, "guest");
+    assert.equal(directory.group.rows[0].display_name, "Backup Group");
+    assert.equal(directory.mapping.rows[0].role, "member");
+    assert.equal(directory.members.rows[0].scim_user_id, scimUser);
     assert.equal((await target.storage.get(key)).toString(), "Private bytes");
   } finally {
     await db.close();

@@ -19,6 +19,7 @@ import {
 
 const SCIM_JSON = "application/scim+json",
   USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User",
+  GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group",
   LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse",
   ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error",
   PATCH_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp",
@@ -73,6 +74,25 @@ const email = z.email().transform((value) => value.trim().toLowerCase()),
         .max(20)
         .optional(),
       active: z.boolean().optional(),
+    })
+    .passthrough(),
+  scimGroupInput = z
+    .object({
+      schemas: z.array(z.string()).optional(),
+      displayName: z.string().trim().min(1).max(500),
+      externalId: z.string().trim().max(500).nullable().optional(),
+      members: z
+        .array(
+          z
+            .object({
+              value: uuid,
+              display: z.string().trim().max(500).optional(),
+              $ref: z.string().max(2000).optional(),
+            })
+            .passthrough(),
+        )
+        .max(2000)
+        .optional(),
     })
     .passthrough(),
   patchInput = z
@@ -175,6 +195,219 @@ async function loadUser(q: Query, id: string) {
   );
 }
 
+async function loadGroup(q: Query, id: string) {
+  const group = await one(
+    q,
+    `SELECT g.*,m.role AS mapped_role
+     FROM scim_groups g
+     LEFT JOIN scim_group_role_mappings m ON m.group_id=g.id
+     WHERE g.id=$1 AND g.deleted_at IS NULL`,
+    [id],
+  );
+  if (!group) return undefined;
+  group.members = (
+    await q.query(
+      `SELECT s.id AS value,s.user_name AS display
+       FROM scim_group_members gm
+       JOIN scim_users s ON s.id=gm.scim_user_id
+       WHERE gm.group_id=$1 AND s.deleted_at IS NULL
+       ORDER BY lower(s.user_name),s.id`,
+      [id],
+    )
+  ).rows;
+  return group;
+}
+
+function groupResource(row: any, base: string) {
+  return {
+    schemas: [GROUP_SCHEMA],
+    id: row.id,
+    ...(row.external_id ? { externalId: row.external_id } : {}),
+    displayName: row.display_name,
+    members: (row.members || []).map((member: any) => ({
+      value: member.value,
+      ...(member.display ? { display: member.display } : {}),
+      $ref: `${base}/Users/${member.value}`,
+    })),
+    meta: {
+      resourceType: "Group",
+      created: new Date(row.created_at).toISOString(),
+      lastModified: new Date(row.updated_at).toISOString(),
+      location: `${base}/Groups/${row.id}`,
+      version: version(row.updated_at),
+    },
+  };
+}
+
+async function assertScimUsers(q: Query, ids: string[]) {
+  const unique = [...new Set(ids)];
+  if (!unique.length) return unique;
+  const rows = (
+    await q.query(
+      `SELECT id FROM scim_users
+       WHERE deleted_at IS NULL AND id=ANY($1::uuid[])`,
+      [unique],
+    )
+  ).rows;
+  if (rows.length !== unique.length)
+    throw new ScimError(
+      400,
+      "Group members must reference live SCIM User resource IDs in this tenant",
+      "invalidValue",
+    );
+  return unique;
+}
+
+async function reconcileScimRole(q: Query, scimUserId: string) {
+  const state = await one(
+    q,
+    `SELECT s.user_id,s.base_role,m.role AS current_role,
+       EXISTS(
+         SELECT 1
+         FROM scim_group_members gm
+         JOIN scim_groups g ON g.id=gm.group_id AND g.deleted_at IS NULL
+         JOIN scim_group_role_mappings rm ON rm.group_id=gm.group_id
+         WHERE gm.scim_user_id=s.id AND rm.role='member'
+       ) AS member_group,
+       EXISTS(
+         SELECT 1
+         FROM scim_group_members gm
+         JOIN scim_groups g ON g.id=gm.group_id AND g.deleted_at IS NULL
+         JOIN scim_group_role_mappings rm ON rm.group_id=gm.group_id
+         WHERE gm.scim_user_id=s.id AND rm.role='guest'
+       ) AS guest_group
+     FROM scim_users s
+     JOIN memberships m ON m.tenant_id=s.tenant_id AND m.user_id=s.user_id
+     WHERE s.id=$1 AND s.deleted_at IS NULL`,
+    [scimUserId],
+  );
+  if (!state || ["owner", "admin"].includes(state.current_role)) return;
+  const role = state.member_group
+    ? "member"
+    : state.guest_group
+      ? "guest"
+      : state.base_role;
+  await q.query(
+    `UPDATE memberships m
+     SET role=$2
+     FROM scim_users s
+     WHERE s.id=$1 AND m.tenant_id=s.tenant_id AND m.user_id=s.user_id`,
+    [scimUserId, role],
+  );
+}
+
+export async function setScimGroupRoleMapping(
+  q: Query,
+  tenantId: string,
+  groupId: string,
+  role: "member" | "guest" | null,
+  actorId: string,
+) {
+  const group = await one(
+    q,
+    "SELECT id FROM scim_groups WHERE id=$1 AND deleted_at IS NULL",
+    [groupId],
+  );
+  if (!group) throw new HttpError(404, "SCIM group not found");
+  if (role)
+    await q.query(
+      `INSERT INTO scim_group_role_mappings(
+        tenant_id,group_id,role,created_by
+      ) VALUES($1,$2,$3,$4)
+      ON CONFLICT(group_id) DO UPDATE
+      SET role=excluded.role,updated_at=now()`,
+      [tenantId, groupId, role, actorId],
+    );
+  else
+    await q.query(
+      "DELETE FROM scim_group_role_mappings WHERE group_id=$1",
+      [groupId],
+    );
+
+  const members = (
+    await q.query(
+      "SELECT scim_user_id FROM scim_group_members WHERE group_id=$1",
+      [groupId],
+    )
+  ).rows;
+  for (const row of members) await reconcileScimRole(q, row.scim_user_id);
+}
+
+async function replaceGroupMembers(
+  q: Query,
+  tenantId: string,
+  groupId: string,
+  memberIds: string[],
+) {
+  const next = await assertScimUsers(q, memberIds),
+    previous = (
+      await q.query(
+        "SELECT scim_user_id FROM scim_group_members WHERE group_id=$1",
+        [groupId],
+      )
+    ).rows.map((row) => row.scim_user_id as string),
+    affected = [...new Set([...previous, ...next])];
+
+  await q.query("DELETE FROM scim_group_members WHERE group_id=$1", [groupId]);
+  for (const scimUserId of next)
+    await q.query(
+      "INSERT INTO scim_group_members(tenant_id,group_id,scim_user_id) VALUES($1,$2,$3)",
+      [tenantId, groupId, scimUserId],
+    );
+  await q.query("UPDATE scim_groups SET updated_at=now() WHERE id=$1", [groupId]);
+  for (const scimUserId of affected) await reconcileScimRole(q, scimUserId);
+}
+
+async function addGroupMembers(
+  q: Query,
+  tenantId: string,
+  groupId: string,
+  memberIds: string[],
+) {
+  const ids = await assertScimUsers(q, memberIds);
+  for (const scimUserId of ids)
+    await q.query(
+      `INSERT INTO scim_group_members(tenant_id,group_id,scim_user_id)
+       VALUES($1,$2,$3) ON CONFLICT DO NOTHING`,
+      [tenantId, groupId, scimUserId],
+    );
+  await q.query("UPDATE scim_groups SET updated_at=now() WHERE id=$1", [groupId]);
+  for (const scimUserId of ids) await reconcileScimRole(q, scimUserId);
+}
+
+async function removeGroupMembers(
+  q: Query,
+  groupId: string,
+  memberIds?: string[],
+) {
+  const removed = memberIds?.length
+    ? (
+        await q.query(
+          `DELETE FROM scim_group_members
+           WHERE group_id=$1 AND scim_user_id=ANY($2::uuid[])
+           RETURNING scim_user_id`,
+          [groupId, memberIds],
+        )
+      ).rows
+    : (
+        await q.query(
+          "DELETE FROM scim_group_members WHERE group_id=$1 RETURNING scim_user_id",
+          [groupId],
+        )
+      ).rows;
+  await q.query("UPDATE scim_groups SET updated_at=now() WHERE id=$1", [groupId]);
+  for (const row of removed) await reconcileScimRole(q, row.scim_user_id);
+}
+
+function groupMemberValues(value: unknown) {
+  const input = Array.isArray(value) ? value : value ? [value] : [];
+  return input.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      throw new ScimError(400, "Group members must be objects", "invalidValue");
+    return uuid.parse((item as any).value);
+  });
+}
+
 async function audit(
   q: Query,
   tenantId: string,
@@ -221,6 +454,36 @@ function parseFilter(raw: unknown) {
     throw new ScimError(400, "Invalid SCIM filter string", "invalidFilter");
   }
   return { field: match[1].toLowerCase(), value };
+}
+
+function parseGroupFilter(raw: unknown) {
+  if (raw == null || raw === "") return null;
+  const text = String(raw),
+    match = text.match(
+      /^\s*(displayName|externalId)\s+eq\s+("(?:[^"\\]|\\.)*")\s*$/i,
+    );
+  if (!match)
+    throw new ScimError(
+      400,
+      "Only displayName eq and externalId eq filters are supported for Groups",
+      "invalidFilter",
+    );
+  let value = "";
+  try {
+    value = JSON.parse(match[2]);
+  } catch {
+    throw new ScimError(400, "Invalid SCIM filter string", "invalidFilter");
+  }
+  return { field: match[1].toLowerCase(), value };
+}
+
+function assertGroupSchema(input: { schemas?: string[] }) {
+  if (
+    input.schemas &&
+    input.schemas.length &&
+    !input.schemas.includes(GROUP_SCHEMA)
+  )
+    throw new ScimError(400, "Group schema is required", "invalidValue");
 }
 
 function assertSchema(input: { schemas?: string[] }) {
@@ -415,127 +678,209 @@ export async function registerScim(app: FastifyInstance, db: Database) {
         ),
       );
 
-      const resourceType = {
-        schemas: [RESOURCE_TYPE_SCHEMA],
-        id: "User",
-        name: "User",
-        endpoint: "/Users",
-        description: "Workspace tenant membership managed through SCIM",
-        schema: USER_SCHEMA,
-        meta: {
-          resourceType: "ResourceType",
-          location: `${base}/ResourceTypes/User`,
+      const userResourceType = {
+          schemas: [RESOURCE_TYPE_SCHEMA],
+          id: "User",
+          name: "User",
+          endpoint: "/Users",
+          description: "Workspace tenant membership managed through SCIM",
+          schema: USER_SCHEMA,
+          meta: {
+            resourceType: "ResourceType",
+            location: `${base}/ResourceTypes/User`,
+          },
         },
-      };
+        groupResourceType = {
+          schemas: [RESOURCE_TYPE_SCHEMA],
+          id: "Group",
+          name: "Group",
+          endpoint: "/Groups",
+          description: "Workspace tenant directory group",
+          schema: GROUP_SCHEMA,
+          meta: {
+            resourceType: "ResourceType",
+            location: `${base}/ResourceTypes/Group`,
+          },
+        };
       scim.get("/ResourceTypes", async (request, reply) =>
         tenant(request, async () =>
           send(reply, {
             schemas: [LIST_SCHEMA],
-            totalResults: 1,
+            totalResults: 2,
             startIndex: 1,
-            itemsPerPage: 1,
-            Resources: [resourceType],
+            itemsPerPage: 2,
+            Resources: [userResourceType, groupResourceType],
           }),
         ),
       );
       scim.get("/ResourceTypes/User", async (request, reply) =>
-        tenant(request, async () => send(reply, resourceType)),
+        tenant(request, async () => send(reply, userResourceType)),
+      );
+      scim.get("/ResourceTypes/Group", async (request, reply) =>
+        tenant(request, async () => send(reply, groupResourceType)),
       );
 
       const userSchema = {
-        schemas: [SCHEMA_SCHEMA],
-        id: USER_SCHEMA,
-        name: "User",
-        description: "OpenJM Workspace SCIM User",
-        attributes: [
-          {
-            name: "userName",
-            type: "string",
-            multiValued: false,
-            required: true,
-            caseExact: false,
-            mutability: "immutable",
-            returned: "default",
-            uniqueness: "server",
+          schemas: [SCHEMA_SCHEMA],
+          id: USER_SCHEMA,
+          name: "User",
+          description: "OpenJM Workspace SCIM User",
+          attributes: [
+            {
+              name: "userName",
+              type: "string",
+              multiValued: false,
+              required: true,
+              caseExact: false,
+              mutability: "immutable",
+              returned: "default",
+              uniqueness: "server",
+            },
+            {
+              name: "externalId",
+              type: "string",
+              multiValued: false,
+              required: false,
+              caseExact: true,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "displayName",
+              type: "string",
+              multiValued: false,
+              required: false,
+              caseExact: false,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "active",
+              type: "boolean",
+              multiValued: false,
+              required: false,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "emails",
+              type: "complex",
+              multiValued: true,
+              required: false,
+              mutability: "immutable",
+              returned: "default",
+              subAttributes: [
+                {
+                  name: "value",
+                  type: "string",
+                  multiValued: false,
+                  required: true,
+                  mutability: "immutable",
+                  returned: "default",
+                },
+                {
+                  name: "primary",
+                  type: "boolean",
+                  multiValued: false,
+                  required: false,
+                  mutability: "immutable",
+                  returned: "default",
+                },
+              ],
+            },
+          ],
+          meta: {
+            resourceType: "Schema",
+            location: `${base}/Schemas/${encodeURIComponent(USER_SCHEMA)}`,
           },
-          {
-            name: "externalId",
-            type: "string",
-            multiValued: false,
-            required: false,
-            caseExact: true,
-            mutability: "readWrite",
-            returned: "default",
-            uniqueness: "none",
-          },
-          {
-            name: "displayName",
-            type: "string",
-            multiValued: false,
-            required: false,
-            caseExact: false,
-            mutability: "readWrite",
-            returned: "default",
-            uniqueness: "none",
-          },
-          {
-            name: "active",
-            type: "boolean",
-            multiValued: false,
-            required: false,
-            mutability: "readWrite",
-            returned: "default",
-            uniqueness: "none",
-          },
-          {
-            name: "emails",
-            type: "complex",
-            multiValued: true,
-            required: false,
-            mutability: "immutable",
-            returned: "default",
-            subAttributes: [
-              {
-                name: "value",
-                type: "string",
-                multiValued: false,
-                required: true,
-                mutability: "immutable",
-                returned: "default",
-              },
-              {
-                name: "primary",
-                type: "boolean",
-                multiValued: false,
-                required: false,
-                mutability: "immutable",
-                returned: "default",
-              },
-            ],
-          },
-        ],
-        meta: {
-          resourceType: "Schema",
-          location: `${base}/Schemas/${encodeURIComponent(USER_SCHEMA)}`,
         },
-      };
+        groupSchema = {
+          schemas: [SCHEMA_SCHEMA],
+          id: GROUP_SCHEMA,
+          name: "Group",
+          description: "OpenJM Workspace SCIM Group",
+          attributes: [
+            {
+              name: "displayName",
+              type: "string",
+              multiValued: false,
+              required: true,
+              caseExact: false,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "server",
+            },
+            {
+              name: "externalId",
+              type: "string",
+              multiValued: false,
+              required: false,
+              caseExact: true,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "members",
+              type: "complex",
+              multiValued: true,
+              required: false,
+              mutability: "readWrite",
+              returned: "default",
+              subAttributes: [
+                {
+                  name: "value",
+                  type: "string",
+                  multiValued: false,
+                  required: true,
+                  mutability: "immutable",
+                  returned: "default",
+                },
+                {
+                  name: "display",
+                  type: "string",
+                  multiValued: false,
+                  required: false,
+                  mutability: "readOnly",
+                  returned: "default",
+                },
+                {
+                  name: "$ref",
+                  type: "reference",
+                  referenceTypes: ["User"],
+                  multiValued: false,
+                  required: false,
+                  mutability: "readOnly",
+                  returned: "default",
+                },
+              ],
+            },
+          ],
+          meta: {
+            resourceType: "Schema",
+            location: `${base}/Schemas/${encodeURIComponent(GROUP_SCHEMA)}`,
+          },
+        };
       scim.get("/Schemas", async (request, reply) =>
         tenant(request, async () =>
           send(reply, {
             schemas: [LIST_SCHEMA],
-            totalResults: 1,
+            totalResults: 2,
             startIndex: 1,
-            itemsPerPage: 1,
-            Resources: [userSchema],
+            itemsPerPage: 2,
+            Resources: [userSchema, groupSchema],
           }),
         ),
       );
       scim.get("/Schemas/:id", async (request, reply) =>
         tenant(request, async () => {
           const id = String((request.params as any).id || "");
-          if (id !== USER_SCHEMA)
-            throw new ScimError(404, "Schema not found");
-          return send(reply, userSchema);
+          if (id === USER_SCHEMA) return send(reply, userSchema);
+          if (id === GROUP_SCHEMA) return send(reply, groupSchema);
+          throw new ScimError(404, "Schema not found");
         }),
       );
 
@@ -679,8 +1024,8 @@ export async function registerScim(app: FastifyInstance, db: Database) {
           const scimId = randomUUID();
           await q.query(
             `INSERT INTO scim_users(
-              id,tenant_id,user_id,external_id,user_name,display_name
-            ) VALUES($1,$2,$3,$4,$5,$6)`,
+              id,tenant_id,user_id,external_id,user_name,display_name,base_role
+            ) VALUES($1,$2,$3,$4,$5,$6,$7)`,
             [
               scimId,
               context.tenant_id,
@@ -688,6 +1033,7 @@ export async function registerScim(app: FastifyInstance, db: Database) {
               input.externalId || null,
               userName,
               input.displayName || name || null,
+              context.default_role,
             ],
           );
           await audit(q, context.tenant_id, request.id, "scim.user.provisioned");
@@ -789,6 +1135,294 @@ export async function registerScim(app: FastifyInstance, db: Database) {
             [id],
           );
           await audit(q, context.tenant_id, request.id, "scim.user.deleted");
+          return send(reply, null, 204);
+        }),
+      );
+
+      scim.get("/Groups", async (request, reply) =>
+        tenant(request, async (q) => {
+          const params = request.query as Record<string, unknown>,
+            filter = parseGroupFilter(params.filter),
+            startIndex = Math.max(1, Number(params.startIndex) || 1),
+            count = Math.min(100, Math.max(0, Number(params.count) || 100)),
+            where: string[] = ["g.deleted_at IS NULL"],
+            values: unknown[] = [];
+
+          if (filter?.field === "displayname") {
+            values.push(filter.value);
+            where.push(`lower(g.display_name)=lower($${values.length})`);
+          } else if (filter?.field === "externalid") {
+            values.push(filter.value);
+            where.push(`g.external_id=$${values.length}`);
+          }
+
+          const total = Number(
+              (
+                await one(
+                  q,
+                  `SELECT count(*) n FROM scim_groups g
+                   WHERE ${where.join(" AND ")}`,
+                  values,
+                )
+              ).n,
+            ),
+            queryValues = [...values, count, startIndex - 1],
+            rows = (
+              await q.query(
+                `SELECT g.id
+                 FROM scim_groups g
+                 WHERE ${where.join(" AND ")}
+                 ORDER BY lower(g.display_name),g.id
+                 LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+                queryValues,
+              )
+            ).rows,
+            resources = [];
+          for (const row of rows)
+            resources.push(groupResource(await loadGroup(q, row.id), base));
+
+          return send(reply, {
+            schemas: [LIST_SCHEMA],
+            totalResults: total,
+            startIndex,
+            itemsPerPage: resources.length,
+            Resources: resources,
+          });
+        }),
+      );
+
+      scim.get("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q) => {
+          const id = uuid.parse((request.params as any).id),
+            row = await loadGroup(q, id);
+          if (!row) throw new ScimError(404, "Group not found");
+          return send(reply, groupResource(row, base));
+        }),
+      );
+
+      scim.post("/Groups", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const input = scimGroupInput.parse(request.body);
+          assertGroupSchema(input);
+          const id = randomUUID();
+          await q.query(
+            `INSERT INTO scim_groups(
+              id,tenant_id,external_id,display_name
+            ) VALUES($1,$2,$3,$4)`,
+            [
+              id,
+              context.tenant_id,
+              input.externalId || null,
+              input.displayName,
+            ],
+          );
+          await replaceGroupMembers(
+            q,
+            context.tenant_id,
+            id,
+            (input.members || []).map((member) => member.value),
+          );
+          await audit(q, context.tenant_id, request.id, "scim.group.created");
+          reply.header("Location", `${base}/Groups/${id}`);
+          return send(reply, groupResource(await loadGroup(q, id), base), 201);
+        }),
+      );
+
+      scim.put("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const id = uuid.parse((request.params as any).id),
+            current = await loadGroup(q, id);
+          if (!current) throw new ScimError(404, "Group not found");
+          const input = scimGroupInput.parse(request.body);
+          assertGroupSchema(input);
+          await q.query(
+            `UPDATE scim_groups
+             SET display_name=$2,external_id=$3,updated_at=now()
+             WHERE id=$1`,
+            [id, input.displayName, input.externalId || null],
+          );
+          await replaceGroupMembers(
+            q,
+            context.tenant_id,
+            id,
+            (input.members || []).map((member) => member.value),
+          );
+          await audit(q, context.tenant_id, request.id, "scim.group.updated");
+          return send(reply, groupResource(await loadGroup(q, id), base));
+        }),
+      );
+
+      scim.patch("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const id = uuid.parse((request.params as any).id),
+            current = await loadGroup(q, id);
+          if (!current) throw new ScimError(404, "Group not found");
+          const patch = patchInput.parse(request.body);
+          if (!patch.schemas.includes(PATCH_SCHEMA))
+            throw new ScimError(
+              400,
+              "PatchOp schema is required",
+              "invalidSyntax",
+            );
+
+          let nextName = current.display_name as string,
+            nextExternal = current.external_id as string | null,
+            attributesChanged = false;
+
+          const assignAttribute = (
+            key: string,
+            value: unknown,
+            remove: boolean,
+          ) => {
+            const normalized = key.toLowerCase();
+            if (normalized === "displayname") {
+              if (remove)
+                throw new ScimError(
+                  400,
+                  "displayName cannot be removed",
+                  "mutability",
+                );
+              if (
+                typeof value !== "string" ||
+                !value.trim() ||
+                value.trim().length > 500
+              )
+                throw new ScimError(
+                  400,
+                  "displayName must be a nonempty string",
+                  "invalidValue",
+                );
+              nextName = value.trim();
+              attributesChanged = true;
+              return true;
+            }
+            if (normalized === "externalid") {
+              if (remove || value === null) nextExternal = null;
+              else if (typeof value === "string" && value.length <= 500)
+                nextExternal = value.trim() || null;
+              else
+                throw new ScimError(
+                  400,
+                  "externalId must be a string",
+                  "invalidValue",
+                );
+              attributesChanged = true;
+              return true;
+            }
+            return false;
+          };
+
+          for (const operation of patch.Operations) {
+            const remove = operation.op === "remove",
+              path = operation.path?.trim();
+
+            if (path) {
+              if (assignAttribute(path, operation.value, remove)) continue;
+              if (path.toLowerCase() === "members") {
+                if (operation.op === "add")
+                  await addGroupMembers(
+                    q,
+                    context.tenant_id,
+                    id,
+                    groupMemberValues(operation.value),
+                  );
+                else if (operation.op === "replace")
+                  await replaceGroupMembers(
+                    q,
+                    context.tenant_id,
+                    id,
+                    groupMemberValues(operation.value),
+                  );
+                else await removeGroupMembers(q, id);
+                continue;
+              }
+              const memberMatch = path.match(
+                /^members\s*\[\s*value\s+eq\s+"([0-9a-f-]{36})"\s*\]$/i,
+              );
+              if (memberMatch && operation.op === "remove") {
+                await removeGroupMembers(q, id, [uuid.parse(memberMatch[1])]);
+                continue;
+              }
+              throw new ScimError(
+                400,
+                `Unsupported Group PATCH path ${path}`,
+                "invalidPath",
+              );
+            }
+
+            if (
+              operation.op !== "remove" &&
+              operation.value &&
+              typeof operation.value === "object" &&
+              !Array.isArray(operation.value)
+            ) {
+              for (const [key, value] of Object.entries(
+                operation.value as Record<string, unknown>,
+              )) {
+                if (assignAttribute(key, value, false)) continue;
+                if (key.toLowerCase() === "members") {
+                  if (operation.op === "add")
+                    await addGroupMembers(
+                      q,
+                      context.tenant_id,
+                      id,
+                      groupMemberValues(value),
+                    );
+                  else
+                    await replaceGroupMembers(
+                      q,
+                      context.tenant_id,
+                      id,
+                      groupMemberValues(value),
+                    );
+                  continue;
+                }
+                throw new ScimError(
+                  400,
+                  `Unsupported Group attribute ${key}`,
+                  "invalidPath",
+                );
+              }
+              continue;
+            }
+            throw new ScimError(
+              400,
+              "Group PATCH operation requires a supported path or object value",
+              "invalidSyntax",
+            );
+          }
+
+          if (attributesChanged)
+            await q.query(
+              `UPDATE scim_groups
+               SET display_name=$2,external_id=$3,updated_at=now()
+               WHERE id=$1`,
+              [id, nextName, nextExternal],
+            );
+          await audit(q, context.tenant_id, request.id, "scim.group.updated");
+          return send(reply, groupResource(await loadGroup(q, id), base));
+        }),
+      );
+
+      scim.delete("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const id = uuid.parse((request.params as any).id),
+            current = await loadGroup(q, id);
+          if (!current) throw new ScimError(404, "Group not found");
+          const affected = (current.members || []).map(
+            (member: any) => member.value as string,
+          );
+          await q.query("DELETE FROM scim_group_role_mappings WHERE group_id=$1", [
+            id,
+          ]);
+          await q.query("DELETE FROM scim_group_members WHERE group_id=$1", [id]);
+          await q.query(
+            "UPDATE scim_groups SET deleted_at=now(),updated_at=now() WHERE id=$1",
+            [id],
+          );
+          for (const scimUserId of affected)
+            await reconcileScimRole(q, scimUserId);
+          await audit(q, context.tenant_id, request.id, "scim.group.deleted");
           return send(reply, null, 204);
         }),
       );
