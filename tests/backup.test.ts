@@ -4,7 +4,12 @@ import { randomUUID } from "node:crypto";
 import { testPostgres } from "../scripts/test-postgres.ts";
 import { migrate } from "../packages/database/migrate.ts";
 import { Database } from "../packages/database/index.ts";
-import { backup, restore } from "../scripts/backup.ts";
+import {
+  backup,
+  restore,
+  sealArchive,
+  openArchive,
+} from "../scripts/backup.ts";
 import type { Storage } from "../packages/storage/index.ts";
 import { blocksToState } from "../packages/editor/server.ts";
 function memory() {
@@ -27,6 +32,7 @@ function memory() {
 }
 test("backup round-trip restores metadata, canonical Yjs bytes and private objects; corrupt and nonempty restores fail", async () => {
   process.env.ENCRYPTION_KEY = "a".repeat(64);
+  process.env.BACKUP_ENCRYPTION_KEY = "b".repeat(64);
   const pg = await testPostgres(55434),
     source = memory(),
     target = memory();
@@ -101,16 +107,68 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
       );
     });
     await source.storage.put(key, Buffer.from("Private bytes"), "text/plain");
-    const archive = await backup(pg.url, source.storage);
+    const archive = await backup(pg.url, source.storage),
+      backupEnv = {
+        ...process.env,
+        BACKUP_ENCRYPTION_KEY: "b".repeat(64),
+      },
+      sealed = sealArchive(archive, backupEnv),
+      opened = openArchive(sealed, backupEnv);
+
+    assert.doesNotMatch(sealed, /Backup evidence/);
+    assert.doesNotMatch(sealed, /Private bytes/);
+    assert.doesNotMatch(sealed, /directory@example\.test/);
+    assert.equal(opened.format, "openjm-backup-v1");
+    assert.equal(opened.tables.organisations[0].name, "Restore test");
+
+    assert.throws(
+      () =>
+        sealArchive(archive, {
+          ...process.env,
+          BACKUP_ENCRYPTION_KEY: "",
+        }),
+      /BACKUP_ENCRYPTION_KEY/,
+    );
+    assert.throws(
+      () =>
+        openArchive(sealed, {
+          ...process.env,
+          BACKUP_ENCRYPTION_KEY: "c".repeat(64),
+        }),
+      /wrong key or corrupt archive/,
+    );
+
+    const tamperedEnvelope = JSON.parse(sealed);
+    tamperedEnvelope.ciphertext =
+      (tamperedEnvelope.ciphertext[0] === "A" ? "B" : "A") +
+      tamperedEnvelope.ciphertext.slice(1);
+    assert.throws(
+      () => openArchive(JSON.stringify(tamperedEnvelope), backupEnv),
+      /wrong key or corrupt archive/,
+    );
+
+    const legacy = JSON.stringify(archive);
+    assert.throws(
+      () => openArchive(legacy, backupEnv),
+      /Legacy plaintext backup refused/,
+    );
+    assert.equal(
+      openArchive(legacy, {
+        ...backupEnv,
+        ALLOW_LEGACY_PLAINTEXT_BACKUP: "true",
+      }).format,
+      "openjm-backup-v1",
+    );
+
     await assert.rejects(
-      restore(pg.url, archive, target.storage),
+      restore(pg.url, opened, target.storage),
       /empty database/,
     );
     const corrupt = structuredClone(archive);
     corrupt.objects[key].data = Buffer.from("corrupt").toString("base64");
     await assert.rejects(restore(pg.url, corrupt, target.storage), /checksum/);
     await db.system((q) => q.query("TRUNCATE organisations,users CASCADE"));
-    await restore(pg.url, archive, target.storage);
+    await restore(pg.url, opened, target.storage);
     const rows = await db.tenant(tenant, (q) =>
       q.query("SELECT * FROM page_documents WHERE resource_id=$1", [page]),
     );
