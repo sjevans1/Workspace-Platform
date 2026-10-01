@@ -121,7 +121,8 @@ export function validateValues(props: Property[], values: Record<string, any>) {
 }
 export const view = z
   .object({
-    type: z.enum(["table", "board"]),
+    type: z.enum(["table", "board", "calendar"]),
+    dateBy: z.string().optional(),
     groupBy: z.string().optional(),
     filters: z
       .array(
