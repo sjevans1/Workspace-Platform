@@ -62,7 +62,7 @@ function env(port: number): NodeJS.ProcessEnv {
     ANTIVIRUS_HOST: "127.0.0.1",
     ANTIVIRUS_PORT: String(port),
     ANTIVIRUS_TIMEOUT_MS: "2000",
-    ANTIVIRUS_CHUNK_BYTES: "5",
+    ANTIVIRUS_CHUNK_BYTES: "1024",
   };
 }
 
@@ -76,7 +76,7 @@ test("ClamAV client sends framed PING and INSTREAM chunks and parses clean/infec
     await ping.close();
   }
 
-  const plain = Buffer.from("hello antivirus"),
+  const plain = Buffer.alloc(2500, 0x61),
     clean = await fakeClamd("stream: OK", (request) => {
       assert(request.subarray(0, 10).equals(Buffer.from("zINSTREAM\0")));
       let offset = 10,
