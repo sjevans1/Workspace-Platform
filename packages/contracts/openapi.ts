@@ -165,6 +165,30 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
     },
     response: { 200: { type: "array", items: event }, ...errors },
   },
+  "GET /events/cursor": {
+    querystring: {
+      type: "object",
+      properties: {
+        cursor: { type: "string", minLength: 1, maxLength: 2048 },
+        since: dateTime,
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      additionalProperties: false,
+    },
+    response: {
+      200: {
+        type: "object",
+        required: ["events", "next_cursor", "has_more"],
+        properties: {
+          events: { type: "array", items: event },
+          next_cursor: { type: "string" },
+          has_more: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      ...errors,
+    },
+  },
   "POST /imports": {
     body: {
       type: "object",
