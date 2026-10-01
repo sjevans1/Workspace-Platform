@@ -22,8 +22,8 @@ import {
   validateBlocks,
 } from "../../../packages/editor/server.ts";
 import { emit } from "../../../packages/events/index.ts";
-import { indexedRecordText, redactRelationValues, validateRelationWrites } from "./relations.ts";
-import { computedFormulaValues } from "../../../packages/formulas/index.ts";
+import { indexedRecordText, validateRelationWrites } from "./relations.ts";
+import { presentedRecordValues } from "./rollups.ts";
 export const treeLock = (q: Query, t: string) =>
   q.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`tree:${t}`]);
 export async function createResource(
@@ -214,8 +214,7 @@ export async function createRecord(
     node.id,
     indexedRecordText(d.properties, v),
   ]);
-  return { ...node, values: computedFormulaValues(d.properties,
-    await redactRelationValues(q, a, d.properties, v)), revision: 1 };
+  return { ...node, values: await presentedRecordValues(q, a, d.properties, v), revision: 1 };
 }
 export async function records(
   q: Query,
@@ -294,8 +293,7 @@ export async function records(
   );
   return Promise.all(allowedRows.map(async (row) => ({
     ...row,
-    values: computedFormulaValues(d.properties,
-      await redactRelationValues(q, a, d.properties, row.values)),
+    values: await presentedRecordValues(q, a, d.properties, row.values),
   })));
 }
 export async function replaceDocument(
