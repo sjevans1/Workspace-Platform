@@ -7,6 +7,7 @@ import { withCollaboration } from "@blocknote/core/yjs";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { api, notify } from "../lib/api";
+import { workspacePageHref } from "../../../packages/editor/links";
 function Body({
   provider,
   doc,
@@ -22,6 +23,10 @@ function Body({
   readOnly: boolean;
   theme: "light" | "dark";
 }) {
+  const [picker, setPicker] = useState(false),
+    [needle, setNeedle] = useState(""),
+    [suggestions, setSuggestions] = useState<any[]>([]),
+    [searching, setSearching] = useState(false);
   const editor = useCreateBlockNote(
     withCollaboration({
       collaboration: {
@@ -37,7 +42,72 @@ function Body({
     }),
     [doc, provider],
   );
-  return <BlockNoteView editor={editor} editable={!readOnly} theme={theme} />;
+  async function findPages(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const query = needle.trim();
+    if (!query) return setSuggestions([]);
+    setSearching(true);
+    try {
+      const results = await api("/search?q=" + encodeURIComponent(query));
+      setSuggestions(results.filter((entry: any) =>
+        ["page", "record"].includes(entry.kind) && entry.id !== id,
+      ).slice(0, 20));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Page search failed");
+      setSuggestions([]);
+    } finally {
+      setSearching(false);
+    }
+  }
+  function insertPageLink(page: any) {
+    if (readOnly) return;
+    editor.focus();
+    editor.createLink(workspacePageHref(page.id), page.title);
+    setPicker(false);
+    setNeedle("");
+    setSuggestions([]);
+    notify("Page link inserted");
+  }
+  return (
+    <>
+      {!readOnly && (
+        <div className="page-link-tools">
+          <button type="button" className="button small-button"
+            aria-expanded={picker} aria-controls="page-link-picker"
+            onClick={() => { setPicker((v) => !v); setSuggestions([]); }}>
+            Link to page
+          </button>
+          {picker && (
+            <form id="page-link-picker" className="page-link-picker" onSubmit={findPages}>
+              <label htmlFor="page-link-search">Find a page to link</label>
+              <div className="page-link-search-row">
+                <input id="page-link-search" aria-label="Find a page to link"
+                  value={needle} onChange={(e) => setNeedle(e.target.value)}
+                  placeholder="Search accessible pages" required />
+                <button className="button" disabled={searching}>
+                  {searching ? "Searching…" : "Find"}
+                </button>
+                <button type="button" className="button"
+                  onClick={() => setPicker(false)}>Cancel</button>
+              </div>
+              <div className="page-link-results" aria-live="polite">
+                {suggestions.map((item: any) => (
+                  <button key={item.id} type="button" className="page-link-choice"
+                    onClick={() => insertPageLink(item)}>
+                    {item.title}
+                  </button>
+                ))}
+                {!searching && needle.trim() && !suggestions.length && (
+                  <span className="muted">Search for a page you can access.</span>
+                )}
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+      <BlockNoteView editor={editor} editable={!readOnly} theme={theme} />
+    </>
+  );
 }
 export default function Editor({ id, user, theme }: { id: string; user: any; theme: "light" | "dark" }) {
   const [connection, setConnection] = useState<any>(),
