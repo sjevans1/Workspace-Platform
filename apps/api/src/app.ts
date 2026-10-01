@@ -3123,7 +3123,7 @@ function dataRoutes(
           );
         if (format === "json")
           return { resource: n,
-            schema: await redactRelationSchema(q, a, d.properties),
+            schema: await presentedSchema(q, a, d.properties),
             records: rows };
         assert(format === "csv", 400, "Database export requires CSV or JSON");
         reply
