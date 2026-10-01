@@ -128,6 +128,8 @@ export async function buildApp(
   );
   const dummyPasswordHash = await passwordHash("dummy-password-constant"),
     localAuth = process.env.LOCAL_AUTH_ENABLED !== "false",
+    allowOrganisationCreation =
+      process.env.ALLOW_SELF_SERVICE_ORGANISATIONS === "true",
     appUrl = process.env.APP_URL || "http://localhost:3000",
     oidcRedirectUri = new URL("/api/v1/auth/oidc/callback", appUrl).href;
   const app = Fastify({
@@ -676,6 +678,9 @@ export async function buildApp(
         local: localAuth,
         oidc: oidc ? { enabled: true, label: oidc.label } : { enabled: false },
       },
+      capabilities: {
+        self_service_organisation_creation: allowOrganisationCreation,
+      },
       organisations: (
         await q.query("SELECT * FROM user_tenants($1)", [a.user_id])
       ).rows,
@@ -739,6 +744,11 @@ export async function buildApp(
   );
   route("POST", "/organisations", "Create organisation", async (q, a, r) => {
     admin(a);
+    assert(
+      allowOrganisationCreation,
+      403,
+      "Self-service organisation creation is disabled for this deployment",
+    );
     const v = body(z.object({ name: title }), r),
       t = randomUUID();
     await q.query("SELECT set_config('app.tenant_id',$1,true)", [t]);
