@@ -17,7 +17,7 @@ import {
   Upload,
   ArrowRight,
 } from "lucide-react";
-import { api, setCsrf, notify, run, changed, go, icon, date } from "../lib/api";
+import { api, ApiError, setCsrf, notify, run, changed, go, icon, date } from "../lib/api";
 import { Modal, Empty, Spinner, Field } from "./common";
 import Resource from "./Resource";
 import Settings from "./Settings";
@@ -25,6 +25,8 @@ export default function Workspace() {
   const [me, setMe] = useState<any>(),
     [setup, setSetup] = useState(false),
     [loaded, setLoaded] = useState(false),
+    [bootstrapError, setBootstrapError] = useState<{ message: string; retryAfterSeconds: number | null } | null>(null),
+    [autoRetryUsed, setAutoRetryUsed] = useState(false),
     [brand, setBrand] = useState<any>({ productName: "Workspace" }),
     [authMethods, setAuthMethods] = useState<any>({
       local: true,
@@ -39,27 +41,83 @@ export default function Workspace() {
     [create, setCreate] = useState<any>(),
     [toast, setToast] = useState(""),
     [sidebar, setSidebar] = useState(true);
-  async function init() {
+  function showRecoverable(error: unknown) {
+    const limited = error instanceof ApiError && error.status === 429;
+    const retryAfterSeconds =
+      error instanceof ApiError && error.retryAfterSeconds !== null &&
+      Number.isFinite(error.retryAfterSeconds) &&
+      error.retryAfterSeconds >= 0
+        ? error.retryAfterSeconds
+        : null;
+    setBootstrapError({
+      message: limited
+        ? "The server is temporarily handling too many requests. Your session is still protected."
+        : "Workspace could not finish loading. Your session has not been signed out.",
+      retryAfterSeconds,
+    });
+  }
+  async function loadResources() {
     try {
-      const m = await api("/me");
-      setMe(m);
-      setBrand(m.branding);
-      setAuthMethods(m.authentication || authMethods);
-      setCsrf(m.csrf);
       const nodes = await api("/resources");
       setRoots(nodes);
       setRoot((v) =>
         nodes.some((n: any) => n.id === v) ? v : nodes[0]?.id || "",
       );
-    } catch {
-      setMe(null);
-      setSetup((await api("/setup")).required);
-      setBrand(await api("/branding"));
-      setAuthMethods(await api("/auth/methods"));
-    } finally {
-      setLoaded(true);
+      setBootstrapError(null);
+      setAutoRetryUsed(false);
+    } catch (error) {
+      // A temporary 429/5xx/network failure is not evidence of logout.
+      // Preserve identity, the session token, and the previous tree.
+      showRecoverable(error);
     }
   }
+  async function init() {
+    let m: any;
+    try {
+      m = await api("/me");
+    } catch (error) {
+      if (error instanceof ApiError && [401, 403].includes(error.status)) {
+        // Only an explicit authentication failure at /me selects Login.
+        setMe(null);
+        setCsrf("");
+        setRoots([]);
+        setRoot("");
+        try {
+          const [setupState, branding, methods] = await Promise.all([
+            api("/setup"), api("/branding"), api("/auth/methods"),
+          ]);
+          setSetup(setupState.required);
+          setBrand(branding);
+          setAuthMethods(methods);
+          setBootstrapError(null);
+        } catch (bootstrapFailure) {
+          showRecoverable(bootstrapFailure);
+        }
+      } else {
+        showRecoverable(error);
+      }
+      setLoaded(true);
+      return;
+    }
+    setMe(m);
+    setBrand(m.branding);
+    setAuthMethods(m.authentication || authMethods);
+    setCsrf(m.csrf);
+    await loadResources();
+    setLoaded(true);
+  }
+  // Exactly one bounded automatic retry per failure episode. Honor the
+  // server's Retry-After hint, and avoid background polling storms.
+  useEffect(() => {
+    if (!bootstrapError || autoRetryUsed) return;
+    const seconds = Math.max(3, bootstrapError.retryAfterSeconds ?? 5);
+    if (seconds > 120) return; // Wait for an explicit user retry.
+    const timer = window.setTimeout(() => {
+      setAutoRetryUsed(true);
+      void init();
+    }, seconds * 1000);
+    return () => window.clearTimeout(timer);
+  }, [bootstrapError, autoRetryUsed]);
   useEffect(() => {
     init();
     const p = new URLSearchParams(location.search).get("page");
@@ -97,7 +155,7 @@ export default function Workspace() {
     };
   }, []);
   useEffect(() => {
-    if (me) run(async () => setRoots(await api("/resources")));
+    if (me) void loadResources();
   }, [version]);
   useEffect(() => {
     document.title = brand.productName;
@@ -130,10 +188,24 @@ export default function Workspace() {
     ["templates", "Templates", LayoutTemplate],
   ] as const;
   if (!loaded) return <Spinner />;
+  const recovery = bootstrapError && (
+    <div className="bootstrap-notice" role="alert">
+      <strong>Workspace connection interrupted</strong>
+      <p>{bootstrapError.message}</p>
+      {bootstrapError.retryAfterSeconds !== null && (
+        <p className="muted">
+          Server requested a retry after {bootstrapError.retryAfterSeconds} seconds.
+        </p>
+      )}
+      <button className="button primary" onClick={() => void init()}>
+        Retry loading workspace
+      </button>
+    </div>
+  );
   if (!me)
     return (
       <>
-        <Login setup={setup} brand={brand} auth={authMethods} done={init} />
+        {bootstrapError ? recovery : <Login setup={setup} brand={brand} auth={authMethods} done={init} />}
         {toast && (
           <div className="toast" role="alert">
             {toast}
@@ -281,7 +353,8 @@ export default function Workspace() {
           </div>
         </header>
         <div className="main-scroll">
-          {screen === "resource" && current ? (
+          {recovery}
+          {bootstrapError && !roots.length ? null : screen === "resource" && current ? (
             <Resource
               key={current}
               id={current}

@@ -2035,3 +2035,18 @@ nav button:hover,
     min-width: 240px;
   }
 }
+
+/* Recoverable bootstrap errors must be clearly visible without redirecting
+   an authenticated user to the login form. */
+.bootstrap-notice {
+  max-width: 680px;
+  margin: 26px auto;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 9px;
+  background: var(--soft);
+}
+.bootstrap-notice p {
+  margin: 9px 0 12px;
+}

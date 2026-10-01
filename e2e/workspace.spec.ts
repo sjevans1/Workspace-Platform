@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 const email = "browser@example.test",
   password = "browser-password-123";
+
 // Deployed tests share a single source IP behind Caddy. This is an
 // acceptance isolation guard, NOT a rate-limit bypass: wait for the actual
 // server budget to recover before opening another multi-user browser test.
@@ -22,7 +23,29 @@ test.beforeEach(async ({ request }) => {
 
 async function login(page: Page) {
   await page.goto("/");
-  await expect(page.locator("h1")).toBeVisible();
+  // Deployed browser tests intentionally retain production request limits.
+  // An exhausted shared CI-IP limit may temporarily show the new recovery
+  // notice instead of a sign-in/Workspace heading. Respect Retry-After rather
+  // than disabling security or mistaking a 429 for invalid credentials.
+  const heading = page.locator("h1");
+  const retry = page.getByRole("button", { name: "Retry loading workspace" });
+  await expect.poll(async () =>
+    (await heading.isVisible()) || (await retry.isVisible())
+  ).toBe(true);
+  for (let attempt = 0; attempt < 2 && await retry.isVisible(); attempt++) {
+    const notice = await page.getByRole("alert")
+      .filter({ hasText: "Workspace connection interrupted" }).innerText();
+    const explicit = notice.match(/retry after (\d+) seconds?/i);
+    const delay = explicit ? Number(explicit[1]) : 60;
+    expect(delay).toBeGreaterThanOrEqual(0);
+    expect(delay).toBeLessThanOrEqual(60);
+    await page.waitForTimeout((delay + 2) * 1000);
+    await retry.click();
+    await expect.poll(async () =>
+      (await heading.isVisible()) || (await retry.isVisible())
+    ).toBe(true);
+  }
+  await expect(heading).toBeVisible();
   if (
     await page
       .getByRole("heading", { name: "Make yourself at home." })
@@ -724,9 +747,69 @@ test("distinct users: invitation, live view-only access, revocation and recovery
       "Owner-only update after revocation.",
     );
     await expect(otherEditor).toHaveAttribute("contenteditable", "true");
-    expect((await teammate.request.get(file.url)).ok()).toBeTruthy();
+    let download = await teammate.request.get(file.url);
+    if (download.status() === 429) {
+      const hint = Number(download.headers()["retry-after"] || 60);
+      expect(hint).toBeGreaterThanOrEqual(0);
+      expect(hint).toBeLessThanOrEqual(60);
+      await page.waitForTimeout((hint + 2) * 1000);
+      download = await teammate.request.get(file.url);
+    }
+    expect(download.ok(), `Attachment status: ${download.status()}`).toBeTruthy();
     expect(errors).toEqual([]);
   } finally {
     await context.close();
   }
+});
+
+
+test("recoverable 429 and 503 bootstrap errors preserve authentication and allow manual recovery", async ({
+  page,
+}) => {
+  test.setTimeout(180000);
+  await login(page);
+  // Capture the true /me answer independently of the temporarily blocked
+  // resource list. This is not a signed-out or invalid-session scenario.
+  await page.route("**/api/v1/resources", (route) =>
+    route.fulfill({
+      status: 429,
+      contentType: "application/json",
+      headers: { "Retry-After": "4" },
+      body: JSON.stringify({ error: "Too many requests" }),
+    }),
+  );
+  const authenticated = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/me",
+  );
+  await page.reload();
+  expect((await authenticated).status()).toBe(200);
+  const failure = page.getByRole("alert").filter({
+    hasText: "Workspace connection interrupted",
+  });
+  await expect(failure).toContainText("too many requests");
+  await expect(failure).toContainText("4 seconds");
+  await expect(page.getByRole("button", { name: "Settings & members" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
+
+  await page.unroute("**/api/v1/resources");
+  await page.getByRole("button", { name: "Retry loading workspace" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Welcome back, Shane." })).toBeVisible();
+
+  // /me itself can temporarily fail, but this is not evidence of 401/403.
+  await page.route("**/api/v1/me", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Temporarily unavailable" }),
+    }),
+  );
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("alert").filter({
+    hasText: "Workspace connection interrupted",
+  })).toContainText("Your session has not been signed out");
+  await page.unroute("**/api/v1/me");
+  await page.getByRole("button", { name: "Retry loading workspace" }).click();
+  await expect(page.getByRole("heading", { name: "Welcome back, Shane." })).toBeVisible();
 });
