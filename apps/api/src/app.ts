@@ -12,6 +12,7 @@ import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
 import { stringify } from "csv-stringify/sync";
 import { Database, one, type Query } from "../../../packages/database/index.ts";
 import { oidcFromEnv, type OidcProvider } from "../../../packages/auth/oidc.ts";
+import { sealTenantOidcSecret, validateTenantOidcRegistration } from "../../../packages/auth/tenant-provider.ts";
 import {
   authenticate,
   admin,
@@ -2309,6 +2310,109 @@ function dataRoutes(
           )
         ).rows,
       ),
+  );
+
+  // T2: registrations are inert. No live sign-in or logout route reads this
+  // table; enabling a tenant provider requires a separately reviewed T3/T4.
+  route(
+    "GET",
+    "/identity/providers",
+    "List tenant identity providers without secrets",
+    async (q, a) => {
+      admin(a);
+      return (
+        await q.query(
+          "SELECT id,label,issuer,client_id,token_auth_method,scopes," +
+          " require_verified_email,enabled,revision,created_at,revoked_at" +
+          " FROM oidc_tenant_providers WHERE tenant_id=$1" +
+          " ORDER BY created_at DESC,id LIMIT 100",
+          [a.tenant_id],
+        )
+      ).rows;
+    },
+  );
+  route(
+    "POST",
+    "/identity/providers",
+    "Register disabled tenant OIDC provider",
+    async (q, a, r) => {
+      admin(a);
+      const v = body(
+        z
+          .object({
+            label: z.string().trim().min(1).max(120),
+            issuer: z.url().max(2048),
+            client_id: z.string().min(1).max(256),
+            client_secret: z.string().min(12).max(2048).optional(),
+            token_auth_method: z.enum([
+              "client_secret_basic",
+              "client_secret_post",
+              "none",
+            ]),
+            scopes: z
+              .array(z.string().min(1).max(80))
+              .min(1)
+              .max(12)
+              .default(["openid", "profile", "email"]),
+          })
+          .strict(),
+        r,
+      );
+      const issuer = validateTenantOidcRegistration({
+        label: v.label,
+        issuer: v.issuer,
+        clientId: v.client_id,
+        clientSecret: v.client_secret,
+        tokenAuthMethod: v.token_auth_method,
+        scopes: v.scopes,
+      });
+      const providerId = randomUUID();
+      const sealed = v.client_secret
+        ? sealTenantOidcSecret(v.client_secret, a.tenant_id, providerId)
+        : null;
+      const provider = await one(
+        q,
+        "INSERT INTO oidc_tenant_providers" +
+        " (id,tenant_id,label,issuer,client_id,client_secret_encrypted," +
+        " token_auth_method,scopes,created_by)" +
+        " VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)" +
+        " RETURNING id,label,issuer,client_id,token_auth_method,scopes," +
+        " require_verified_email,enabled,revision,created_at,revoked_at",
+        [
+          providerId,
+          a.tenant_id,
+          v.label,
+          issuer,
+          v.client_id,
+          sealed,
+          v.token_auth_method,
+          v.scopes,
+          a.user_id,
+        ],
+      );
+      await emit(q, a, "identity.provider_registered", null);
+      return provider;
+    },
+  );
+  route(
+    "DELETE",
+    "/identity/providers/:id",
+    "Revoke tenant OIDC provider registration",
+    async (q, a, r) => {
+      admin(a);
+      const providerId = uuid.parse(params(r).id);
+      const revoked = await one(
+        q,
+        "UPDATE oidc_tenant_providers" +
+        " SET revoked_at=now(),revision=revision+1" +
+        " WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL" +
+        " RETURNING id,revision,revoked_at",
+        [a.tenant_id, providerId],
+      );
+      assert(revoked, 404, "Identity provider not found");
+      await emit(q, a, "identity.provider_revoked", null);
+      return { ok: true, ...revoked };
+    },
   );
   route(
     "GET",
