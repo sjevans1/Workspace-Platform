@@ -119,6 +119,14 @@ S3_FORCE_PATH_STYLE=true
 
 Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. Object writes use the S3 If-None-Match condition so an existing key cannot be overwritten, matching local storage. The automated CI recovery drill passes against authenticated SeaweedFS 4.47; verify conditional PUT support and recovery against your selected S3 provider before rollout. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
 
+Before a real-provider rollout, run the guarded capability probe with the deployment's S3 settings:
+
+```bash
+npm run verify:s3-provider -- --write-test
+```
+
+The probe requires the explicit `--write-test` acknowledgement, creates only one unique temporary object, verifies authenticated health/read, immutable existing-key behavior and delete/not-found semantics, then removes the probe object. It does not create/delete buckets or list their contents. Prefer a dedicated validation bucket. The probe is only a compatibility check; complete the separate-bucket backup/recovery exercise in [Hermes / real-provider S3 acceptance](HERMES_S3_ACCEPTANCE.md) before marking a provider accepted.
+
 ## Webhooks
 
 Set `WEBHOOK_ALLOWED_ORIGINS` to a comma-separated list of exact HTTP(S) origins. It is empty by default. An administrator can then register endpoint paths on those origins in Settings → Webhooks. Use HTTPS outside isolated local testing. Receiver verification and event format are in [the integration guide](INTEGRATION.md).
