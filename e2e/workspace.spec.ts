@@ -656,3 +656,54 @@ test("distinct users: invitation, live view-only access, revocation and recovery
     await context.close();
   }
 });
+
+
+test("recoverable 429 and 503 bootstrap errors preserve authentication and allow manual recovery", async ({
+  page,
+}) => {
+  await login(page);
+  // Capture the true /me answer independently of the temporarily blocked
+  // resource list. This is not a signed-out or invalid-session scenario.
+  await page.route("**/api/v1/resources", (route) =>
+    route.fulfill({
+      status: 429,
+      contentType: "application/json",
+      headers: { "Retry-After": "4" },
+      body: JSON.stringify({ error: "Too many requests" }),
+    }),
+  );
+  const authenticated = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/me",
+  );
+  await page.reload();
+  expect((await authenticated).status()).toBe(200);
+  const failure = page.getByRole("alert").filter({
+    hasText: "Workspace connection interrupted",
+  });
+  await expect(failure).toContainText("too many requests");
+  await expect(failure).toContainText("4 seconds");
+  await expect(page.getByRole("button", { name: "Settings & members" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
+
+  await page.unroute("**/api/v1/resources");
+  await page.getByRole("button", { name: "Retry loading workspace" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Welcome back, Shane." })).toBeVisible();
+
+  // /me itself can temporarily fail, but this is not evidence of 401/403.
+  await page.route("**/api/v1/me", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Temporarily unavailable" }),
+    }),
+  );
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("alert").filter({
+    hasText: "Workspace connection interrupted",
+  })).toContainText("Your session has not been signed out");
+  await page.unroute("**/api/v1/me");
+  await page.getByRole("button", { name: "Retry loading workspace" }).click();
+  await expect(page.getByRole("heading", { name: "Welcome back, Shane." })).toBeVisible();
+});
