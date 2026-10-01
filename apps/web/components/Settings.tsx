@@ -19,6 +19,7 @@ export default function Settings({
     [oidcMethod, setOidcMethod] = useState("client_secret_basic"),
     [scimGroups, setScimGroups] = useState<any[]>([]),
     [hooks, setHooks] = useState<any>({ subscriptions: [], deliveries: [] }),
+    [replayingDelivery, setReplayingDelivery] = useState(""),
     [audit, setAudit] = useState<any[]>([]),
     [modal, setModal] = useState(""),
     [secret, setSecret] = useState("");
@@ -493,6 +494,10 @@ export default function Settings({
             </div>
           ))}
           <h3>Recent deliveries</h3>
+          <p className="muted small-text">
+            Administrators can retry dead deliveries on active subscriptions.
+            Retries preserve the event ID for consumer deduplication and are audited.
+          </p>
           <div className="table-scroll">
             <table className="simple-table">
               <thead>
@@ -501,6 +506,7 @@ export default function Settings({
                   <th>Status</th>
                   <th>Attempts</th>
                   <th>Last result</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -514,6 +520,40 @@ export default function Settings({
                     </td>
                     <td>{d.attempts}</td>
                     <td>{d.last_error || "—"}</td>
+                    <td>
+                      {d.status === "dead" &&
+                      hooks.subscriptions.some(
+                        (sub: any) => sub.id === d.subscription_id && sub.active,
+                      ) ? (
+                        <button
+                          className="button"
+                          aria-label={"Replay delivery " + d.id}
+                          disabled={!!replayingDelivery}
+                          onClick={() =>
+                            run(async () => {
+                              setReplayingDelivery(d.id);
+                              try {
+                                await api(
+                                  "/webhooks/deliveries/" + d.id + "/replay",
+                                  "POST",
+                                  {},
+                                );
+                                await load();
+                                notify("Webhook delivery queued for retry.");
+                              } finally {
+                                setReplayingDelivery("");
+                              }
+                            })
+                          }
+                        >
+                          {replayingDelivery === d.id ? "Requeuing…" : "Replay"}
+                        </button>
+                      ) : d.status === "dead" ? (
+                        <span className="muted small-text">Subscription paused</span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
