@@ -6,16 +6,39 @@ import {
   createAntivirus,
 } from "../packages/security/antivirus.ts";
 
+function completeRequest(request: Buffer) {
+  if (request.equals(Buffer.from("zPING\\0"))) return true;
+  const command = Buffer.from("zINSTREAM\\0");
+  if (
+    request.length < command.length ||
+    !request.subarray(0, command.length).equals(command)
+  )
+    return false;
+  let offset = command.length;
+  while (offset + 4 <= request.length) {
+    const length = request.readUInt32BE(offset);
+    offset += 4;
+    if (length === 0) return true;
+    if (offset + length > request.length) return false;
+    offset += length;
+  }
+  return false;
+}
+
 async function fakeClamd(
   response: string,
   validate?: (request: Buffer) => void,
 ) {
   const server = net.createServer((socket) => {
     const chunks: Buffer[] = [];
-    socket.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    socket.on("end", () => {
-      validate?.(Buffer.concat(chunks));
-      socket.end(Buffer.from(response + "\0"));
+    let replied = false;
+    socket.on("data", (chunk) => {
+      chunks.push(Buffer.from(chunk));
+      const request = Buffer.concat(chunks);
+      if (replied || !completeRequest(request)) return;
+      replied = true;
+      validate?.(request);
+      socket.end(Buffer.from(response + "\\0"));
     });
     socket.on("error", () => {});
   });
