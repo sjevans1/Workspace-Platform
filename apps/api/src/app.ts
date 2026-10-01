@@ -1742,7 +1742,7 @@ function dataRoutes(route: Route, storage: Storage) {
     "POST",
     "/resources/:id/files",
     "Upload a private attachment",
-    async (q, a, r) => {
+    async (q, a, r, reply) => {
       await requireAccess(q, a, id(r), 3);
       const part = await r.file();
       assert(part, 400, "Choose a file");
