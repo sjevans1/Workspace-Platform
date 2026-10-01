@@ -22,7 +22,8 @@
     "test:e2e": "playwright test",
     "licenses": "node scripts/licenses.mjs",
     "format": "prettier --write apps packages scripts tests e2e *.json *.ts *.yaml",
-    "accept:s3": "node --import tsx scripts/accept-production-s3.ts"
+    "accept:s3": "node --import tsx scripts/accept-production-s3.ts",
+    "provision:tenant": "node --import tsx scripts/provision-tenant.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1142.0",
