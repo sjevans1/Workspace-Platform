@@ -3,6 +3,11 @@ import { test, expect, type Page } from "@playwright/test";
 const email = "browser@example.test",
   password = "browser-password-123";
 
+test.skip(
+  !process.env.E2E_BASE_URL?.startsWith("https://"),
+  "trusted TLS acceptance runs only in the dedicated HTTPS gate",
+);
+
 async function login(page: Page) {
   const response = await page.goto("/");
   expect(response?.ok()).toBeTruthy();
