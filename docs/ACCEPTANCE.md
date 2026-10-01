@@ -4,14 +4,14 @@ This is an executable alpha built from the OpenJM Workspace Astra handoff, not a
 
 ## Verified through 30 September 2026
 
-The latest identity/RLS hardening gate passed in [GitHub Actions run 36797135204](https://github.com/sjevans1/Workspace-Platform/actions/runs/36797135204), testing final branch head `a1fe48f2e6259f302d18597d970e78d5112114d7`, which was squash-merged as `8965a7dfab6dce3c39d66332cd71aee2f8ad993a`. The native application integration suite now runs as the same restricted `workspace_runtime` role used by the Docker deployment, with `NOBYPASSRLS`.
+The latest identity/directory lifecycle gate passed in [GitHub Actions run 36801538725](https://github.com/sjevans1/Workspace-Platform/actions/runs/36801538725), testing final SCIM branch head `c70e5f0c419be9a3abbc94afb25460d4f1a58421`, which was squash-merged as `ad8f6ed2e954b78959c1941cb0efb4535a6efb26`. The native application integration suite runs as the same restricted `workspace_runtime` role used by Docker, with `NOBYPASSRLS`.
 
 | Check | Result |
 |---|---|
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration, identity and backup tests | 36 passed, 0 failed in latest native PostgreSQL gate |
+| Unit, API, collaboration, identity and backup tests | 37 passed, 0 failed in latest native PostgreSQL gate |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Concurrent ACL replacement and stale-write rejection | Pass; simultaneous conflicting saves resolve as one success and one 409 |
@@ -24,7 +24,7 @@ The latest identity/RLS hardening gate passed in [GitHub Actions run 36797135204
 | Trash cascade and restore | Pass |
 | Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL 17 test suite | 36 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
+| Native PostgreSQL 17 test suite | 37 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
 | Migration rollback/retry and historical checksum integrity | Pass; failed partial DDL rolls back, corrected retry succeeds, reruns are idempotent, applied-file drift is rejected |
 | Docker image, migrations and full Compose startup | Pass; API, collaboration and worker all report healthy before browser acceptance |
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
@@ -33,9 +33,13 @@ The latest identity/RLS hardening gate passed in [GitHub Actions run 36797135204
 | OIDC / Keycloak authentication foundation | Pass in CI run 36770930101: state/nonce/PKCE, signed ID-token validation, verified email, existing-user linking, invitation provisioning and replay rejection |
 | OIDC back-channel session revocation | PASS. CI run 36797135204 passed under restricted `workspace_runtime` with `rolbypassrls=false`. A no-workaround WSL2 regression retest on Workspace `9894b95686c6229a956b93c0a2263e4434aae184` with Keycloak 26.7.4 proved Keycloak-emitted back-channel logout, tenant-RLS audit insertion, old-session rejection (401), local break-glass preservation, fresh-login recovery, and final `workspace_runtime` `rolsuper=false` / `rolbypassrls=false`. |
 | Real Keycloak host/browser acceptance | Hermes-reported PASS on `1702779fa5d31a8de159ee6d476e451d90e316f3` with Keycloak 26.7.4: discovery, owner linking, repeat login, passwordless invited member, mismatch rejection, SSO-only mode and disabled-user new-login rejection all passed |
+| SCIM 2.0 Users lifecycle | PASS in run 36801538725 under restricted `workspace_runtime`: tenant-scoped connector auth, Users create/list/filter/PATCH/PUT/delete, inactive-by-default provisioning, audit events, immediate same-tenant session revocation on `active:false`/DELETE, and preservation of the same global user's other-tenant session |
+| Deployed SCIM connector administration | PASS in Chromium: Settings creates a one-time SCIM credential, bearer discovery works through Caddy, revocation is visible in UI and the revoked token returns 401 |
 | Independent WSL2 host deployment and recovery | Hermes-reported PASS on `b392f4113`: fresh install, 2/2 browser tests, restart persistence, idempotent migrations, backup, isolated restore, recovered sign-in/content and operational status; trusted TLS not executed |
 
 Local backend tests run against PGlite's PostgreSQL engine, with serialized test transactions because its socket bridge multiplexes one backend. Production uses normal native PostgreSQL transactions. Native PostgreSQL is a separate required CI gate, not assumed equivalent solely from PGlite results.
+
+SCIM transaction boundary note: an early browser/integration run exposed that returning `reply.send()` from inside the tenant transaction could release the HTTP response before COMMIT completed. The SCIM response path now returns its payload only after `db.tenant(...)` resolves, so a successful offboarding response represents committed membership/session state.
 
 Host live-collaboration note: the final Keycloak regression proved server-side OIDC session deletion and HTTP rejection of the old session. The report did not include a directly observed post-logout WebSocket edit/persistence attempt, so that narrow host observation is not claimed beyond the collaboration server's existing session-recheck behavior and automated coverage.
 
@@ -51,7 +55,7 @@ The repository contains a connected interface, API, collaboration server, import
 
 | Area | Remaining work or current boundary |
 |---|---|
-| Identity | Deployment-level OIDC/Keycloak SSO and standards-based OIDC back-channel session revocation are implemented and real-provider accepted. The no-workaround Keycloak 26.7.4 retest passed on Workspace `9894b95686c6229a956b93c0a2263e4434aae184` while `workspace_runtime` remained `NOSUPERUSER NOBYPASSRLS`; disabling a Keycloak account still does not terminate an existing IdP/Workspace session by itself. Workspace membership deactivation revokes tenant sessions immediately. Remaining: directory/SCIM offboarding, per-tenant IdPs, group/role mapping, RP/front-channel logout, application-enforced MFA context, local password recovery and invitation email delivery. |
+| Identity | Deployment-level OIDC/Keycloak SSO, standards-based back-channel logout, and tenant-scoped SCIM 2.0 Users lifecycle are implemented. SCIM `active:false`/DELETE deactivates only the connector tenant membership and immediately revokes that tenant's Workspace sessions while preserving the same global user's other-tenant access. Remaining: SCIM Groups/group-role mapping, per-tenant IdPs, broader provider compatibility, RP/front-channel logout, application-enforced MFA context, local password recovery and invitation email delivery. |
 | Editor coverage | Default BlockNote Core blocks, slash menu, formatting, links, images/files and tables are integrated. Custom callout/divider/wiki-link/backlink behaviour, a complete block-type acceptance matrix and block-anchored comment UI remain. The API accepts optional comment block IDs. |
 | Offline and scale | Offline edits are memory-only until acknowledged; no durable local offline queue. Single collaboration writer, no horizontal coordination. Load/concurrency and reconnect fault-injection benchmarks remain. |
 | Databases | No formulas, relations, rollups, advanced cross-database queries or import mapping wizard. Property schema changes validate existing data; destructive schema transformations need explicit migration support. Board keyboard updates use selectors. |
@@ -68,4 +72,4 @@ The repository contains a connected interface, API, collaboration server, import
 
 ## Suggested next acceptance slice
 
-With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, real Keycloak login acceptance, and real Keycloak back-channel logout now accepted end to end under `workspace_runtime`/`NOBYPASSRLS`, the next enterprise identity slice is directory/SCIM lifecycle and automated offboarding design. Trusted TLS and the selected production S3/object-store recovery drill remain separate host-level gates. Directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
+With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, real Keycloak login/logout acceptance, and SCIM Users lifecycle now passing under `workspace_runtime`/`NOBYPASSRLS`, the next enterprise identity slice is SCIM Groups, group membership synchronization and an explicit conservative group-to-Workspace-role mapping policy. Trusted TLS and the selected production S3/object-store recovery drill remain separate host-level gates. Directory lifecycle, operational hardening and the remaining security/accessibility items must still be resolved before calling the product production ready.
