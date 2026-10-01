@@ -98,6 +98,15 @@ jobs:
           docker compose config --quiet
       - name: Build application container
         run: docker compose build api
+      - name: Verify production-only runtime image
+        run: |
+          docker run --rm --entrypoint sh openjm-workspace:local -lc '
+            test ! -e /app/node_modules/typescript
+            test ! -e /app/node_modules/@playwright
+            test ! -e /usr/local/lib/node_modules/npm
+            ! command -v npm
+            ! command -v npx
+          '
       - name: Generate container SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
