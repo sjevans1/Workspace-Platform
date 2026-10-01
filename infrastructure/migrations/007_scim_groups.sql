@@ -14,7 +14,8 @@ WHERE m.tenant_id=s.tenant_id
 
 ALTER TABLE scim_users
   ALTER COLUMN base_role SET DEFAULT 'member',
-  ALTER COLUMN base_role SET NOT NULL;
+  ALTER COLUMN base_role SET NOT NULL,
+  ADD CONSTRAINT scim_users_tenant_resource_unique UNIQUE(tenant_id,id);
 
 CREATE TABLE scim_groups(
   id uuid PRIMARY KEY,
@@ -23,7 +24,8 @@ CREATE TABLE scim_groups(
   display_name text NOT NULL CHECK(length(display_name) BETWEEN 1 AND 500),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  deleted_at timestamptz
+  deleted_at timestamptz,
+  UNIQUE(tenant_id,id)
 );
 
 CREATE UNIQUE INDEX scim_groups_live_name
@@ -36,19 +38,25 @@ CREATE UNIQUE INDEX scim_groups_live_external_id
 
 CREATE TABLE scim_group_members(
   tenant_id uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
-  group_id uuid NOT NULL REFERENCES scim_groups(id) ON DELETE CASCADE,
-  scim_user_id uuid NOT NULL REFERENCES scim_users(id) ON DELETE CASCADE,
+  group_id uuid NOT NULL,
+  scim_user_id uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY(group_id,scim_user_id)
+  PRIMARY KEY(group_id,scim_user_id),
+  FOREIGN KEY(tenant_id,group_id)
+    REFERENCES scim_groups(tenant_id,id) ON DELETE CASCADE,
+  FOREIGN KEY(tenant_id,scim_user_id)
+    REFERENCES scim_users(tenant_id,id) ON DELETE CASCADE
 );
 
 CREATE TABLE scim_group_role_mappings(
   tenant_id uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
-  group_id uuid PRIMARY KEY REFERENCES scim_groups(id) ON DELETE CASCADE,
+  group_id uuid PRIMARY KEY,
   role text NOT NULL CHECK(role IN ('member','guest')),
   created_by uuid REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY(tenant_id,group_id)
+    REFERENCES scim_groups(tenant_id,id) ON DELETE CASCADE
 );
 
 GRANT SELECT,INSERT,UPDATE,DELETE
