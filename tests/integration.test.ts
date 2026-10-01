@@ -2476,7 +2476,10 @@ test("recently viewed lists personal visits, not other users' edits, and revokes
   // A separate Fastify instance keeps the exact production throttling policy
   // while isolating this regression's budget from the long-running suite.
   const recentApp = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
-  const recentReq = (method: string, path: string, data?: any, actor: any = owner) =>
+  const recentReq = async (
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string, data?: any, actor: any = owner,
+  ): Promise<{ statusCode: number; body: string; json: () => any }> =>
     recentApp.inject({
       method,
       url: "/api/v1" + path,
