@@ -4,7 +4,7 @@ A self-hosted, white-label workspace for shared knowledge, collaborative pages a
 
 **Status: working alpha, not the completed production MVP.** The backend, collaboration protocol, tenant isolation and backup round trip have automated coverage. See [acceptance status and remaining work](docs/ACCEPTANCE.md) for the exact verification boundary.
 
-[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36809767605): 37 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and deployed Chromium workflows. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff. Real Keycloak 26.7.4 login/provisioning and no-workaround back-channel logout have also passed on the disposable WSL2 host. SCIM Users/Groups provisioning, offboarding, membership synchronization and explicit member/guest group-role mapping are verified. Trusted HTTPS is CI-verified with a trusted private CA path, Secure/HttpOnly cookies, HSTS and WSS collaboration. The provider-safe production S3 recovery harness is also CI-verified; the selected provider still requires its own operational acceptance run.
+[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36809767605): 37 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and deployed Chromium workflows. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff. Real Keycloak 26.7.4 login/provisioning and no-workaround back-channel logout have also passed on the disposable WSL2 host. SCIM Users/Groups provisioning, offboarding, membership synchronization and explicit member/guest group-role mapping are verified. Trusted HTTPS is CI-verified with a trusted private CA path, Secure/HttpOnly cookies, HSTS and WSS collaboration. Local filesystem storage is a supported deployment mode and does not require an external S3 provider. For deployments that choose S3-compatible object storage, the provider-safe recovery harness is CI-verified and that selected provider must pass its own operational acceptance run.
 
 ## Start locally
 
@@ -38,7 +38,7 @@ Open **http://localhost:8080** and use `SETUP_TOKEN` from the generated `.env`. 
 - Local authentication plus optional OpenID Connect/Keycloak SSO, invitation-backed SSO provisioning, real-provider back-channel logout, tenant-scoped SCIM 2.0 Users/Groups provisioning with explicit member/guest group-role mapping, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.
 - Page discussions and mentions, private file attachments, Markdown/CSV imports and Markdown/CSV/JSON exports.
 - Runtime branding, scoped REST API, transactional event outbox, signed webhooks with retries, and audit records.
-- Local and S3-compatible storage adapters, migrations, logical backup/restore, container configuration and CI.
+- Pluggable storage: local filesystem for self-contained/on-prem deployments, or S3-compatible object storage for private-object-store/cloud deployments; plus migrations, logical backup/restore, container configuration and CI.
 
 ## Project map
 
