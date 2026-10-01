@@ -140,6 +140,18 @@ Short-lived OIDC login-state rows are intentionally not backed up.
 
 A restored deployment must have compatible OIDC configuration if users are expected to sign in through the same identity provider.
 
+## SCIM directory lifecycle
+
+Workspace now supports a tenant-scoped SCIM 2.0 **Users** lifecycle. An organisation administrator creates a connector in **Settings → Integrations → Directory provisioning (SCIM 2.0)** and receives a one-time bearer token plus the `${APP_URL}/scim/v2` base URL.
+
+A SCIM connector belongs to exactly one organisation and can provision only `member` or `guest` roles. It cannot silently take ownership of an existing manually managed membership.
+
+For SCIM-managed users, `active:false` or SCIM DELETE deactivates that organisation membership and immediately revokes that tenant's Workspace sessions. A global user's memberships/sessions in other Workspace organisations remain untouched. Reactivation permits a new normal login; previously revoked sessions do not become valid again.
+
+The current Users slice supports SCIM discovery, Users list/get/create/PUT/PATCH/delete, `userName eq` and `externalId eq` filters, connector revocation, tenant audit events and backup/restore of connector hashes/mappings. Responses are sent only after the tenant transaction commits so a successful offboarding response represents committed session revocation.
+
+Full behavior and current boundaries are documented in [SCIM directory lifecycle](SCIM.md).
+
 ## Current enterprise identity boundaries
 
 The current slice is an OIDC/Keycloak **foundation**, not a complete enterprise directory product.
@@ -147,19 +159,17 @@ The current slice is an OIDC/Keycloak **foundation**, not a complete enterprise 
 Not yet implemented:
 
 - per-tenant identity providers in one shared deployment;
-- SCIM user/group provisioning;
+- SCIM Groups and group membership synchronization;
 - IdP group/role to Workspace-role mapping;
-- automatic offboarding from IdP directory changes;
 - OIDC RP-initiated logout;
 - OIDC RP-initiated/front-channel logout;
-- automatic directory-disable/SCIM offboarding when the IdP does not emit a back-channel logout event;
 - local password-reset/recovery;
 - application-enforced MFA/ACR/AMR policy;
 - email delivery of invitation links.
 
 MFA can be required by the external IdP, but Workspace does not yet independently verify or require a particular MFA authentication-context claim.
 
-Workspace now accepts standards-based signed OIDC back-channel logout tokens and revokes matching OIDC-created Workspace sessions. Workspace membership deactivation also revokes tenant sessions immediately. What remains is directory lifecycle synchronization: disabling a user in an IdP does not necessarily generate a back-channel logout event, so SCIM/directory-driven offboarding must still be implemented or the operator must terminate the IdP session / deactivate the Workspace membership.
+Workspace accepts standards-based signed OIDC back-channel logout tokens and revokes matching OIDC-created sessions. SCIM Users lifecycle now supplies the separate directory offboarding path when an IdP account state changes without emitting logout: SCIM `active:false` deactivates the tenant membership and revokes its Workspace sessions. What remains is broader directory lifecycle coverage, especially Groups and explicit group-to-Workspace-role policy.
 
 ## Verification
 
@@ -178,6 +188,9 @@ CI covers:
 - verified-email enforcement;
 - signed back-channel logout JWT validation, nonce rejection and replay-safe session revocation;
 - preservation of an unrelated local break-glass session during OIDC session revocation;
+- SCIM Users provisioning/deactivation with tenant-specific session revocation;
+- preservation of the same global user's other-tenant session during SCIM offboarding;
+- SCIM connector issuance/revocation through the deployed Settings interface;
 - normal non-SSO Docker and Chromium workflows.
 
-Real Keycloak 26.7.4 deployment acceptance has passed on WSL2 for login/provisioning/SSO-only behavior and back-channel logout. The final logout regression ran against Workspace `9894b95686c6229a956b93c0a2263e4434aae184` after the PR #16 RLS fix, with `workspace_runtime` `rolsuper=false` and `rolbypassrls=false` before and after testing. Explicit Keycloak session termination emitted genuine signed logout tokens, Workspace created fresh `auth.oidc_backchannel_logout` audit events, deleted the matching OIDC sessions, rejected the old Workspace session, preserved the local break-glass session, and allowed a fresh SSO session while the old one stayed invalid. No RLS or HTTP 500 error occurred. Real-provider back-channel logout acceptance is closed. The remaining enterprise identity gap is directory/SCIM lifecycle and automated offboarding when account disablement does not emit a logout event.
+Real Keycloak 26.7.4 deployment acceptance has passed on WSL2 for login/provisioning/SSO-only behavior and back-channel logout. The final logout regression ran against Workspace `9894b95686c6229a956b93c0a2263e4434aae184` after the PR #16 RLS fix, with `workspace_runtime` `rolsuper=false` and `rolbypassrls=false` before and after testing. Explicit Keycloak session termination emitted genuine signed logout tokens, Workspace created fresh `auth.oidc_backchannel_logout` audit events, deleted the matching OIDC sessions, rejected the old Workspace session, preserved the local break-glass session, and allowed a fresh SSO session while the old one stayed invalid. No RLS or HTTP 500 error occurred. Real-provider back-channel logout acceptance is closed. SCIM Users provisioning/deactivation is also implemented and CI-verified; the remaining enterprise identity gap is SCIM Groups, group membership synchronization and explicit group-to-Workspace-role policy.
