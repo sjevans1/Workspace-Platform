@@ -4,6 +4,7 @@ import { Database } from "../packages/database/index.ts";
 import {
   createUnencryptedStorage,
   encryptStoredObject,
+  decryptStoredObject,
   isEncryptedStoredObject,
   type Storage,
 } from "../packages/storage/index.ts";
@@ -39,6 +40,7 @@ export async function migrateStorageEncryption(
         raw = await storage.get(oldKey);
 
       if (isEncryptedStoredObject(raw)) {
+        decryptStoredObject(oldKey, raw, env);
         alreadyEncrypted++;
         continue;
       }
