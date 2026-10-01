@@ -59,6 +59,7 @@ import {
   inspectFile,
   type Storage,
 } from "../../../packages/storage/index.ts";
+import { registerScim } from "./scim.ts";
 import {
   createResource,
   createRecord,
@@ -1211,6 +1212,7 @@ export async function buildApp(
     "workspace.read",
   );
   dataRoutes(route, storage);
+  await registerScim(app, db);
   app.addHook("onClose", async () => {
     try {
       await redis?.quit();
@@ -1652,6 +1654,67 @@ function dataRoutes(route: Route, storage: Storage) {
       return { ok: true };
     },
     "files.write",
+  );
+  route(
+    "GET",
+    "/scim/connectors",
+    "List SCIM connectors",
+    async (q, a) => {
+      admin(a);
+      return (
+        await q.query(
+          "SELECT id,label,default_role,created_at,last_used_at,revoked_at FROM scim_connectors ORDER BY created_at DESC",
+        )
+      ).rows;
+    },
+  );
+  route(
+    "POST",
+    "/scim/connectors",
+    "Create tenant-scoped SCIM connector",
+    async (q, a, r) => {
+      admin(a);
+      const v = body(
+          z
+            .object({
+              label: title,
+              default_role: z.enum(["member", "guest"]).default("member"),
+            })
+            .strict(),
+          r,
+        ),
+        id = randomUUID(),
+        value = `scim_${token()}`;
+      await q.query(
+        "INSERT INTO scim_connectors(id,tenant_id,label,token_hash,default_role,created_by) VALUES($1,$2,$3,$4,$5,$6)",
+        [id, a.tenant_id, v.label, hash(value), v.default_role, a.user_id],
+      );
+      await emit(q, a, "scim.connector_created", null);
+      return {
+        id,
+        label: v.label,
+        default_role: v.default_role,
+        token: value,
+        base_url: `${process.env.APP_URL || "http://localhost:3000"}/scim/v2`,
+        warning: "This token is shown once. Store it in the identity provider secret store.",
+      };
+    },
+  );
+  route(
+    "DELETE",
+    "/scim/connectors/:id",
+    "Revoke SCIM connector",
+    async (q, a, r) => {
+      admin(a);
+      const changed = await one(
+        q,
+        "UPDATE scim_connectors SET revoked_at=coalesce(revoked_at,now()) WHERE id=$1 RETURNING id",
+        [id(r)],
+      );
+      assert(changed, 404, "SCIM connector not found");
+      await emit(q, a, "scim.connector_revoked", null);
+      return { ok: true };
+    },
   );
   route(
     "GET",
