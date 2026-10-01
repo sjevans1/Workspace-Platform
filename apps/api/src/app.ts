@@ -1677,7 +1677,7 @@ function dataRoutes(route: Route, storage: Storage) {
       const v = body(
           z
             .object({
-              label: title,
+              label: z.string().trim().min(1).max(120),
               default_role: z.enum(["member", "guest"]).default("member"),
             })
             .strict(),
@@ -1695,7 +1695,10 @@ function dataRoutes(route: Route, storage: Storage) {
         label: v.label,
         default_role: v.default_role,
         token: value,
-        base_url: `${process.env.APP_URL || "http://localhost:3000"}/scim/v2`,
+        base_url: new URL(
+          "/scim/v2",
+          process.env.APP_URL || "http://localhost:3000",
+        ).href.replace(/\/$/, ""),
         warning: "This token is shown once. Store it in the identity provider secret store.",
       };
     },
