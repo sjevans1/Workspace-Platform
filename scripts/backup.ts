@@ -75,9 +75,18 @@ export function encodeBackup(archive: Archive) {
   });
 }
 
-export function decodeBackup(text: string): Archive {
+export function decodeBackup(
+  text: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Archive {
   const envelope = JSON.parse(text);
-  if (envelope?.format === "openjm-backup-v1") return envelope as Archive;
+  if (envelope?.format === "openjm-backup-v1") {
+    if (env.ALLOW_LEGACY_PLAINTEXT_BACKUP !== "true")
+      throw new Error(
+        "Legacy plaintext backup refused; set ALLOW_LEGACY_PLAINTEXT_BACKUP=true only for a controlled one-time restore",
+      );
+    return envelope as Archive;
+  }
   if (
     envelope?.format !== backupEnvelopeFormat ||
     typeof envelope.iv !== "string" ||
