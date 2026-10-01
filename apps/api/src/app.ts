@@ -947,7 +947,7 @@ export async function buildApp(
           await q.query(
             // Recent is a private visit timeline, not the organisation's
             // latest edits. Re-check active ACLs before returning each item.
-            "SELECT r.* FROM bookmarks b JOIN resources r" +
+            "SELECT r.*,b.visited_at AS viewed_at FROM bookmarks b JOIN resources r" +
             " ON r.tenant_id=b.tenant_id AND r.id=b.resource_id" +
             " WHERE b.user_id=$1 AND r.deleted_at IS NULL" +
             " AND r.kind IN ('page','record','database')" +
