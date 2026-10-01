@@ -19,6 +19,7 @@ import {
 
 const SCIM_JSON = "application/scim+json",
   USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User",
+  GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group",
   LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse",
   ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error",
   PATCH_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp",
@@ -73,6 +74,25 @@ const email = z.email().transform((value) => value.trim().toLowerCase()),
         .max(20)
         .optional(),
       active: z.boolean().optional(),
+    })
+    .passthrough(),
+  scimGroupInput = z
+    .object({
+      schemas: z.array(z.string()).optional(),
+      displayName: z.string().trim().min(1).max(500),
+      externalId: z.string().trim().max(500).nullable().optional(),
+      members: z
+        .array(
+          z
+            .object({
+              value: uuid,
+              display: z.string().trim().max(500).optional(),
+              $ref: z.string().max(2000).optional(),
+            })
+            .passthrough(),
+        )
+        .max(2000)
+        .optional(),
     })
     .passthrough(),
   patchInput = z
@@ -173,6 +193,173 @@ async function loadUser(q: Query, id: string) {
      WHERE s.id=$1 AND s.deleted_at IS NULL`,
     [id],
   );
+}
+
+async function loadGroup(q: Query, id: string) {
+  const group = await one(
+    q,
+    `SELECT g.*,m.role AS mapped_role
+     FROM scim_groups g
+     LEFT JOIN scim_group_role_mappings m ON m.group_id=g.id
+     WHERE g.id=$1 AND g.deleted_at IS NULL`,
+    [id],
+  );
+  if (!group) return undefined;
+  group.members = (
+    await q.query(
+      `SELECT s.id AS value,s.user_name AS display
+       FROM scim_group_members gm
+       JOIN scim_users s ON s.id=gm.scim_user_id
+       WHERE gm.group_id=$1 AND s.deleted_at IS NULL
+       ORDER BY lower(s.user_name),s.id`,
+      [id],
+    )
+  ).rows;
+  return group;
+}
+
+function groupResource(row: any, base: string) {
+  return {
+    schemas: [GROUP_SCHEMA],
+    id: row.id,
+    ...(row.external_id ? { externalId: row.external_id } : {}),
+    displayName: row.display_name,
+    members: (row.members || []).map((member: any) => ({
+      value: member.value,
+      ...(member.display ? { display: member.display } : {}),
+      $ref: `${base}/Users/${member.value}`,
+    })),
+    meta: {
+      resourceType: "Group",
+      created: new Date(row.created_at).toISOString(),
+      lastModified: new Date(row.updated_at).toISOString(),
+      location: `${base}/Groups/${row.id}`,
+      version: version(row.updated_at),
+    },
+  };
+}
+
+async function assertScimUsers(q: Query, ids: string[]) {
+  const unique = [...new Set(ids)];
+  if (!unique.length) return unique;
+  const rows = (
+    await q.query(
+      `SELECT id FROM scim_users
+       WHERE deleted_at IS NULL AND id=ANY($1::uuid[])`,
+      [unique],
+    )
+  ).rows;
+  if (rows.length !== unique.length)
+    throw new ScimError(
+      400,
+      "Group members must reference live SCIM User resource IDs in this tenant",
+      "invalidValue",
+    );
+  return unique;
+}
+
+async function reconcileScimRole(q: Query, scimUserId: string) {
+  const state = await one(
+    q,
+    `SELECT s.user_id,s.base_role,m.role AS current_role,
+       EXISTS(
+         SELECT 1
+         FROM scim_group_members gm
+         JOIN scim_groups g ON g.id=gm.group_id AND g.deleted_at IS NULL
+         JOIN scim_group_role_mappings rm ON rm.group_id=gm.group_id
+         WHERE gm.scim_user_id=s.id AND rm.role='member'
+       ) AS member_group
+     FROM scim_users s
+     JOIN memberships m ON m.tenant_id=s.tenant_id AND m.user_id=s.user_id
+     WHERE s.id=$1 AND s.deleted_at IS NULL`,
+    [scimUserId],
+  );
+  if (!state || ["owner", "admin"].includes(state.current_role)) return;
+  const role = state.base_role === "member" || state.member_group
+    ? "member"
+    : "guest";
+  await q.query(
+    `UPDATE memberships m
+     SET role=$2
+     FROM scim_users s
+     WHERE s.id=$1 AND m.tenant_id=s.tenant_id AND m.user_id=s.user_id`,
+    [scimUserId, role],
+  );
+}
+
+async function replaceGroupMembers(
+  q: Query,
+  tenantId: string,
+  groupId: string,
+  memberIds: string[],
+) {
+  const next = await assertScimUsers(q, memberIds),
+    previous = (
+      await q.query(
+        "SELECT scim_user_id FROM scim_group_members WHERE group_id=$1",
+        [groupId],
+      )
+    ).rows.map((row) => row.scim_user_id as string),
+    affected = [...new Set([...previous, ...next])];
+
+  await q.query("DELETE FROM scim_group_members WHERE group_id=$1", [groupId]);
+  for (const scimUserId of next)
+    await q.query(
+      "INSERT INTO scim_group_members(tenant_id,group_id,scim_user_id) VALUES($1,$2,$3)",
+      [tenantId, groupId, scimUserId],
+    );
+  await q.query("UPDATE scim_groups SET updated_at=now() WHERE id=$1", [groupId]);
+  for (const scimUserId of affected) await reconcileScimRole(q, scimUserId);
+}
+
+async function addGroupMembers(
+  q: Query,
+  tenantId: string,
+  groupId: string,
+  memberIds: string[],
+) {
+  const ids = await assertScimUsers(q, memberIds);
+  for (const scimUserId of ids)
+    await q.query(
+      `INSERT INTO scim_group_members(tenant_id,group_id,scim_user_id)
+       VALUES($1,$2,$3) ON CONFLICT DO NOTHING`,
+      [tenantId, groupId, scimUserId],
+    );
+  await q.query("UPDATE scim_groups SET updated_at=now() WHERE id=$1", [groupId]);
+  for (const scimUserId of ids) await reconcileScimRole(q, scimUserId);
+}
+
+async function removeGroupMembers(
+  q: Query,
+  groupId: string,
+  memberIds?: string[],
+) {
+  const removed = memberIds?.length
+    ? (
+        await q.query(
+          `DELETE FROM scim_group_members
+           WHERE group_id=$1 AND scim_user_id=ANY($2::uuid[])
+           RETURNING scim_user_id`,
+          [groupId, memberIds],
+        )
+      ).rows
+    : (
+        await q.query(
+          "DELETE FROM scim_group_members WHERE group_id=$1 RETURNING scim_user_id",
+          [groupId],
+        )
+      ).rows;
+  await q.query("UPDATE scim_groups SET updated_at=now() WHERE id=$1", [groupId]);
+  for (const row of removed) await reconcileScimRole(q, row.scim_user_id);
+}
+
+function groupMemberValues(value: unknown) {
+  const input = Array.isArray(value) ? value : value ? [value] : [];
+  return input.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      throw new ScimError(400, "Group members must be objects", "invalidValue");
+    return uuid.parse((item as any).value);
+  });
 }
 
 async function audit(
