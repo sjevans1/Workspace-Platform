@@ -93,6 +93,7 @@ import {
   indexedRecordText, redactRelationSchema, redactRelationValues,
   validateRelationSchema, validateRelationWrites,
 } from "./relations.ts";
+import { computedFormulaValues, validateFormulaDefinitions } from "../../../packages/formulas/index.ts";
 type Request = FastifyRequest & {
   actor: Actor;
   sessionToken: string;
@@ -1633,6 +1634,7 @@ function dataRoutes(
         id(r),
       ]);
       await validateRelationSchema(q, a, id(r), v.properties);
+      validateFormulaDefinitions(v.properties);
       for (const row of (
         await q.query(
           "SELECT values FROM database_records WHERE database_id=$1",
@@ -1749,7 +1751,8 @@ function dataRoutes(
       return {
         ...n, ...v,
         properties: await redactRelationSchema(q, a, v.properties),
-        values: await redactRelationValues(q, a, v.properties, v.values),
+        values: computedFormulaValues(v.properties,
+          await redactRelationValues(q, a, v.properties, v.values)),
       };
     },
     "databases.read",
@@ -1798,7 +1801,8 @@ function dataRoutes(
       );
       await emit(q, a, "record.updated", n.id, d.revision + 1);
       return { ...n,
-        values: await redactRelationValues(q, a, d.properties, values),
+        values: computedFormulaValues(d.properties,
+          await redactRelationValues(q, a, d.properties, values)),
         revision: d.revision + 1 };
     },
     "databases.write",
@@ -1819,7 +1823,8 @@ function dataRoutes(
         assert(d, 404, "Database not found");
         const keys = d.properties.map((p: any) => p.id);
         for (const field of [...v.config.filters, ...v.config.sort])
-          assert(d.properties.find((p: any) => p.id === field.property)?.type !== "relation",
+          assert(!["relation", "formula"].includes(
+            d.properties.find((p: any) => p.id === field.property)?.type),
             400, "Relation sorting/filtering requires permission-aware indexing");
         for (const k of [
           ...v.config.filters.map((f) => f.property),

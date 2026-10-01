@@ -30,6 +30,10 @@ export function PropertyInput({
   databaseId?: string;
   save: (v: any) => void;
 }) {
+  if (p.type === "formula")
+    return <output aria-label={p.name} className="formula-result">
+      {value === null || value === undefined ? "—" : String(value)}
+    </output>;
   if (p.type === "relation")
     return <RelationInput p={p} value={value} disabled={disabled}
       save={save} databaseId={databaseId} />;
@@ -974,6 +978,9 @@ function PropertiesDialog({
                   )
                     ? { options: p.options || ["Option 1"] }
                     : { options: undefined }),
+                  // Clear the numeric Formula when changing property type.
+                  formula: e.target.value === "formula"
+                    ? p.formula || "0" : undefined,
                 })
               }
             >
@@ -990,6 +997,7 @@ function PropertiesDialog({
                 "url",
                 "email",
                 "relation",
+                "formula",
               ].map((t) => (
                 <option key={t}>{t}</option>
               ))}
@@ -1052,6 +1060,35 @@ function PropertiesDialog({
                 </button>}
                 {p.target_unavailable &&
                   <span className="muted">Target inaccessible; contact an administrator.</span>}
+              </div>
+            )}
+            {p.type === "formula" && (
+              <div className="formula-config">
+                <input aria-label={`${p.name} formula expression`}
+                  value={p.formula || ""} disabled={!editable}
+                  placeholder="[unit_cost] * [quantity]"
+                  onChange={(e) => update(i, { formula: e.target.value })}
+                />
+                <small className="muted">
+                  Insert a Number field below, then use +, -, *, / or parentheses.
+                  Only fields from this database are available.
+                </small>
+                <div role="group" aria-label={`Number references for ${p.name}`}>
+                  {props.filter((other) => other.type === "number").map((other) =>
+                    <button key={other.id} type="button" className="button quiet"
+                      disabled={!editable}
+                      aria-label={`Insert number field ${other.name}`}
+                      onClick={() => update(i, {
+                        formula: (p.formula === "0" ? "" : p.formula || "") +
+                          `[${other.id}]`,
+                      })}>
+                      {other.name}
+                    </button>)}
+                  {!props.some((other) => other.type === "number") &&
+                    <span className="muted">
+                      Add a Number property to reference it here.
+                    </span>}
+                </div>
               </div>
             )}
             {["select", "status", "multi_select"].includes(p.type) && (

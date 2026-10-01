@@ -2893,3 +2893,79 @@ test("W05 relation references: write validation, ACL redaction, export, and sche
   assert.equal(unchanged.properties.find((p: any) => p.id === "client_ref").type,
     "relation", "invalid schema conversion must roll back");
 });
+
+
+test("W06 numeric formulas: read-only recomputation, revisions and exports", async () => {
+  const formulaDatabase = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W06 Formula records",
+  });
+  const databaseRoute = "/databases/" + formulaDatabase.id;
+  const schema = [
+    { id: "name", name: "Name", type: "title" },
+    { id: "units", name: "Units", type: "number" },
+    { id: "price", name: "Price", type: "number" },
+    { id: "gross", name: "Gross", type: "formula",
+      formula: "[units] * [price] + 2.5" },
+  ];
+  await ok("PATCH", databaseRoute, { properties: schema });
+  const definition = await ok("GET", databaseRoute);
+  assert.equal(definition.properties.find((f: any) =>
+    f.id === "gross").formula, "[units] * [price] + 2.5");
+  const row = await ok("POST", databaseRoute + "/records", {
+    values: { name: "W06 Orders", units: 3, price: 4 },
+  });
+  const recordRoute = "/records/" + row.id;
+  assert.equal(row.values.gross, 14.5);
+  assert.equal((await ok("GET", recordRoute)).values.gross, 14.5);
+  const table = await ok("GET", databaseRoute + "/records");
+  assert.equal(table.find((item: any) => item.id === row.id).values.gross, 14.5);
+  const jsonExport = await ok("GET",
+    "/resources/" + formulaDatabase.id + "/export?format=json");
+  assert.equal(jsonExport.records.find((item: any) =>
+    item.id === row.id).values.gross, 14.5);
+  const csvExport = await req("GET",
+    "/resources/" + formulaDatabase.id + "/export?format=csv");
+  assert.equal(csvExport.statusCode, 200, csvExport.body);
+  assert.match(csvExport.body, /14\.5/);
+
+  const blockedWrite = await req("PATCH", recordRoute, {
+    expected_revision: row.revision, values: { gross: 99999 },
+  });
+  assert.equal(blockedWrite.statusCode, 400,
+    "clients cannot modify computed values or bypass formulas");
+  const changedRow = await ok("PATCH", recordRoute, {
+    expected_revision: row.revision, values: { units: 5 },
+  });
+  assert.equal(changedRow.values.gross, 22.5);
+  assert.equal((await ok("GET", recordRoute)).values.gross, 22.5);
+  const stale = await req("PATCH", recordRoute, {
+    expected_revision: row.revision, values: { units: 7 },
+  });
+  assert.equal(stale.statusCode, 409);
+
+  const badDefinition = await req("PATCH", databaseRoute, {
+    properties: schema.map((f) => f.id === "gross" ?
+      { ...f, formula: "eval(1)" } : f),
+  });
+  assert.equal(badDefinition.statusCode, 400);
+  const unknownField = await req("PATCH", databaseRoute, {
+    properties: schema.map((f) => f.id === "gross" ?
+      { ...f, formula: "[hidden]+1" } : f),
+  });
+  assert.equal(unknownField.statusCode, 400);
+  const unsafeReference = await req("PATCH", databaseRoute, {
+    properties: schema.map((f) => f.id === "gross" ?
+      { ...f, formula: "[gross]+1" } : f),
+  });
+  assert.equal(unsafeReference.statusCode, 400);
+  const noRawQuery = await req("POST", databaseRoute + "/views", {
+    name: "Unsupported computed predicate",
+    config: { type: "table",
+      filters: [{ property: "gross", op: "eq", value: "14.5" }], sort: [] },
+  });
+  assert.equal(noRawQuery.statusCode, 400);
+  const restored = await ok("GET", databaseRoute);
+  assert.equal(restored.properties.find((p: any) => p.id === "gross").formula,
+    "[units] * [price] + 2.5",
+    "invalid schema change must not mutate the accepted expression");
+});

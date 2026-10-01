@@ -41,6 +41,7 @@ export const propertyTypes = [
   "url",
   "email",
   "relation",
+  "formula",
 ] as const;
 export const property = z
   .object({
@@ -49,6 +50,7 @@ export const property = z
     type: z.enum(propertyTypes),
     options: z.array(z.string().min(1).max(120)).max(100).optional(),
     target_database_id: uuid.optional(),
+    formula: z.string().trim().min(1).max(240).optional(),
   })
   .strict()
   .superRefine((p, ctx) => {
@@ -58,6 +60,12 @@ export const property = z
     if (p.type !== "relation" && p.target_database_id)
       ctx.addIssue({ code: "custom", path: ["target_database_id"],
         message: "Only relation properties can target another database" });
+    if (p.type === "formula" && !p.formula)
+      ctx.addIssue({ code: "custom", path: ["formula"],
+        message: "Formula requires an expression" });
+    if (p.type !== "formula" && p.formula)
+      ctx.addIssue({ code: "custom", path: ["formula"],
+        message: "Only formula properties can define an expression" });
   });
 export const properties = z
   .array(property)
@@ -75,6 +83,7 @@ export function validateValues(props: Property[], values: Record<string, any>) {
   for (const [k, v] of Object.entries(values)) {
     const p = props.find((p) => p.id === k);
     assert(p, 400, `Unknown property ${k}`);
+    assert(p.type !== "formula", 400, "Formula properties are read-only");
     if (v === null || v === "") {
       result[k] = null;
       continue;
