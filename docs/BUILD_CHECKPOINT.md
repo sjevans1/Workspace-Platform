@@ -177,13 +177,13 @@ Attachment adversarial tests now reject active/unsupported extensions, invalid i
 
 PR #27 passed final-head GitHub Actions run 36813254755 and was squash-merged to `main` at `bf3b8184a4454f048223dc6131d20c57e8ba3741`. Backend passed 42/42 native PostgreSQL tests, including webhook redirect and malicious-attachment regressions. Deployment passed the invitation URL scrub in the full Chromium workflow and the hardened TLS/security-header gate. Malware scanning/CDR, nonce/hash CSP, release-image vulnerability scanning and customer-specific penetration testing remain separate production-hardening work.
 
-## Active hardening slice: browser and accessibility coverage
+## Verified hardening slice: browser and accessibility coverage
 
 Workspace's shared `Modal` primitive now manages keyboard focus centrally: initial focus moves into the dialog, Tab/Shift+Tab are trapped, Escape closes, and focus returns to the trigger on unmount. This applies to all application dialogs because there is only one dialog implementation in the web application.
 
 A focused browser acceptance checks visible controls for accessible names, images for alt attributes, duplicate IDs and modal semantics, then proves focus trapping/restoration through real keyboard interaction. The existing full Chromium workflow remains unchanged; the new focused compatibility matrix runs the deployed application in both Chromium and Firefox.
 
-This slice remains **in progress** until final-head typecheck/build, native PostgreSQL tests, full deployed Chromium acceptance, Chromium/Firefox accessibility matrix and trusted-TLS gate all pass. WebKit/Safari coverage, full WCAG/screen-reader review and deterministic visual regression remain separate follow-on work.
+PR #29 passed final-head GitHub Actions run 36814890004 and was squash-merged to `main` at `d4f58ea07202bbc32c929c3d208a81a5809eec91`. Backend passed 42/42 native PostgreSQL tests, TypeScript/build and the S3 harness. Deployment passed the full Chromium workflow, the focused Chromium + Firefox keyboard/semantic accessibility matrix, and trusted HTTPS/secure-cookie/WSS. WebKit/Safari coverage, full WCAG/screen-reader review and deterministic visual regression remain separate follow-on work. WebKit/Safari coverage, full WCAG/screen-reader review and deterministic visual regression remain separate follow-on work.
 
 ## First-pass completion and future work
 
