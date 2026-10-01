@@ -3,6 +3,82 @@ import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 const email = "browser@example.test",
   password = "browser-password-123";
+async function semanticAccessibilityIssues(page: Page) {
+  return page.evaluate(() => {
+    const issues: string[] = [],
+      visible = (element: Element) => {
+        const node = element as HTMLElement,
+          style = getComputedStyle(node),
+          rect = node.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          !node.closest('[aria-hidden="true"]')
+        );
+      },
+      labelledBy = (element: Element) =>
+        (element.getAttribute("aria-labelledby") || "")
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((id) => document.getElementById(id)?.textContent?.trim() || "")
+          .join(" ")
+          .trim(),
+      accessibleName = (element: Element) => {
+        const aria = element.getAttribute("aria-label")?.trim();
+        if (aria) return aria;
+        const referenced = labelledBy(element);
+        if (referenced) return referenced;
+        if (
+          element instanceof HTMLInputElement ||
+          element instanceof HTMLSelectElement ||
+          element instanceof HTMLTextAreaElement
+        ) {
+          const labels = [...(element.labels || [])]
+            .map((label) => label.textContent?.trim() || "")
+            .join(" ")
+            .trim();
+          if (labels) return labels;
+        }
+        const title = element.getAttribute("title")?.trim();
+        if (title) return title;
+        return element.textContent?.trim() || "";
+      };
+
+    const ids = new Map<string, number>();
+    for (const element of document.querySelectorAll("[id]")) {
+      const id = element.id;
+      if (id) ids.set(id, (ids.get(id) || 0) + 1);
+    }
+    for (const [id, count] of ids)
+      if (count > 1) issues.push(`duplicate id: ${id}`);
+
+    for (const element of document.querySelectorAll(
+      'button,a[href],[role="button"]',
+    ))
+      if (visible(element) && !accessibleName(element))
+        issues.push(
+          `unnamed interactive control: ${element.tagName.toLowerCase()}`,
+        );
+
+    for (const element of document.querySelectorAll(
+      'input:not([type="hidden"]),select,textarea',
+    ))
+      if (visible(element) && !accessibleName(element))
+        issues.push(
+          `unlabelled form control: ${element.tagName.toLowerCase()}`,
+        );
+
+    for (const image of document.querySelectorAll("img"))
+      if (visible(image) && !image.hasAttribute("alt"))
+        issues.push("image missing alt attribute");
+
+    return issues;
+  });
+}
+
 async function login(page: Page) {
   await page.goto("/");
   await expect(page.locator("h1")).toBeVisible();
@@ -185,6 +261,28 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
     ),
   ).toBeTruthy();
   expect(errors).toEqual([]);
+});
+
+test("core shell, search and settings pass semantic accessibility checks", async ({
+  page,
+}) => {
+  await login(page);
+  expect(await semanticAccessibilityIssues(page)).toEqual([]);
+
+  await page.getByRole("button", { name: "Search anything" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Search your workspace" }),
+  ).toBeVisible();
+  expect(await semanticAccessibilityIssues(page)).toEqual([]);
+  await page.keyboard.press("Escape");
+
+  await page
+    .getByRole("button", { name: "Settings & members", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Settings & members", exact: true }),
+  ).toBeVisible();
+  expect(await semanticAccessibilityIssues(page)).toEqual([]);
 });
 
 test("dialogs trap keyboard focus and restore the opener", async ({ page }) => {
