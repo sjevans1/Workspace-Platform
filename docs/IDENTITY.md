@@ -107,6 +107,8 @@ OIDC-created Workspace sessions retain only issuer/subject/session-ID linkage; W
 
 An administrator deactivating a Workspace membership already revokes that user's Workspace sessions for the tenant. Separately, disabling an account in an external directory does not by itself guarantee that an OIDC back-channel event will be emitted; directory/SCIM offboarding remains a distinct lifecycle concern.
 
+Do not grant `BYPASSRLS` to `workspace_runtime` to support logout. The runtime role is intentionally `NOBYPASSRLS`; the back-channel handler sets transaction-local tenant context for its tenant-scoped audit insert.
+
 ## Enabling SSO safely
 
 1. Keep `LOCAL_AUTH_ENABLED=true`.
@@ -178,4 +180,4 @@ CI covers:
 - preservation of an unrelated local break-glass session during OIDC session revocation;
 - normal non-SSO Docker and Chromium workflows.
 
-A real Keycloak 26.7.4 deployment test has passed on WSL2 for login/provisioning/SSO-only behavior. The back-channel logout implementation has passed CI and now requires a focused real-Keycloak host test to prove Keycloak emits a logout token that invalidates an already-active Workspace SSO session end to end. Follow `HERMES_KEYCLOAK_LOGOUT_ACCEPTANCE.md` for that bounded test.
+A real Keycloak 26.7.4 deployment test has passed on WSL2 for login/provisioning/SSO-only behavior. A focused logout exercise also proved that Keycloak emits a signed back-channel token on explicit administrator session termination. That host exercise exposed an RLS defect in the tenant audit insert and required a disposable `BYPASSRLS` workaround to complete; the workaround is not production-acceptable. PR #16 fixed the handler by setting transaction-local tenant context before each audit insert, and CI run 36797135204 now passes 36/36 native tests with the application running as `workspace_runtime` and `rolbypassrls=false`. One short no-workaround Keycloak host rerun remains before real-provider session-revocation acceptance is closed. Follow `HERMES_KEYCLOAK_LOGOUT_ACCEPTANCE.md`.
