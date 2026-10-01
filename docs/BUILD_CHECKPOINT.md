@@ -155,11 +155,11 @@ Workspace supports two production storage classes rather than requiring cloud ob
 
 This clarification changes the release checklist, not the storage implementation. The next cross-deployment hardening priority is operational tenant provisioning rather than waiting on a particular cloud-storage account.
 
-## Active hardening slice: operational tenant provisioning
+## Verified hardening slice: operational tenant provisioning
 
 Production tenant onboarding is being moved away from ad-hoc database work and universal self-service. The new operator command atomically creates an organisation, owner membership, root workspace and `tenant.provisioned` audit event. New owners may use a local password supplied only through the process environment or a passwordless SSO mode for verified-email OIDC deployments. Existing global users are refused unless the operator explicitly chooses `--allow-existing-user`; their existing credentials are preserved.
 
-Signed-in owner/admin self-service organisation creation is now deployment-controlled and defaults off through `ALLOW_SELF_SERVICE_ORGANISATIONS=false`. The API rejects creation with HTTP 403 and the UI hides the control unless the deployment explicitly enables it. Regression coverage includes the default-off API boundary plus atomic provisioning, duplicate rejection, conservative user reuse and passwordless ownership. This slice remains **in progress** until final-head native PostgreSQL, build and deployed browser gates pass.
+Signed-in owner/admin self-service organisation creation is now deployment-controlled and defaults off through `ALLOW_SELF_SERVICE_ORGANISATIONS=false`. The API rejects creation with HTTP 403 and the UI hides the control unless the deployment explicitly enables it. Regression coverage includes the default-off API boundary plus atomic provisioning, duplicate rejection, conservative user reuse and passwordless ownership. PR #25 passed final-head GitHub Actions run 36811758844 and was squash-merged to `main` at `4a6aa6fc2623561029a21e910d9d2895dc224c52`. The backend passed 39/39 native PostgreSQL tests, including the operator provisioning lifecycle regression, plus TypeScript and production build. The deployment job passed Docker startup, the deployed Chromium workflow and trusted HTTPS/secure-cookie/WSS acceptance.
 
 ## First-pass completion and future work
 
