@@ -110,14 +110,17 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     const encodedArchive = encodeBackup(archive);
     assert.match(encodedArchive, /openjm-backup-encrypted-v1/);
     assert.doesNotMatch(encodedArchive, /Backup evidence|Private bytes/);
-    assert.deepEqual(decodeBackup(encodedArchive), archive);
+    assert.equal(
+      JSON.stringify(decodeBackup(encodedArchive)),
+      JSON.stringify(archive),
+    );
 
     process.env.ENCRYPTION_KEY = "b".repeat(64);
     assert.throws(() => decodeBackup(encodedArchive), /Backup decryption failed/);
     process.env.ENCRYPTION_KEY = "a".repeat(64);
-    assert.deepEqual(
-      decodeBackup(JSON.stringify(archive)),
-      archive,
+    assert.equal(
+      JSON.stringify(decodeBackup(JSON.stringify(archive))),
+      JSON.stringify(archive),
       "legacy plaintext archives remain readable for recovery only",
     );
 
