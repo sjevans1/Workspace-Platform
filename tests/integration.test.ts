@@ -2,7 +2,7 @@ import { test, before, after } from "node:test";
 import { shutdownDiagnostics } from "./shutdown-diagnostics.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { HocuspocusProvider } from "@hocuspocus/provider";
@@ -157,6 +157,17 @@ async function finishOidc(flow: { state: string; cookie: string }) {
   return { cookie, csrf: csrf(cookie.split("=")[1]) };
 }
 const pause = (n: number) => new Promise((r) => setTimeout(r, n));
+async function storedFiles(root: string, prefix = ""): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory())
+      files.push(...(await storedFiles(`${root}/${entry.name}`, relative)));
+    else if (entry.isFile()) files.push(relative);
+  }
+  return files.sort();
+}
 async function until(fn: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 80; i++) {
     if (await fn()) return;
@@ -1134,6 +1145,7 @@ test("malware scanning blocks infected uploads before storage and fails closed w
       page.id,
     ]),
   );
+  const storedBefore = await storedFiles(dir);
 
   antivirusResult = { status: "infected", signature: "Eicar-Signature" };
   const infected = await upload("infected test payload");
@@ -1146,6 +1158,7 @@ test("malware scanning blocks infected uploads before storage and fails closed w
     ]),
   );
   assert.equal(after.rows[0].count, before.rows[0].count);
+  assert.deepEqual(await storedFiles(dir), storedBefore);
   const blockedAudit = await db.tenant(owner.tenant, (q) =>
     one(
       q,
@@ -1166,6 +1179,7 @@ test("malware scanning blocks infected uploads before storage and fails closed w
     ]),
   );
   assert.equal(after.rows[0].count, before.rows[0].count);
+  assert.deepEqual(await storedFiles(dir), storedBefore);
 
   antivirusUnavailable = false;
   antivirusResult = { status: "clean" };
