@@ -141,6 +141,14 @@ The next production-hardening slice is running the existing Docker/Caddy deploym
 
 CI now re-runs the deployed stack on `https://workspace.test` with Caddy's internal CA, installs that CA into the runner/browser trust stores without disabling certificate verification, and verifies HTTPS readiness, HTTP→HTTPS redirect, HSTS, a Secure/HttpOnly SameSite=Lax Workspace session cookie, no browser HTTP requests and WSS collaboration. PR #19 passed final-head GitHub Actions run 36809176797 and was squash-merged to `main` at `b3a258164a516c1a2cbc849002300a4b95da2431`. Native PostgreSQL, TypeScript/build, ordinary Docker/Chromium acceptance and the trusted-HTTPS browser gate all passed.
 
+## Active hardening slice: production S3/object-store provider acceptance
+
+Trusted TLS is closed. The next production gate is validating Workspace against the actual S3-compatible provider selected for deployment.
+
+The new `scripts/accept-production-s3.ts` harness uses two pre-created dedicated buckets and disposable PostgreSQL databases. It never creates or deletes buckets, writes only randomized Workspace-format keys, requires an explicit write-confirmation flag, verifies conditional immutable PUT, backup, collision-safe restore refusal, canonical Yjs recovery, active/deleted attachment recovery and source preservation, then cleans only generated keys. CI runs the same harness against disposable SeaweedFS buckets so the harness itself is continuously verified.
+
+This slice is **not provider-accepted yet**. It can merge once its code/CI gates pass, but the production-provider operational acceptance remains open until `docs/PRODUCTION_S3_ACCEPTANCE.md` is executed successfully against the selected provider.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
