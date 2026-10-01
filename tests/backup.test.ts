@@ -13,6 +13,7 @@ import {
 import type { Storage } from "../packages/storage/index.ts";
 import { blocksToState } from "../packages/editor/server.ts";
 import { sealTenantOidcSecret, openTenantOidcSecret } from "../packages/auth/tenant-provider.ts";
+import { encrypt, decrypt } from "../packages/events/index.ts";
 function memory() {
   const data = new Map<string, Buffer>();
   const storage: Storage = {
@@ -45,6 +46,7 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     file = randomUUID(),
     user = randomUUID(),
     connector = randomUUID(),
+    webhook = randomUUID(),
     scimUser = randomUUID(),
     scimGroup = randomUUID(),
     key = `${tenant}/${page}/${file}`;
@@ -86,6 +88,17 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
         [tenant, user],
       );
       const providerId = randomUUID();
+      await q.query(
+        "INSERT INTO webhook_subscriptions(id,tenant_id,url,events,secret_encrypted," +
+          " pending_secret_encrypted,signing_revision) VALUES($1,$2,'https://events.example.test/inbox'," +
+          " ARRAY['page.updated'],$3,$4,2)",
+        [
+          webhook,
+          tenant,
+          encrypt("backup-active-secret"),
+          encrypt("backup-prepared-secret"),
+        ],
+      );
       await q.query(
         "INSERT INTO oidc_tenant_providers" +
           " (id,tenant_id,label,issuer,client_id,token_auth_method,client_secret_encrypted,created_by)" +
@@ -184,6 +197,21 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
       q.query(
         "SELECT id,client_secret_encrypted,enabled FROM oidc_tenant_providers",
       ),
+    );
+    const hooks = await db.tenant(tenant, (q) =>
+      q.query(
+        "SELECT secret_encrypted,pending_secret_encrypted,signing_revision FROM webhook_subscriptions WHERE id=$1",
+        [webhook],
+      ),
+    );
+    assert.equal(hooks.rows[0].signing_revision, 2);
+    assert.equal(
+      decrypt(hooks.rows[0].secret_encrypted),
+      "backup-active-secret",
+    );
+    assert.equal(
+      decrypt(hooks.rows[0].pending_secret_encrypted),
+      "backup-prepared-secret",
     );
     assert.equal(providers.rows.length, 1);
     assert.equal(providers.rows[0].enabled, false);

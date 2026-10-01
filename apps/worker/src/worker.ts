@@ -104,7 +104,9 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
       ).rows) {
         const s = await one(
           q,
-          "SELECT * FROM webhook_subscriptions WHERE id=$1",
+          // Retain a read lock through the send/commit. Secret activation waits
+          // for already-started delivery transactions to finish signing.
+          "SELECT * FROM webhook_subscriptions WHERE id=$1 FOR SHARE",
           [d.subscription_id],
         );
         if (!s?.active) {

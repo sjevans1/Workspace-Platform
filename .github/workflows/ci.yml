@@ -98,6 +98,9 @@ jobs:
           # Test-only metadata: registration never performs discovery/network I/O.
           sed -i 's|^OIDC_TENANT_ISSUER_ORIGINS=.*|OIDC_TENANT_ISSUER_ORIGINS=https://login.example.test|' .env
           grep -Fx 'OIDC_TENANT_ISSUER_ORIGINS=https://login.example.test' .env
+          # Disposable rotation acceptance stores a subscription for an event
+          # that is never emitted, so no outbound request reaches this origin.
+          sed -i 's|^WEBHOOK_ALLOWED_ORIGINS=.*|WEBHOOK_ALLOWED_ORIGINS=https://events.example.test|' .env
           docker compose config --quiet
       - name: Build release containers
         run: docker compose build api clamav

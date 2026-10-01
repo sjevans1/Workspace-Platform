@@ -33,6 +33,7 @@ export default defineConfig({
           DEV_DATABASE_PATH: ".data/e2e-postgres",
           E2E_PRODUCTION: "true",
           NEXT_TELEMETRY_DISABLED: "1",
+          WEBHOOK_ALLOWED_ORIGINS: "https://events.example.test",
         },
       },
 });

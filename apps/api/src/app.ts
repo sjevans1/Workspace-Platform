@@ -2631,7 +2631,9 @@ function dataRoutes(
       return {
         subscriptions: (
           await q.query(
-            "SELECT id,url,events,active FROM webhook_subscriptions",
+            "SELECT id,url,events,active,signing_revision," +
+              " pending_secret_encrypted IS NOT NULL AS rotation_pending" +
+              " FROM webhook_subscriptions",
           )
         ).rows,
         deliveries: (
@@ -2692,6 +2694,102 @@ function dataRoutes(
       return { ok: true };
     },
   );
+  route(
+    "POST",
+    "/webhooks/:id/secret-rotation",
+    "Prepare a one-time webhook signing secret without activating it",
+    async (q, a, r) => {
+      admin(a);
+      const v = body(
+        z.object({ expected_revision: z.number().int().positive() }).strict(),
+        r,
+      );
+      const subscriptionId = id(r);
+      const current = await one(
+        q,
+        "SELECT signing_revision,pending_secret_encrypted FROM webhook_subscriptions" +
+          " WHERE id=$1 AND tenant_id=$2 FOR UPDATE",
+        [subscriptionId, a.tenant_id],
+      );
+      assert(current, 404, "Webhook not found");
+      assert(
+        current.signing_revision === v.expected_revision &&
+          !current.pending_secret_encrypted,
+        409,
+        "Webhook rotation changed; reload before preparing a secret",
+      );
+      const secret = token();
+      const next = await one(
+        q,
+        "UPDATE webhook_subscriptions SET pending_secret_encrypted=$2," +
+          " signing_revision=signing_revision+1 WHERE id=$1" +
+          " RETURNING signing_revision",
+        [subscriptionId, encrypt(secret)],
+      );
+      await emit(q, a, "integration.secret_prepared", subscriptionId);
+      return {
+        id: subscriptionId,
+        secret,
+        signing_revision: next.signing_revision,
+        rotation_pending: true,
+      };
+    },
+  );
+  for (const [method, suffix, activate] of [
+    ["POST", "/activate", true],
+    ["DELETE", "", false],
+  ] as const) {
+    route(
+      method,
+      "/webhooks/:id/secret-rotation" + suffix,
+      activate
+        ? "Activate a prepared webhook signing secret"
+        : "Discard a prepared webhook signing secret",
+      async (q, a, r) => {
+        admin(a);
+        const v = body(
+          z.object({ expected_revision: z.number().int().positive() }).strict(),
+          r,
+        );
+        const subscriptionId = id(r);
+        const current = await one(
+          q,
+          "SELECT signing_revision,pending_secret_encrypted FROM webhook_subscriptions" +
+            " WHERE id=$1 AND tenant_id=$2 FOR UPDATE",
+          [subscriptionId, a.tenant_id],
+        );
+        assert(current, 404, "Webhook not found");
+        assert(
+          current.signing_revision === v.expected_revision &&
+            current.pending_secret_encrypted,
+          409,
+          "Prepared webhook secret changed; reload before continuing",
+        );
+        const next = await one(
+          q,
+          "UPDATE webhook_subscriptions SET" +
+            (activate ? " secret_encrypted=pending_secret_encrypted," : "") +
+            " pending_secret_encrypted=NULL,signing_revision=signing_revision+1" +
+            " WHERE id=$1 RETURNING signing_revision",
+          [subscriptionId],
+        );
+        await emit(
+          q,
+          a,
+          activate
+            ? "integration.secret_activated"
+            : "integration.secret_discarded",
+          subscriptionId,
+        );
+        return {
+          ok: true,
+          id: subscriptionId,
+          signing_revision: next.signing_revision,
+          rotation_pending: false,
+        };
+      },
+    );
+  }
   route(
     "POST",
     "/webhooks/deliveries/:id/replay",

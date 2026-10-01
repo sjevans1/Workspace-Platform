@@ -20,6 +20,8 @@ export default function Settings({
     [scimGroups, setScimGroups] = useState<any[]>([]),
     [hooks, setHooks] = useState<any>({ subscriptions: [], deliveries: [] }),
     [replayingDelivery, setReplayingDelivery] = useState(""),
+    [rotatingWebhook, setRotatingWebhook] = useState(""),
+    [activation, setActivation] = useState<any>(null),
     [audit, setAudit] = useState<any[]>([]),
     [modal, setModal] = useState(""),
     [secret, setSecret] = useState("");
@@ -477,7 +479,79 @@ export default function Settings({
               <div>
                 <strong>{h.url}</strong>
                 <small>{h.events.join(", ")}</small>
+                <small>
+                  {h.rotation_pending
+                    ? "New signing secret prepared"
+                    : "Current signing secret active"}
+                </small>
               </div>
+              {h.rotation_pending ? (
+                <>
+                  <button
+                    className="button"
+                    disabled={!!rotatingWebhook}
+                    aria-label={"Activate signing secret for " + h.url}
+                    onClick={() => setActivation(h)}
+                  >
+                    Activate secret
+                  </button>
+                  <button
+                    className="button"
+                    disabled={!!rotatingWebhook}
+                    aria-label={"Discard prepared secret for " + h.url}
+                    onClick={() =>
+                      run(async () => {
+                        setRotatingWebhook(h.id);
+                        try {
+                          await api(
+                            `/webhooks/${h.id}/secret-rotation`,
+                            "DELETE",
+                            {
+                              expected_revision: h.signing_revision,
+                            },
+                          );
+                          notify(
+                            "Prepared secret discarded. Current signing continues.",
+                          );
+                        } finally {
+                          await load();
+                          setRotatingWebhook("");
+                        }
+                      })
+                    }
+                  >
+                    Discard
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="button"
+                  disabled={!!rotatingWebhook}
+                  aria-label={"Prepare signing secret for " + h.url}
+                  onClick={() =>
+                    run(async () => {
+                      setRotatingWebhook(h.id);
+                      try {
+                        const r = await api(
+                          `/webhooks/${h.id}/secret-rotation`,
+                          "POST",
+                          {
+                            expected_revision: h.signing_revision,
+                          },
+                        );
+                        setSecret(
+                          `Prepared signing secret: ${r.secret}\nConfigure your receiver to accept this secret before activation. Current signing is unchanged. Save this secret now; it will not be shown again.`,
+                        );
+                      } finally {
+                        await load();
+                        setRotatingWebhook("");
+                      }
+                    })
+                  }
+                >
+                  Prepare rotation
+                </button>
+              )}
               <button
                 className="button"
                 onClick={() =>
@@ -826,6 +900,51 @@ export default function Settings({
               Copy
             </button>
           </div>
+        </Modal>
+      )}
+      {activation && (
+        <Modal
+          title="Activate webhook signing secret"
+          close={() => {
+            if (!rotatingWebhook) setActivation(null);
+          }}
+        >
+          <p>
+            Activate the prepared secret for {activation.url} after configuring
+            your receiver to accept it.
+          </p>
+          <p className="muted small-text">
+            Keep the previous secret accepted briefly for requests already
+            travelling to your receiver. Subsequent deliveries and retries use
+            the activated secret.
+          </p>
+          <button
+            className="button primary"
+            disabled={!!rotatingWebhook}
+            onClick={() =>
+              run(async () => {
+                setRotatingWebhook(activation.id);
+                try {
+                  await api(
+                    `/webhooks/${activation.id}/secret-rotation/activate`,
+                    "POST",
+                    {
+                      expected_revision: activation.signing_revision,
+                    },
+                  );
+                  setActivation(null);
+                  notify("New webhook signing secret activated.");
+                } finally {
+                  await load();
+                  setRotatingWebhook("");
+                }
+              })
+            }
+          >
+            {rotatingWebhook
+              ? "Activating…"
+              : "Receiver ready — activate secret"}
+          </button>
         </Modal>
       )}
     </div>

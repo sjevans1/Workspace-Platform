@@ -8,9 +8,9 @@ Build the self-hosted OpenJM Workspace first pass from the Astra handoff. The us
 
 ## Verified baseline and evidence
 
-Current verified production-hardening baseline: PR #35 merge `1994cc1f1f749a905bd87d07fe067996cc4b3543` with final-head CI https://github.com/sjevans1/Workspace-Platform/actions/runs/36823852010.
+Current verified baseline: `main` commit `0faa36338046b37d6c544f8565c735c7ff407212` (PR #51), with complete post-merge CI https://github.com/sjevans1/Workspace-Platform/actions/runs/36841516660 (run #180).
 
-- Backend job passed: 45 native PostgreSQL tests, TypeScript, encrypted S3 acceptance and production build.
+- Backend job passed: 59 native PostgreSQL tests, TypeScript, encrypted S3 acceptance and production build.
 - Deployment job passed: Docker image, migrations, full Compose startup and readiness.
 - Complete deployed Chromium scenario passed: setup, page creation, canonical server persistence, two independent browser sessions, shared edits, reload, comments, history, Markdown export, table editing, board movement and mobile navigation/layout.
 - Desktop and mobile screenshots were inspected. Successful-run screenshots remain in the CI browser-results artifact; precise boundaries are in ACCEPTANCE.md. Automatic approval review blocked committing screenshots to the public repository because they contain workspace/user labels. Do not retry that upload without resolving the approval requirement.
@@ -220,6 +220,23 @@ This slice deliberately implements reject-before-publish rather than a retained 
 ## Verified engineering slice: OIDC provider interoperability
 
 From the verified PR #35 / Actions run `36823852010` malware-scanning baseline, branch `hardening/oidc-provider-compatibility` adds explicit token endpoint authentication method configuration: `client_secret_basic` (backward-compatible confidential default), `client_secret_post` (confidential alternate) and `none` (public PKCE). Configuration rejects client-secret/method mismatches and disallowed methods; advertised provider metadata must support the configured choice. The disposable OIDC issuer tests the actual authorization-code exchange, PKCE, nonce, verified email and methods, including rejection paths. Deployment environment/Compose and IDENTITY documentation are updated. PR #36 passed final-head Actions run `36827473659`: 49/49 native PostgreSQL tests, real OIDC provider-method exchanges, encrypted S3 acceptance, production build, application and hardened ClamAV SBOM/Trivy, live deployment/EICAR, full Chromium browser, local ciphertext, Chromium + Firefox accessibility and trusted HTTPS/WSS. It was squash-merged at `12ab73d333243a1ac3068bac6f1560d632b8afd3`. Per-tenant issuer configuration and managed IdP secrets remain a separate follow-on engineering gate.
+
+## Move On continuation — verified merged features
+
+The post-merge `main` run #180 passed backend (59 native PostgreSQL tests, 0 skipped), encrypted S3 recovery, production build, Docker startup, Workspace/ClamAV SBOM and Trivy gates, EICAR scanning, deployed Chromium workflows, raw attachment ciphertext, Chromium/Firefox keyboard accessibility, and trusted HTTPS/secure cookies/WSS.
+
+- Tenant identity-provider factory, encrypted disabled-only registry and administrative Settings UI are merged (#37, #39, #46). T3a binds prospective login states to an exact tenant/provider/revision/issuer/client (#41). Deployment-issuer sessions cannot downgrade to local sessions through organisation switching (#40). Provider-ID session provenance and active tenant login/logout remain gated in TENANT_OIDC_DESIGN.md.
+- Permission-filtered, tenant/principal-bound resumable event cursors are merged (#43), preserving PostgreSQL microsecond order. Current-state reconciliation remains an integration follow-on.
+- Monthly saved calendar views and persistent date changes are merged (#44), with date-property validation and server-side month boundaries.
+- Keyboard search with ARIA combobox semantics, focus handling and Chromium/Firefox coverage is merged (#45).
+- Tenant-safe audited dead-delivery replay API and Settings UI are merged (#48, #51).
+- Transient authenticated startup failures preserve sessions and offer a bounded Retry-After recovery path (#49). Shared-IP browser acceptance now waits for the real rate-limit budget; production rate limits remain enabled. Both #49 and #51 passed post-merge `main` acceptance.
+
+The user requested independent sections progress in parallel. Keep isolated local work separate, publish one active integration PR, and require the exact final head's full CI before merge. Continue frequent user updates. Do not publish private browser screenshots into this public repository.
+
+## In progress — staged webhook signing-secret rotation
+
+The continuation prepares an encrypted one-time secret without changing active delivery signing, then allows an explicit administrator activation or discard. Revision preconditions reject concurrent/stale changes. The worker holds a subscription read lock through send/commit to serialize activation with in-flight sends. New coverage checks owner/admin authority, CSRF, service-token rejection, foreign tenants, concurrent preparation, old/new signature verification, replay, audit events, backup recovery and a real Settings workflow. Native PostgreSQL CI additionally checks that activation waits for an in-flight delivery. This slice is not yet claimed CI-accepted.
 
 ## First-pass completion and future work
 
