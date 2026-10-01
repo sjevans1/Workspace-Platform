@@ -2376,7 +2376,7 @@ test("reconciliation enumerates only currently accessible resources with encrypt
     "GET", path, undefined, null,
     { authorization: "Bearer " + authToken },
   );
-  const scan = async () => {
+  const scan = async (forbidden: string | null = hiddenId) => {
     const seen: string[] = [];
     const cursors: string[] = [];
     let cursor: string | undefined;
@@ -2389,7 +2389,7 @@ test("reconciliation enumerates only currently accessible resources with encrypt
       const body = result.json();
       assert.ok(body.resources.length <= 1);
       assert.match(body.next_cursor, /^reconcile-v1\./);
-      assert.ok(!result.body.includes(hiddenId),
+      if (forbidden) assert.ok(!result.body.includes(forbidden),
         "inaccessible IDs must not leak in fields or opaque cursors");
       if (!body.resources.length && body.has_more) emptyWithMore = true;
       seen.push(...body.resources.map((v: any) => v.id));
@@ -2439,7 +2439,7 @@ test("reconciliation enumerates only currently accessible resources with encrypt
     "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
     [owner.tenant, hiddenId, member.id],
   ));
-  assert.ok((await scan()).seen.includes(hiddenId));
+  assert.ok((await scan(null)).seen.includes(hiddenId));
   await db.tenant(owner.tenant, (q) => q.query(
     "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
     " VALUES($1,$2,$3,0)",
