@@ -2692,3 +2692,98 @@ test("recently viewed lists personal visits, not other users' edits, and revokes
     await recentApp.close();
   }
 });
+
+
+test("W05 relation references: write validation, ACL redaction, export, and schema safety", async () => {
+  const clients = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W05 Clients",
+  });
+  const projects = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W05 Projects",
+  });
+  const client = await ok("POST", `/databases/${clients.id}/records`, {
+    values: { name: "W05 Client: Island Foods" },
+  });
+  const fields = [
+    { id: "name", name: "Name", type: "title" },
+    { id: "client_ref", name: "Client", type: "relation",
+      target_database_id: clients.id },
+  ];
+  await ok("PATCH", `/databases/${projects.id}`, { properties: fields });
+  assert.equal(
+    (await req("POST", `/databases/${projects.id}/records`, {
+      values: { name: "Broken", client_ref: [randomUUID()] },
+    })).statusCode, 404,
+  );
+  const project = await ok("POST", `/databases/${projects.id}/records`, {
+    values: { name: "W05 Project Falcon", client_ref: [client.id] },
+  });
+  assert.deepEqual(project.values.client_ref, [client.id]);
+  const recordRead = await ok("GET", `/records/${project.id}`);
+  assert.deepEqual(recordRead.values.client_ref, [client.id]);
+  const listing = await ok("GET", `/databases/${projects.id}/records`);
+  assert.deepEqual(listing.find((v: any) => v.id === project.id)?.values.client_ref,
+    [client.id]);
+  const choices = await ok("GET",
+    `/databases/${projects.id}/relation-candidates?property=client_ref&search=Island`);
+  assert.ok(choices.items.some((item: any) => item.id === client.id));
+  const targets = await ok("GET",
+    `/databases/${projects.id}/relation-targets?search=Clients`);
+  assert.ok(targets.items.some((item: any) => item.id === clients.id));
+  const saved = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT search_text FROM resources WHERE id=$1", [project.id]));
+  assert.ok(!String(saved.search_text).includes(client.id),
+    "related-record UUID must not become searchable text");
+
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W05 Peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, peerId]);
+  });
+  const peerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken) };
+  assert.deepEqual((await ok("GET", `/records/${project.id}`, undefined, peer))
+    .values.client_ref, [client.id]);
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,0) ON CONFLICT(tenant_id,resource_id,principal_id)" +
+    " DO UPDATE SET level=0", [owner.tenant, clients.id, peerId]));
+  const hidden = await ok("GET", `/records/${project.id}`, undefined, peer);
+  assert.deepEqual(hidden.values.client_ref, []);
+  assert.equal(hidden.properties.find((v: any) =>
+    v.id === "client_ref").target_database_id, undefined);
+  const collection = await ok("GET",
+    `/databases/${projects.id}/records`, undefined, peer);
+  assert.deepEqual(collection.find((v: any) =>
+    v.id === project.id).values.client_ref, []);
+  const safeExport = await ok("GET",
+    `/resources/${projects.id}/export?format=json`, undefined, peer);
+  assert.ok(!JSON.stringify(safeExport).includes(client.id),
+    "export must not leak hidden record UUID");
+  assert.ok(!JSON.stringify(safeExport).includes(clients.id),
+    "export must not leak revoked target database UUID");
+  const forbiddenPicker = await req("GET",
+    `/databases/${projects.id}/relation-candidates?property=client_ref`,
+    undefined, peer);
+  assert.equal(forbiddenPicker.statusCode, 404);
+  const stale = await ok("GET", `/records/${project.id}`, undefined, peer);
+  const updated = await ok("PATCH", `/records/${project.id}`, {
+    values: { name: "W05 Project Falcon updated" },
+    expected_revision: stale.revision,
+  }, peer);
+  assert.deepEqual(updated.values.client_ref, [],
+    "unrelated edits must not reveal existing revoked references");
+  const incompatible = await req("PATCH", `/databases/${projects.id}`, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "client_ref", name: "Client", type: "text" },
+    ],
+  });
+  assert.equal(incompatible.statusCode, 400,
+    "populated relations cannot silently convert to text");
+});
