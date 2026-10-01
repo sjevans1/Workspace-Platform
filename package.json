@@ -21,7 +21,8 @@
     "test": "node --import tsx --test --test-concurrency=1 --test-timeout=90000 tests/*.test.ts",
     "test:e2e": "playwright test",
     "licenses": "node scripts/licenses.mjs",
-    "format": "prettier --write apps packages scripts tests e2e *.json *.ts *.yaml"
+    "format": "prettier --write apps packages scripts tests e2e *.json *.ts *.yaml",
+    "accept:s3": "node --import tsx scripts/accept-production-s3.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1142.0",

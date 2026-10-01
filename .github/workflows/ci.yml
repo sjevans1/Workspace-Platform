@@ -47,6 +47,37 @@ jobs:
       - run: npm run typecheck
       - run: npm test
         timeout-minutes: 3
+      - name: Verify production S3 acceptance harness
+        run: |
+          node --input-type=module <<'NODE'
+          import { S3Client, CreateBucketCommand } from "@aws-sdk/client-s3";
+          const client = new S3Client({
+            endpoint: "http://127.0.0.1:8333",
+            region: "us-east-1",
+            forcePathStyle: true,
+            credentials: {
+              accessKeyId: "workspace-ci",
+              secretAccessKey: "workspace-ci-secret",
+            },
+          });
+          for (const Bucket of ["openjm-acceptance-source", "openjm-acceptance-recovery"]) {
+            try {
+              await client.send(new CreateBucketCommand({ Bucket }));
+            } catch (error) {
+              if (error?.name !== "BucketAlreadyOwnedByYou") throw error;
+            }
+          }
+          client.destroy();
+          NODE
+          S3_ACCEPT_PROVIDER_LABEL=SeaweedFS-CI \
+          S3_ACCEPT_ENDPOINT=http://127.0.0.1:8333 \
+          S3_ACCEPT_ACCESS_KEY=workspace-ci \
+          S3_ACCEPT_SECRET_KEY=workspace-ci-secret \
+          S3_ACCEPT_SOURCE_BUCKET=openjm-acceptance-source \
+          S3_ACCEPT_RECOVERY_BUCKET=openjm-acceptance-recovery \
+          S3_ACCEPT_ALLOW_INSECURE=true \
+          S3_ACCEPT_WRITE_CONFIRMATION=I_UNDERSTAND_THIS_WRITES_TEST_OBJECTS \
+          npm run accept:s3
       - run: npm run build
   deployment:
     runs-on: ubuntu-latest
