@@ -3,12 +3,17 @@ import { useEffect, useState } from "react";
 import { Plus, Copy, ArrowUpRight } from "lucide-react";
 import { api, run, notify, changed, date } from "../lib/api";
 import { Modal, Field } from "./common";
+import type { Appearance } from "../lib/appearance";
 export default function Settings({
   me,
   reload,
+  appearance,
+  setAppearance,
 }: {
   me: any;
   reload: () => Promise<void>;
+  appearance: Appearance;
+  setAppearance: (choice: Appearance) => void;
 }) {
   const [tab, setTab] = useState("profile"),
     [members, setMembers] = useState<any[]>([]),
@@ -113,6 +118,22 @@ export default function Settings({
                 your configured single sign-on provider.
               </p>
             )}
+          </section>
+          <section className="settings-section">
+            <h2>Appearance</h2>
+            <p className="muted">Personal display preference for this browser. Workspace continues to work independently of any AI service.</p>
+            <label className="field">
+              <span>Colour theme</span>
+              <select
+                aria-label="Colour theme"
+                value={appearance}
+                onChange={(event) => setAppearance(event.target.value as Appearance)}
+              >
+                <option value="system">Follow device</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
           </section>
           <section className="settings-section">
             <h2>Organisation</h2>
