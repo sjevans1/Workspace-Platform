@@ -338,6 +338,7 @@ export default function Resource({
             </div>
           )}
           <Editor id={id} user={me.user} theme={theme} />
+          <Backlinks id={id} />
         </>
       )}
       {panel === "permissions" && (
@@ -400,6 +401,57 @@ export default function Resource({
     </article>
   );
 }
+function Backlinks({ id }: { id: string }) {
+  const [links, setLinks] = useState<any[]>([]),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(false);
+  async function refresh() {
+    setLoading(true);
+    try {
+      const rows = await api(`/resources/${id}/backlinks`);
+      setLinks(rows);
+      setError(false);
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    api(`/resources/${id}/backlinks`)
+      .then((rows) => { if (live) { setLinks(rows); setError(false); } })
+      .catch(() => { if (live) setError(true); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [id]);
+  return (
+    <section className="backlinks" aria-label="Linked from">
+      <div className="section-title">
+        <h2>Linked from</h2>
+        <button type="button" className="text-button" onClick={() => void refresh()}>
+          Refresh links
+        </button>
+      </div>
+      {loading ? (
+        <p className="muted">Checking accessible page links…</p>
+      ) : error ? (
+        <p role="alert">Unable to load backlinks. Try refreshing.</p>
+      ) : links.length ? (
+        <div className="backlink-items">
+          {links.map((source: any) => (
+            <button type="button" key={source.id} onClick={() => go(source.id)}>
+              <span>{source.title}</span>
+              <ArrowUpRight size={15} />
+            </button>
+          ))}
+        </div>
+      ) : <p className="muted">No accessible pages link here yet.</p>}
+    </section>
+  );
+}
+
 export function Permissions({
   id,
   editable,

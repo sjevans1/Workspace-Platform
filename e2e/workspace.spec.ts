@@ -950,6 +950,50 @@ test("standalone appearance: dark/light/system persists and editor remains mount
 });
 
 
+test("users can link a page from the editor and follow its accessible backlink", async ({ page }) => {
+  await login(page);
+  async function makePage(title: string) {
+    await page.getByRole("button", { name: "New page", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Create something new" });
+    await dialog.getByLabel("Name", { exact: true }).fill(title);
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(title);
+    const id = new URL(page.url()).searchParams.get("page");
+    expect(id).toBeTruthy();
+    return id!;
+  }
+  const suffix = Date.now();
+  const targetName = "Linked destination " + suffix;
+  const sourceName = "Linking source " + suffix;
+  const targetId = await makePage(targetName);
+  const sourceId = await makePage(sourceName);
+  const editor = page.locator(".bn-editor");
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await page.getByRole("button", { name: "Link to page" }).click();
+  await page.getByRole("textbox", { name: "Find a page to link" }).fill(targetName);
+  await page.locator("#page-link-picker").getByRole("button", { name: "Find" }).click();
+  const result = page.locator(".page-link-results")
+    .getByRole("button", { name: targetName, exact: true });
+  await expect(result).toBeVisible();
+  await result.click();
+  await expect(editor).toContainText(targetName);
+  await expect.poll(async () => {
+    const response = await page.request.get("/api/v1/resources/" + targetId + "/backlinks");
+    if (!response.ok()) return false;
+    return (await response.json()).some((v: any) => v.id === sourceId);
+  }, { timeout: 12000 }).toBe(true);
+  await page.goto("/?page=" + targetId);
+  await expect(page.getByRole("heading", { name: "Linked from", exact: true }))
+    .toBeVisible();
+  const backlink = page.locator(".backlink-items")
+    .getByRole("button", { name: sourceName, exact: true });
+  await expect(backlink).toBeVisible();
+  await backlink.click();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(sourceName);
+});
+
+
 test("Recent shows pages the signed-in user opened, not just modified pages", async ({ page }) => {
   await login(page);
   const name = "Personal recent browser " + Date.now();

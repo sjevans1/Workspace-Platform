@@ -2195,3 +2195,77 @@ nav button:hover,
   background: #30483a;
   color: #f0fff5;
 }
+
+/* Native, stand-alone document linking and ACL-filtered backlinks. */
+.page-link-tools {
+  position: relative;
+  margin: 14px 0 18px;
+}
+.page-link-picker {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  max-width: 590px;
+}
+.page-link-picker > label {
+  display: block;
+  margin-bottom: 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.page-link-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.page-link-search-row input {
+  flex: 1 1 230px;
+}
+.page-link-results {
+  display: grid;
+  gap: 4px;
+  margin-top: 9px;
+}
+.page-link-choice {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.page-link-choice:hover, .page-link-choice:focus-visible {
+  background: var(--sage);
+}
+.backlinks {
+  margin-top: 36px;
+  border-top: 1px solid var(--border);
+  padding-top: 13px;
+}
+.backlinks .section-title {
+  margin: 12px 0;
+}
+.backlinks .muted {
+  font-size: 12px;
+}
+.backlink-items {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.backlink-items button {
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--soft);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.backlink-items button:hover {
+  background: var(--sage);
+}
