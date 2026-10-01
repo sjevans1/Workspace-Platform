@@ -4,7 +4,7 @@
 
 ## User behavior
 
-In a database's **Properties & columns** dialog, add a property of type `formula`, name it and enter a numeric expression. The result appears as a read-only value in the table, board and record page. Existing numeric record edits recompute the result on the next read. JSON and CSV database exports use freshly computed values; client writes to a formula field are rejected.
+In a database's **Properties & columns** dialog, add a property of type `formula`, name it and enter a numeric expression. Use the **Number-field insertion buttons** under the expression box to insert existing numeric fields by their stable IDs rather than guessing opaque property IDs; type arithmetic operators between references. The result appears as a read-only value in the table, board and record page. Existing numeric record edits recompute the result on the next read. JSON and CSV database exports use freshly computed values; client writes to a formula field are rejected.
 
 The only accepted syntax is:
 
