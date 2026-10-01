@@ -30,6 +30,10 @@ export function PropertyInput({
   databaseId?: string;
   save: (v: any) => void;
 }) {
+  if (p.type === "rollup")
+    return <output aria-label={p.name} className="rollup-result">
+      {value === null || value === undefined ? "—" : String(value)}
+    </output>;
   if (p.type === "formula")
     return <output aria-label={p.name} className="formula-result">
       {value === null || value === undefined ? "—" : String(value)}
@@ -882,6 +886,82 @@ function ViewDialog({
     </Modal>
   );
 }
+function RollupPropertyEditor({
+  p, properties, disabled, onChange,
+}: {
+  p: any; properties: any[]; disabled: boolean;
+  onChange: (values: Record<string, any>) => void;
+}) {
+  const relations = properties.filter((field) => field.type === "relation");
+  const chosen = relations.find((field) => field.id === p.rollup_relation_id);
+  const [numericFields, setNumericFields] = useState<any[]>([]);
+  useEffect(() => {
+    const id = chosen?.target_database_id;
+    if (!id || chosen.target_unavailable) { setNumericFields([]); return; }
+    let cancelled = false;
+    void api("/databases/" + id).then((data: any) => {
+      if (!cancelled)
+        setNumericFields((data.properties || []).filter(
+          (field: any) => field.type === "number"));
+    }).catch(() => { if (!cancelled) setNumericFields([]); });
+    return () => { cancelled = true; };
+  }, [chosen?.target_database_id, chosen?.target_unavailable]);
+  if (!relations.length)
+    return <span className="muted">
+      Add a Relation property first, then choose it for this Rollup.
+    </span>;
+  return <div className="rollup-config">
+    <label>
+      Source Relation
+      <select aria-label={`Rollup source relation for ${p.name}`}
+        disabled={disabled}
+        value={p.rollup_relation_id || ""}
+        onChange={(event) => onChange({
+          rollup_relation_id: event.target.value || undefined,
+          rollup_value_property_id: undefined,
+        })}>
+        <option value="">Select Relation</option>
+        {relations.filter((relation) => relation.target_database_id)
+          .map((relation) =>
+            <option value={relation.id} key={relation.id}>
+              {relation.name}
+            </option>)}
+      </select>
+    </label>
+    <label>
+      Aggregate operation
+      <select aria-label={`Rollup operation for ${p.name}`}
+        disabled={disabled || !chosen?.target_database_id}
+        value={p.rollup_operation || "count"}
+        onChange={(event) => onChange({
+          rollup_operation: event.target.value,
+          rollup_value_property_id: undefined,
+        })}>
+        {["count","sum","avg","min","max"].map((op) =>
+          <option value={op} key={op}>{op}</option>)}
+      </select>
+    </label>
+    {p.rollup_operation !== "count" &&
+      <label>
+        Numeric field of related record
+        <select aria-label={`Rollup numeric field for ${p.name}`}
+          disabled={disabled || !chosen?.target_database_id}
+          value={p.rollup_value_property_id || ""}
+          onChange={(event) => onChange({
+            rollup_value_property_id: event.target.value || undefined,
+          })}>
+          <option value="">Choose permitted Number field</option>
+          {numericFields.map((field) =>
+            <option value={field.id} key={field.id}>{field.name}</option>)}
+        </select>
+      </label>}
+    <small className="muted">
+      Read-only. Counts and aggregates include only currently accessible
+      linked records; hidden or deleted records never contribute.
+    </small>
+  </div>;
+}
+
 function PropertiesDialog({
   data,
   view,
@@ -981,6 +1061,14 @@ function PropertiesDialog({
                   // Clear the numeric Formula when changing property type.
                   formula: e.target.value === "formula"
                     ? p.formula || "0" : undefined,
+                  rollup_relation_id: e.target.value === "rollup"
+                    ? p.rollup_relation_id ||
+                      props.find((field) => field.type === "relation")?.id
+                    : undefined,
+                  rollup_operation: e.target.value === "rollup"
+                    ? p.rollup_operation || "count" : undefined,
+                  rollup_value_property_id: e.target.value === "rollup"
+                    ? p.rollup_value_property_id : undefined,
                 })
               }
             >
@@ -998,6 +1086,7 @@ function PropertiesDialog({
                 "email",
                 "relation",
                 "formula",
+                "rollup",
               ].map((t) => (
                 <option key={t}>{t}</option>
               ))}
@@ -1061,6 +1150,10 @@ function PropertiesDialog({
                 {p.target_unavailable &&
                   <span className="muted">Target inaccessible; contact an administrator.</span>}
               </div>
+            )}
+            {p.type === "rollup" && (
+              <RollupPropertyEditor p={p} properties={props}
+                disabled={!editable} onChange={(values) => update(i, values)} />
             )}
             {p.type === "formula" && (
               <div className="formula-config">
