@@ -126,7 +126,7 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   await search
     .getByPlaceholder("Find pages, projects, or files…")
     .fill("Team tasks");
-  await search.getByRole("button").filter({ hasText: "Team tasks" }).click();
+  await search.getByRole("option").filter({ hasText: "Team tasks" }).click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(
     "Team tasks",
   );
