@@ -203,6 +203,12 @@ Regression coverage includes authenticated object encryption/key binding, real l
 PR #32 passed final-head GitHub Actions run `36819278521` and was squash-merged to `main` at `ab9d9fd8cdfded1c558aadc5360bb97ce9081063`. Backend passed 45/45 native PostgreSQL tests plus encrypted S3 acceptance and production build. Deployment passed the production-only runtime check, container SBOM, Trivy HIGH/CRITICAL gate, live Chromium workflow, raw local-volume ciphertext verification, Chromium + Firefox keyboard/semantic acceptance, and trusted HTTPS/secure-cookie/WSS. Legacy plaintext backup restore requires explicit one-time opt-in. This slice is closed.
 
 
+## Verified maintenance slice: repository rebaseline and dependency hygiene
+
+PR #33 passed final-head GitHub Actions run `36820782634` and was squash-merged to `main` at `fc67e3bcbff08cfcab65ba0b288a3bb9386418e7`. The full backend and deployment acceptance remained green, including 45 native PostgreSQL tests, encrypted S3 acceptance, production-only runtime verification, container SBOM, Trivy, live Chromium workflow, raw local-volume ciphertext, Chromium + Firefox accessibility and trusted TLS.
+
+Acceptance/checkpoint documentation now reflects the verified encryption-at-rest baseline. Routine Dependabot version updates are monthly and grouped by ecosystem for minor/patch releases; major upgrades remain deliberate engineering slices, while security updates remain independent. Repository workflow is one active engineering branch/PR at a time: merge after final-head acceptance, update the checkpoint, delete the merged branch, then create the next branch.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
