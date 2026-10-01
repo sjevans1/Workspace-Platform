@@ -2,6 +2,17 @@ let csrf = "";
 export function setCsrf(v: string) {
   csrf = v;
 }
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly retryAfterSeconds: number | null,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api(path: string, method = "GET", data?: any) {
   const r = await fetch(`/api/v1${path}`, {
     method,
@@ -16,8 +27,16 @@ export async function api(path: string, method = "GET", data?: any) {
       ? { body: data instanceof FormData ? data : JSON.stringify(data) }
       : {}),
   });
-  const value = await r.json();
-  if (!r.ok) throw new Error(value.error || "Request failed");
+  const value = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const retry = r.headers.get("Retry-After");
+    const seconds = retry && /^\d+$/.test(retry) ? Number(retry) : null;
+    throw new ApiError(
+      typeof value?.error === "string" ? value.error : "Request failed",
+      r.status,
+      seconds,
+    );
+  }
   return value;
 }
 export function notify(message: string) {
