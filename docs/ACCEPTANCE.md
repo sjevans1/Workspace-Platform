@@ -4,14 +4,14 @@ This is an executable alpha built from the OpenJM Workspace Astra handoff, not a
 
 ## Verified through 30 September 2026
 
-The latest production-hardening gate passed in [GitHub Actions run 36809767605](https://github.com/sjevans1/Workspace-Platform/actions/runs/36809767605), testing production-S3-harness branch head `54c565ac30556353ca88d7cc71b382d36e219ec3`, which was squash-merged as `c4b86d8c326fea9aee7d087af88faab076bb46a5`. The native application integration suite still runs as the same restricted `workspace_runtime` role used by Docker, with `NOBYPASSRLS`.
+The latest production-hardening gate passed in [GitHub Actions run 36811758844](https://github.com/sjevans1/Workspace-Platform/actions/runs/36811758844), testing operator-controlled tenant provisioning branch head `7620c4df45eedddc83fdf1685a49adbb7715ba83`, which was squash-merged as `4a6aa6fc2623561029a21e910d9d2895dc224c52`. The native application integration suite still runs as the same restricted `workspace_runtime` role used by Docker, with `NOBYPASSRLS`.
 
 | Check | Result |
 |---|---|
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration, identity and backup tests | 37 passed, 0 failed in latest native PostgreSQL gate |
+| Unit, API, collaboration, identity and backup tests | 39 passed, 0 failed in latest native PostgreSQL gate |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Concurrent ACL replacement and stale-write rejection | Pass; simultaneous conflicting saves resolve as one success and one 409 |
@@ -24,7 +24,7 @@ The latest production-hardening gate passed in [GitHub Actions run 36809767605](
 | Trash cascade and restore | Pass |
 | Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL 17 test suite | 37 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
+| Native PostgreSQL 17 test suite | 39 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
 | Migration rollback/retry and historical checksum integrity | Pass; failed partial DDL rolls back, corrected retry succeeds, reruns are idempotent, applied-file drift is rejected |
 | Docker image, migrations and full Compose startup | Pass; API, collaboration and worker all report healthy before browser acceptance |
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
@@ -62,7 +62,7 @@ The repository contains a connected interface, API, collaboration server, import
 | Editor coverage | Default BlockNote Core blocks, slash menu, formatting, links, images/files and tables are integrated. Custom callout/divider/wiki-link/backlink behaviour, a complete block-type acceptance matrix and block-anchored comment UI remain. The API accepts optional comment block IDs. |
 | Offline and scale | Offline edits are memory-only until acknowledged; no durable local offline queue. Single collaboration writer, no horizontal coordination. Load/concurrency and reconnect fault-injection benchmarks remain. |
 | Databases | No formulas, relations, rollups, advanced cross-database queries or import mapping wizard. Property schema changes validate existing data; destructive schema transformations need explicit migration support. Board keyboard updates use selectors. |
-| Permissions and tenancy | API/WS/job/file/search policy checks and forced tenant RLS exist. ACL writes use optimistic revisions plus tenant tree locking; duplicate, cross-tenant and inactive-principal grants are rejected, and concurrent stale writes are covered in CI. Administrator CSV audit export is implemented. Operator-controlled tenant provisioning is implemented on the active hardening branch: atomic organisation/owner/root creation, provisioning audit, conservative existing-user reuse, passwordless SSO owner mode, and self-service organisation creation default-off. Final CI acceptance is still required before this item is closed. Broader adversarial testing remains. |
+| Permissions and tenancy | API/WS/job/file/search policy checks and forced tenant RLS exist. ACL writes use optimistic revisions plus tenant tree locking; duplicate, cross-tenant and inactive-principal grants are rejected, and concurrent stale writes are covered in CI. Administrator CSV audit export is implemented. Operator-controlled tenant provisioning is implemented and verified: atomic organisation/owner/root creation, provisioning audit, conservative existing-user reuse, passwordless SSO owner mode, and self-service organisation creation default-off. PR #25 passed final-head run 36811758844 with 39/39 native PostgreSQL tests plus the full deployment/browser/TLS gates. Broader adversarial testing remains. |
 | Retention | Permanent administrator purge, configurable 1–3650 day trash retention (or disabled), automatic expired resource/file cleanup, durable retry/dead object deletion, and backup coverage are implemented and passed CI run 36660728414. Search and trash listings remain bounded; customer-specific legal/retention policy validation remains deployment work. |
 | Files | Local filesystem storage and S3-compatible object storage are both supported deployment modes. Local storage keeps attachment bytes on the Workspace host/attached storage and has no external-provider gate. If S3-compatible storage is selected, that provider must pass the production S3 acceptance harness before rollout. No antivirus, quarantine, content disarm or resumable upload. Maximum upload 25 MiB. |
 | Import/export | Markdown/CSV imports capped at 2 MiB; CSV at 2,000 rows/100 columns. Synchronous exports cap at 10,000 records. No bulk zipped workspace export or large streamed job output. |
@@ -75,4 +75,4 @@ The repository contains a connected interface, API, collaboration server, import
 
 ## Suggested next acceptance slice
 
-With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, real Keycloak login/logout acceptance, and SCIM Users/Groups lifecycle now passing under `workspace_runtime`/`NOBYPASSRLS`, the next identity work should focus on broader provider compatibility and per-tenant IdP/enterprise policy needs rather than expanding directory authority into privileged roles. Trusted TLS is now CI-verified. For deployments choosing S3-compatible object storage, provider acceptance is a deployment-specific host gate; local-filesystem deployments do not depend on it. Operational tenant provisioning is the active cross-deployment hardening slice. Once it passes final-head CI, the next priority is external monitoring/alerts, followed by broader security/accessibility coverage.
+With native PostgreSQL/container/browser gates, independent WSL2 deployment/recovery, real Keycloak login/logout acceptance, and SCIM Users/Groups lifecycle now passing under `workspace_runtime`/`NOBYPASSRLS`, the next identity work should focus on broader provider compatibility and per-tenant IdP/enterprise policy needs rather than expanding directory authority into privileged roles. Trusted TLS is now CI-verified. For deployments choosing S3-compatible object storage, provider acceptance is a deployment-specific host gate; local-filesystem deployments do not depend on it. Operational tenant provisioning is closed and verified. The next cross-deployment hardening priority is external monitoring/alerts, followed by broader security/accessibility coverage.
