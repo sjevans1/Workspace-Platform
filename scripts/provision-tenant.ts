@@ -59,7 +59,7 @@ export async function provisionTenant(
 
     let user = await one(
       q,
-      "SELECT id,email,password_hash,is_service FROM users WHERE email=$1",
+      "SELECT id,name,email,password_hash,is_service FROM users WHERE email=$1",
       [ownerEmail],
     );
     const existingUser = !!user;
@@ -103,7 +103,7 @@ export async function provisionTenant(
       tenant_id: tenant,
       user_id: user.id,
       role: "owner",
-      name: ownerName,
+      name: existingUser ? user.name : ownerName,
       email: ownerEmail,
       scopes: null,
       expires_at: new Date(Date.now() + 12 * 60 * 60 * 1000),
