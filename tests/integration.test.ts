@@ -945,6 +945,84 @@ test("OIDC invitation provisioning requires the verified identity email to match
   );
 });
 
+test("calendar saved views filter month dates and reject invalid date bindings", async () => {
+  const calendarDb = await ok("POST", "/resources", {
+    kind: "database",
+    title: "Calendar regression",
+    parent_id: space.id,
+  });
+  await ok("PATCH", "/databases/" + calendarDb.id, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "due", name: "Due date", type: "date" },
+    ],
+  });
+  for (const [name, due] of [
+    ["February", "2026-02-28"],
+    ["March first", "2026-03-01"],
+    ["March last", "2026-03-31"],
+    ["April", "2026-04-01"],
+  ]) {
+    await ok("POST", "/databases/" + calendarDb.id + "/records", {
+      values: { name, due },
+    });
+  }
+  const path = "/databases/" + calendarDb.id + "/views";
+  const bad = await req("POST", path, {
+    name: "Invalid calendar",
+    config: { type: "calendar", dateBy: "name" },
+  });
+  assert.equal(bad.statusCode, 400, bad.body);
+  const missing = await req("POST", path, {
+    name: "No date field",
+    config: { type: "calendar" },
+  });
+  assert.equal(missing.statusCode, 400, missing.body);
+  const view = await ok("POST", path, {
+    name: "Due-date calendar",
+    config: { type: "calendar", dateBy: "due" },
+  });
+  const recordsPath = "/databases/" + calendarDb.id + "/records?view=" + view.id;
+  const march = await ok("GET", recordsPath + "&month=2026-03");
+  assert.deepEqual(
+    march.map((row: any) => row.title).sort(),
+    ["March first", "March last"],
+  );
+  assert.deepEqual(
+    (await ok("GET", recordsPath + "&month=2026-02"))
+      .map((row: any) => row.title),
+    ["February"],
+  );
+  assert.deepEqual(
+    (await ok("GET", recordsPath + "&month=2026-04"))
+      .map((row: any) => row.title),
+    ["April"],
+  );
+  for (const invalid of [
+    recordsPath,
+    recordsPath + "&month=2026-13",
+    recordsPath + "&month=2026-00",
+    recordsPath + "&month=2026-03%20junk",
+  ]) {
+    const response = await req("GET", invalid);
+    assert.equal(response.statusCode, 400, response.body);
+  }
+  const tableView = (await ok("GET", "/databases/" + calendarDb.id)).views
+    .find((v: any) => v.config.type === "table");
+  assert.ok(tableView);
+  const nonCalendarMonth = await req(
+    "GET",
+    "/databases/" + calendarDb.id + "/records?view=" + tableView.id +
+      "&month=2026-03",
+  );
+  assert.equal(nonCalendarMonth.statusCode, 400, nonCalendarMonth.body);
+  assert.equal(
+    (await ok("GET", "/databases/" + calendarDb.id + "/records?view=" + tableView.id))
+      .length,
+    4,
+  );
+});
+
 test("setup is one-time and writes require CSRF", async () => {
   assert.equal(
     (
