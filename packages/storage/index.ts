@@ -1,6 +1,12 @@
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
+  createCipheriv,
+  createDecipheriv,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
+import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
@@ -14,12 +20,68 @@ export interface Storage {
   health(): Promise<void>;
   close?(): void;
 }
+
+export type StorageEncryptionMode = "off" | "legacy-read" | "required";
+const storageMagic = Buffer.from("4f4a534501a55aa5", "hex");
+
+function storageKey(env: NodeJS.ProcessEnv) {
+  const value = env.ENCRYPTION_KEY || "";
+  if (!/^[a-f0-9]{64}$/i.test(value))
+    throw new Error(
+      "STORAGE_ENCRYPTION_MODE requires ENCRYPTION_KEY to contain 64 hex characters",
+    );
+  return Buffer.from(
+    hkdfSync(
+      "sha256",
+      Buffer.from(value, "hex"),
+      Buffer.from("openjm-workspace"),
+      Buffer.from("storage-object-v1"),
+      32,
+    ),
+  );
+}
+
+export function isEncryptedStoredObject(value: Buffer) {
+  return (
+    value.length >= storageMagic.length + 12 + 16 &&
+    value.subarray(0, storageMagic.length).equals(storageMagic)
+  );
+}
+
+export function encryptStoredObject(
+  key: string,
+  value: Buffer,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const iv = randomBytes(12),
+    cipher = createCipheriv("aes-256-gcm", storageKey(env), iv);
+  cipher.setAAD(Buffer.from(`object:${key}`));
+  const body = Buffer.concat([cipher.update(value), cipher.final()]);
+  return Buffer.concat([storageMagic, iv, cipher.getAuthTag(), body]);
+}
+
+export function decryptStoredObject(
+  key: string,
+  value: Buffer,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (!isEncryptedStoredObject(value))
+    throw new Error("Storage object is not encrypted");
+  const offset = storageMagic.length,
+    iv = value.subarray(offset, offset + 12),
+    tag = value.subarray(offset + 12, offset + 28),
+    body = value.subarray(offset + 28),
+    cipher = createDecipheriv("aes-256-gcm", storageKey(env), iv);
+  cipher.setAAD(Buffer.from(`object:${key}`));
+  cipher.setAuthTag(tag);
+  return Buffer.concat([cipher.update(body), cipher.final()]);
+}
 function local(root: string, key: string) {
   if (!/^[a-f0-9-]+\/[a-f0-9-]+\/[a-f0-9-]+$/.test(key))
     throw new Error("Invalid object key");
   return path.join(root, key);
 }
-export function createStorage(env: NodeJS.ProcessEnv = process.env): Storage {
+function createRawStorage(env: NodeJS.ProcessEnv): Storage {
   if (env.STORAGE_PROVIDER === "s3") {
     const client = new S3Client({
         endpoint: env.S3_ENDPOINT || undefined,
@@ -78,6 +140,44 @@ export function createStorage(env: NodeJS.ProcessEnv = process.env): Storage {
     },
   };
 }
+
+export function createStorage(env: NodeJS.ProcessEnv = process.env): Storage {
+  const mode = (env.STORAGE_ENCRYPTION_MODE ||
+    "legacy-read") as StorageEncryptionMode;
+  if (!["off", "legacy-read", "required"].includes(mode))
+    throw new Error(
+      "STORAGE_ENCRYPTION_MODE must be off, legacy-read, or required",
+    );
+  if (mode !== "off") storageKey(env);
+  const raw = createRawStorage(env);
+  if (mode === "off") return raw;
+  return {
+    async put(key, value) {
+      await raw.put(
+        key,
+        encryptStoredObject(key, value, env),
+        "application/octet-stream",
+      );
+    },
+    async get(key) {
+      const value = await raw.get(key);
+      if (isEncryptedStoredObject(value))
+        return decryptStoredObject(key, value, env);
+      if (mode === "legacy-read") return value;
+      throw new Error("Unencrypted storage object rejected");
+    },
+    delete: (key) => raw.delete(key),
+    health: () => raw.health(),
+    close: raw.close ? () => raw.close?.() : undefined,
+  };
+}
+
+export function createUnencryptedStorage(
+  env: NodeJS.ProcessEnv = process.env,
+): Storage {
+  return createRawStorage({ ...env, STORAGE_ENCRYPTION_MODE: "off" });
+}
+
 export function inspectFile(name: string, declared: string, b: Buffer) {
   const ext = path.extname(name).toLowerCase();
   const types: Record<string, string> = {

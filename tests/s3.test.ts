@@ -22,6 +22,8 @@ test(
     process.env.ENCRYPTION_KEY = "a".repeat(64);
     const config = {
       STORAGE_PROVIDER: "s3",
+      STORAGE_ENCRYPTION_MODE: "required",
+      ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
       S3_ENDPOINT: process.env.TEST_S3_ENDPOINT!,
       S3_ACCESS_KEY: process.env.TEST_S3_ACCESS_KEY!,
       S3_SECRET_KEY: process.env.TEST_S3_SECRET_KEY!,

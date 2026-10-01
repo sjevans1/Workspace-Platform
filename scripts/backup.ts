@@ -1,5 +1,11 @@
 import pg from "pg";
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  createCipheriv,
+  createDecipheriv,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +41,79 @@ const tables = [
   "object_deletions",
 ] as const;
 const digest = (b: string | Buffer) =>
-  createHash("sha256").update(b).digest("hex");
+  createHash("sha256").update(b).digest("hex"),
+  backupEnvelopeFormat = "openjm-backup-encrypted-v1";
+
+function backupKey() {
+  const value = process.env.ENCRYPTION_KEY || "";
+  if (!/^[a-f0-9]{64}$/i.test(value))
+    throw new Error("ENCRYPTION_KEY must contain 64 hex characters");
+  return Buffer.from(
+    hkdfSync(
+      "sha256",
+      Buffer.from(value, "hex"),
+      Buffer.from("openjm-workspace"),
+      Buffer.from("backup-archive-v1"),
+      32,
+    ),
+  );
+}
+
+export function encodeBackup(archive: Archive) {
+  const iv = randomBytes(12),
+    cipher = createCipheriv("aes-256-gcm", backupKey(), iv);
+  cipher.setAAD(Buffer.from(backupEnvelopeFormat));
+  const body = Buffer.concat([
+    cipher.update(Buffer.from(JSON.stringify(archive))),
+    cipher.final(),
+  ]);
+  return JSON.stringify({
+    format: backupEnvelopeFormat,
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    data: body.toString("base64url"),
+  });
+}
+
+export function decodeBackup(
+  text: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Archive {
+  const envelope = JSON.parse(text);
+  if (envelope?.format === "openjm-backup-v1") {
+    if (env.ALLOW_LEGACY_PLAINTEXT_BACKUP !== "true")
+      throw new Error(
+        "Legacy plaintext backup refused; set ALLOW_LEGACY_PLAINTEXT_BACKUP=true only for a controlled one-time restore",
+      );
+    return envelope as Archive;
+  }
+  if (
+    envelope?.format !== backupEnvelopeFormat ||
+    typeof envelope.iv !== "string" ||
+    typeof envelope.tag !== "string" ||
+    typeof envelope.data !== "string"
+  )
+    throw new Error("Unsupported backup envelope");
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      backupKey(),
+      Buffer.from(envelope.iv, "base64url"),
+    );
+    decipher.setAAD(Buffer.from(backupEnvelopeFormat));
+    decipher.setAuthTag(Buffer.from(envelope.tag, "base64url"));
+    const plain = Buffer.concat([
+      decipher.update(Buffer.from(envelope.data, "base64url")),
+      decipher.final(),
+    ]);
+    const archive = JSON.parse(plain.toString());
+    if (archive?.format !== "openjm-backup-v1")
+      throw new Error("Invalid backup payload");
+    return archive as Archive;
+  } catch {
+    throw new Error("Backup decryption failed");
+  }
+}
 export type Archive = {
   format: "openjm-backup-v1";
   created_at: string;
@@ -163,13 +241,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     if (mode === "backup") {
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, JSON.stringify(await backup(url, storage)), {
+      await writeFile(path, encodeBackup(await backup(url, storage)), {
         mode: 0o600,
         flag: "wx",
       });
       console.log(`Backup written: ${path}`);
     } else {
-      await restore(url, JSON.parse(await readFile(path, "utf8")), storage);
+      await restore(url, decodeBackup(await readFile(path, "utf8")), storage);
       console.log("Restore completed");
     }
   } finally {

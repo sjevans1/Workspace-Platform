@@ -17,7 +17,7 @@ docker compose ps
 curl --fail http://localhost:8080/ready
 ```
 
-The generator refuses to overwrite an existing `.env`. It creates separate owner and runtime database passwords, a 256-bit encryption key and a random setup token. Read the setup token locally and create the first account in the browser. Keep `.env` outside git and back it up securely. Rotating the encryption key without re-encrypting webhook secrets breaks those secrets; restore with the original key.
+The generator refuses to overwrite an existing `.env`. It creates separate owner and runtime database passwords, a 256-bit encryption key and a random setup token. New generated environments also set `STORAGE_ENCRYPTION_MODE=required`, so attachment/object bytes are encrypted before local or S3 storage. Read the setup token locally and create the first account in the browser. Keep `.env` outside git and back it up securely. Do not rotate the encryption key without a planned re-encryption procedure; restore with the original key.
 
 Only Caddy is published to the host. PostgreSQL, Valkey, API and collaboration are internal Compose services. Containers run with dropped capabilities and no-new-privileges for the application image. The application runtime is the non-root `node` user. Migration and backup containers alone receive the owner database URL.
 
@@ -125,6 +125,10 @@ Workspace does **not** require cloud storage. Choose the storage mode that match
 
 For S3-compatible modes, complete the provider acceptance procedure before rollout. Local-filesystem deployments instead require normal host-storage capacity, permissions, persistence and backup/recovery validation.
 
+### Storage encryption upgrade
+
+New deployments use `STORAGE_ENCRYPTION_MODE=required`. Existing deployments without the setting start in `legacy-read` so old plaintext objects remain readable while all new writes are encrypted. Before treating an upgraded deployment as accepted, stop writers, run `node --import tsx scripts/migrate-storage-encryption.ts` through the ops profile, confirm the migration report, set `STORAGE_ENCRYPTION_MODE=required`, and restart. Full procedure and key-management boundaries are in [Encryption at rest](ENCRYPTION_AT_REST.md).
+
 ### S3-compatible object storage
 
 Local storage is the default and uses the `files` volume. For an existing authenticated S3-compatible service, including SeaweedFS S3:
@@ -147,7 +151,7 @@ Set `WEBHOOK_ALLOWED_ORIGINS` to a comma-separated list of exact HTTP(S) origins
 
 ## Back up
 
-The included logical backup is intended for small deployments up to 1 GiB of attachment data. It captures a consistent SQL snapshot, canonical Yjs bytes, versions, audit records, credentials as stored, and all referenced private file bytes with SHA-256 checksums. It is not encrypted; protect the backup directory and encrypt archives with your normal backup system. Store a protected copy of `.env` separately. At larger scale, use PostgreSQL physical backups/WAL and coordinated object-store snapshots, with a tested recovery plan.
+The included logical backup is intended for small deployments up to 1 GiB of attachment data. It captures a consistent SQL snapshot, canonical Yjs bytes, versions, audit records, credentials as stored, and all referenced private file bytes with SHA-256 checksums. New CLI backups are written as AES-256-GCM encrypted envelopes derived from `ENCRYPTION_KEY`; protect the backup directory anyway and store a protected copy of `.env` separately. At larger scale, use PostgreSQL physical backups/WAL and coordinated object-store snapshots, with a tested recovery plan.
 
 Stop writers so metadata and objects have a stable maintenance boundary:
 
@@ -160,7 +164,7 @@ docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts ba
 docker compose start api collab worker
 ```
 
-The backup command refuses to replace an existing file. Choose a new dated filename for each run. The ops profile sets `WORKSPACE_MAINTENANCE=true`; it does not itself stop other services. Always perform the explicit stop first. The web/reverse proxy may remain up to show the maintenance connection failure.
+The backup command refuses to replace an existing file. Choose a new dated filename for each run. The ops profile sets `WORKSPACE_MAINTENANCE=true`; it does not itself stop other services. Always perform the explicit stop first. The web/reverse proxy may remain up to show the maintenance connection failure. Legacy plaintext `openjm-backup-v1` archives are refused by default; use `ALLOW_LEGACY_PLAINTEXT_BACKUP=true` only for a controlled one-time restore of an older archive, then unset it immediately.
 
 ## Restore to an empty deployment
 
@@ -194,7 +198,7 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 
 The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance is now CI-verified. Production object-store validation, broader provider compatibility and the other release-hardening items remain.
+Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Workspace now encrypts object bytes and backup artifacts at the application layer, but PostgreSQL/WAL still require encrypted host/provider storage. Secret-manager integration, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. See [Encryption at rest](ENCRYPTION_AT_REST.md). OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance is now CI-verified. Production object-store validation, broader provider compatibility and the other release-hardening items remain.
 
 ## Real-host acceptance
 

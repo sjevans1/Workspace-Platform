@@ -21,6 +21,8 @@ x-app: &app
     PRIVACY_URL: ${PRIVACY_URL:-}
     TERMS_URL: ${TERMS_URL:-}
     STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+    # Existing upgrades without this setting retain legacy-read until maintenance migration is completed.
+    STORAGE_ENCRYPTION_MODE: ${STORAGE_ENCRYPTION_MODE:-legacy-read}
     STORAGE_LOCAL_PATH: /data/files
     S3_ENDPOINT: ${S3_ENDPOINT:-}
     S3_REGION: ${S3_REGION:-us-east-1}

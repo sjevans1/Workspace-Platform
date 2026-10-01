@@ -4,7 +4,12 @@ import { randomUUID } from "node:crypto";
 import { testPostgres } from "../scripts/test-postgres.ts";
 import { migrate } from "../packages/database/migrate.ts";
 import { Database } from "../packages/database/index.ts";
-import { backup, restore } from "../scripts/backup.ts";
+import {
+  backup,
+  restore,
+  encodeBackup,
+  decodeBackup,
+} from "../scripts/backup.ts";
 import type { Storage } from "../packages/storage/index.ts";
 import { blocksToState } from "../packages/editor/server.ts";
 function memory() {
@@ -102,6 +107,32 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     });
     await source.storage.put(key, Buffer.from("Private bytes"), "text/plain");
     const archive = await backup(pg.url, source.storage);
+    const encodedArchive = encodeBackup(archive);
+    assert.match(encodedArchive, /openjm-backup-encrypted-v1/);
+    assert.doesNotMatch(encodedArchive, /Backup evidence|Private bytes/);
+    assert.equal(
+      JSON.stringify(decodeBackup(encodedArchive)),
+      JSON.stringify(archive),
+    );
+
+    process.env.ENCRYPTION_KEY = "b".repeat(64);
+    assert.throws(() => decodeBackup(encodedArchive), /Backup decryption failed/);
+    process.env.ENCRYPTION_KEY = "a".repeat(64);
+    assert.throws(
+      () => decodeBackup(JSON.stringify(archive)),
+      /Legacy plaintext backup refused/,
+    );
+    assert.equal(
+      JSON.stringify(
+        decodeBackup(JSON.stringify(archive), {
+          ...process.env,
+          ALLOW_LEGACY_PLAINTEXT_BACKUP: "true",
+        }),
+      ),
+      JSON.stringify(archive),
+      "legacy plaintext archives require an explicit one-time restore opt-in",
+    );
+
     await assert.rejects(
       restore(pg.url, archive, target.storage),
       /empty database/,
