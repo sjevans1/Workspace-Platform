@@ -57,7 +57,8 @@ function command(
       socket.end();
     });
     socket.on("data", (chunk) => {
-      response = Buffer.concat([response, chunk]);
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      response = Buffer.concat([response, data]);
       const end = response.indexOf(0);
       if (end < 0) return;
       if (settled) return;
