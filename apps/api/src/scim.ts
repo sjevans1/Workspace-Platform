@@ -287,6 +287,43 @@ async function reconcileScimRole(q: Query, scimUserId: string) {
   );
 }
 
+export async function setScimGroupRoleMapping(
+  q: Query,
+  tenantId: string,
+  groupId: string,
+  role: "member" | "guest" | null,
+  actorId: string,
+) {
+  const group = await one(
+    q,
+    "SELECT id FROM scim_groups WHERE id=$1 AND deleted_at IS NULL",
+    [groupId],
+  );
+  if (!group) throw new HttpError(404, "SCIM group not found");
+  if (role)
+    await q.query(
+      `INSERT INTO scim_group_role_mappings(
+        tenant_id,group_id,role,created_by
+      ) VALUES($1,$2,$3,$4)
+      ON CONFLICT(group_id) DO UPDATE
+      SET role=excluded.role,updated_at=now()`,
+      [tenantId, groupId, role, actorId],
+    );
+  else
+    await q.query(
+      "DELETE FROM scim_group_role_mappings WHERE group_id=$1",
+      [groupId],
+    );
+
+  const members = (
+    await q.query(
+      "SELECT scim_user_id FROM scim_group_members WHERE group_id=$1",
+      [groupId],
+    )
+  ).rows;
+  for (const row of members) await reconcileScimRole(q, row.scim_user_id);
+}
+
 async function replaceGroupMembers(
   q: Query,
   tenantId: string,
