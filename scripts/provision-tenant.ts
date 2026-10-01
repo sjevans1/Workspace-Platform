@@ -62,6 +62,7 @@ export async function provisionTenant(
       "SELECT id,email,password_hash,is_service FROM users WHERE email=$1",
       [ownerEmail],
     );
+    const existingUser = !!user;
 
     if (user) {
       if (user.is_service)
@@ -122,7 +123,7 @@ export async function provisionTenant(
       tenant_id: tenant,
       workspace_id: root.id,
       owner_user_id: user.id,
-      owner_mode: input.allowExistingUser && !encoded && user
+      owner_mode: existingUser
         ? "existing-user"
         : encoded
           ? "local-password"
