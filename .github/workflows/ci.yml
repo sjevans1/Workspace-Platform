@@ -47,6 +47,16 @@ jobs:
       - run: npm run typecheck
       - run: npm test
         timeout-minutes: 3
+      - name: Verify S3 provider preflight
+        env:
+          STORAGE_PROVIDER: s3
+          S3_ENDPOINT: http://127.0.0.1:8333
+          S3_BUCKET: workspace-ci
+          S3_ACCESS_KEY: workspace-ci
+          S3_SECRET_KEY: workspace-ci-secret
+          S3_FORCE_PATH_STYLE: "true"
+          S3_PROVIDER_PREFLIGHT_ALLOW_INSECURE: "true"
+        run: npm run verify:s3-provider -- --write-test
       - name: Verify production S3 acceptance harness
         run: |
           node --input-type=module <<'NODE'
