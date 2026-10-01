@@ -20,6 +20,10 @@ import {
   validateBlocks,
 } from "../packages/editor/server.ts";
 import * as Y from "yjs";
+import {
+  HttpMetrics,
+  renderPrometheusMetrics,
+} from "../packages/operations/metrics.ts";
 process.env.ENCRYPTION_KEY = "b".repeat(64);
 test("ancestor denial cannot be bypassed by a child grant", () => {
   const path = [
@@ -114,4 +118,34 @@ test("canonical document survives Yjs round trip and unsafe links fail", () => {
     ]),
   );
   d.destroy();
+});
+
+
+test("Prometheus metrics remain low-cardinality and aggregate status classes", () => {
+  const http = new HttpMetrics();
+  http.record("GET", 200, 125);
+  http.record("GET", 204, 75);
+  http.record("POST", 503, 250);
+  const output = renderPrometheusMetrics({
+    startedAt: Date.now() - 5000,
+    dependencies: { database: true, storage: false },
+    services: {
+      api: { configured: true, healthy: true },
+      collaboration: {
+        configured: true,
+        healthy: true,
+        values: { connections: 3, documents: 2 },
+      },
+      worker: { configured: false },
+    },
+    http: http.snapshot(),
+  });
+
+  assert.match(output, /workspace_dependency_ready\{dependency="database"\} 1/);
+  assert.match(output, /workspace_dependency_ready\{dependency="storage"\} 0/);
+  assert.match(output, /workspace_service_healthy\{service="collaboration"\} 1/);
+  assert.match(output, /workspace_service_configured\{service="worker"\} 0/);
+  assert.match(output, /workspace_http_requests_total\{method="GET",status_class="2xx"\} 2/);
+  assert.match(output, /workspace_http_requests_total\{method="POST",status_class="5xx"\} 1/);
+  assert.doesNotMatch(output, /tenant|user_id|resource_id|document_id/);
 });

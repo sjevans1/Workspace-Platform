@@ -79,6 +79,9 @@ services:
       OIDC_ALLOW_INSECURE: ${OIDC_ALLOW_INSECURE:-false}
       LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
       ALLOW_SELF_SERVICE_ORGANISATIONS: ${ALLOW_SELF_SERVICE_ORGANISATIONS:-false}
+      METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-}
+      METRICS_COLLAB_HEALTH_URL: http://collab:1235/health
+      METRICS_WORKER_HEALTH_URL: http://worker:4001/health
     depends_on:
       migrate: { condition: service_completed_successfully }
       valkey: { condition: service_healthy }
@@ -99,6 +102,7 @@ services:
     environment:
       <<: *runtime
       COLLAB_HEALTH_PORT: "1235"
+      COLLAB_HEALTH_HOST: "0.0.0.0"
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -120,6 +124,7 @@ services:
     environment:
       <<: *runtime
       WORKER_HEALTH_PORT: "4001"
+      WORKER_HEALTH_HOST: "0.0.0.0"
       WORKER_HEALTH_MAX_TICK_MS: ${WORKER_HEALTH_MAX_TICK_MS:-60000}
       WORKER_HEALTH_GRACE_MS: ${WORKER_HEALTH_GRACE_MS:-10000}
     depends_on:

@@ -37,6 +37,7 @@ const db = new Database(),
         last_error: state.lastError,
       };
     },
+    process.env.WORKER_HEALTH_HOST || "127.0.0.1",
   );
 
 let stopping = false;

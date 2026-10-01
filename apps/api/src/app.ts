@@ -60,6 +60,12 @@ import {
   type Storage,
 } from "../../../packages/storage/index.ts";
 import {
+  HttpMetrics,
+  fetchHealth,
+  renderPrometheusMetrics,
+  type MetricsSnapshot,
+} from "../../../packages/operations/metrics.ts";
+import {
   registerScim,
   setScimGroupRoleMapping,
 } from "./scim.ts";
@@ -130,8 +136,32 @@ export async function buildApp(
     localAuth = process.env.LOCAL_AUTH_ENABLED !== "false",
     allowOrganisationCreation =
       process.env.ALLOW_SELF_SERVICE_ORGANISATIONS === "true",
+    metricsToken = process.env.METRICS_BEARER_TOKEN?.trim() || "",
     appUrl = process.env.APP_URL || "http://localhost:3000",
-    oidcRedirectUri = new URL("/api/v1/auth/oidc/callback", appUrl).href;
+    oidcRedirectUri = new URL("/api/v1/auth/oidc/callback", appUrl).href,
+    metricsStartedAt = Date.now(),
+    httpMetrics = new HttpMetrics(),
+    requestStarted = new WeakMap<FastifyRequest, bigint>();
+  assert(
+    !metricsToken || metricsToken.length >= 32,
+    500,
+    "METRICS_BEARER_TOKEN must contain at least 32 characters",
+  );
+  const healthTarget = (name: "COLLAB" | "WORKER") => {
+    const value = process.env[`METRICS_${name}_HEALTH_URL`]?.trim();
+    if (!value) return "";
+    const url = new URL(value);
+    assert(
+      ["http:", "https:"].includes(url.protocol) &&
+        !url.username &&
+        !url.password,
+      500,
+      `METRICS_${name}_HEALTH_URL must be an HTTP(S) URL without credentials`,
+    );
+    return url.href;
+  };
+  const collabHealthUrl = healthTarget("COLLAB"),
+    workerHealthUrl = healthTarget("WORKER");
   const app = Fastify({
     logger: logging
       ? {
@@ -200,8 +230,16 @@ export async function buildApp(
     });
   });
   app.addHook("onRequest", async (r, reply) => {
+    requestStarted.set(r, process.hrtime.bigint());
     reply.header("X-Request-Id", r.id);
     reply.header("Cache-Control", "no-store");
+  });
+  app.addHook("onResponse", async (r, reply) => {
+    const started = requestStarted.get(r);
+    if (!started) return;
+    const durationMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+    httpMetrics.record(r.method, reply.statusCode, durationMs);
+    requestStarted.delete(r);
   });
   const auth = async (req: FastifyRequest) => {
     const r = req as Request,
@@ -247,18 +285,116 @@ export async function buildApp(
         return db.tenant(r.actor.tenant_id, (q) => h(q, r.actor, r, reply));
       },
     });
-  app.get("/health", async () => ({ status: "ok" }));
-  app.get("/ready", async (_r, reply) => {
+  const dependencyReadiness = async () => {
+    const dependencies: Record<string, boolean> = {
+      database: false,
+      storage: false,
+    };
+    if (redis) dependencies.redis = false;
     try {
       await db.system((q) => q.query("SELECT 1"));
-      await redis?.ping();
-      await storage.health();
-      return { status: "ready" };
+      dependencies.database = true;
     } catch {
-      reply.code(503);
-      return { status: "unavailable" };
+      /* Report through readiness/metrics without leaking the database error. */
     }
+    if (redis)
+      try {
+        await redis.ping();
+        dependencies.redis = true;
+      } catch {
+        /* Report through readiness/metrics without leaking the Redis error. */
+      }
+    try {
+      await storage.health();
+      dependencies.storage = true;
+    } catch {
+      /* Report through readiness/metrics without leaking the storage error. */
+    }
+    return dependencies;
+  };
+  const serviceMetrics = async (
+    service: "collaboration" | "worker",
+    url: string,
+  ): Promise<MetricsSnapshot["services"][string]> => {
+    if (!url) return { configured: false as const };
+    const health = await fetchHealth(url);
+    if (service === "collaboration")
+      return {
+        configured: true as const,
+        healthy: health.healthy,
+        values: {
+          documents: Number(health.documents) || 0,
+          connections: Number(health.connections) || 0,
+          loading_documents: Number(health.loading_documents) || 0,
+        },
+      };
+    const completed = health.last_completed_at
+      ? Date.parse(String(health.last_completed_at))
+      : NaN;
+    return {
+      configured: true as const,
+      healthy: health.healthy,
+      values: {
+        running: health.running === true ? 1 : 0,
+        running_seconds: Math.max(0, Number(health.running_for_ms) || 0) / 1000,
+        consecutive_failures: Math.max(
+          0,
+          Number(health.consecutive_failures) || 0,
+        ),
+        last_completed_age_seconds: Number.isFinite(completed)
+          ? Math.max(0, (Date.now() - completed) / 1000)
+          : null,
+      },
+    };
+  };
+  app.get("/health", async () => ({ status: "ok" }));
+  app.get("/ready", async (_r, reply) => {
+    const dependencies = await dependencyReadiness();
+    if (!Object.values(dependencies).every(Boolean)) reply.code(503);
+    return {
+      status: Object.values(dependencies).every(Boolean)
+        ? "ready"
+        : "unavailable",
+    };
   });
+  app.get(
+    "/metrics",
+    {
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+      logLevel: "warn",
+    },
+    async (r, reply) => {
+      if (!metricsToken) {
+        reply.code(404);
+        return { error: "Not found" };
+      }
+      const authorization = String(r.headers.authorization || "");
+      const supplied = authorization.startsWith("Bearer ")
+        ? authorization.slice(7)
+        : "";
+      if (!supplied || !equal(supplied, metricsToken)) {
+        reply.header("WWW-Authenticate", "Bearer");
+        reply.code(401);
+        return { error: "Metrics credential required" };
+      }
+      const [dependencies, collaboration, worker] = await Promise.all([
+        dependencyReadiness(),
+        serviceMetrics("collaboration", collabHealthUrl),
+        serviceMetrics("worker", workerHealthUrl),
+      ]);
+      reply.type("text/plain; version=0.0.4; charset=utf-8");
+      return renderPrometheusMetrics({
+        startedAt: metricsStartedAt,
+        dependencies,
+        services: {
+          api: { configured: true, healthy: true },
+          collaboration,
+          worker,
+        },
+        http: httpMetrics.snapshot(),
+      });
+    },
+  );
   app.get("/api/v1/branding", async () => defaultBranding());
   app.get("/api/v1/auth/methods", async () => ({
     local: localAuth,

@@ -1,0 +1,63 @@
+groups:
+  - name: openjm-workspace
+    rules:
+      - alert: OpenJMWorkspaceTargetDown
+        expr: up{job="openjm-workspace"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenJM Workspace metrics target is unreachable
+          description: Prometheus has been unable to scrape the Workspace metrics endpoint for at least 2 minutes.
+
+      - alert: OpenJMWorkspaceDependencyUnavailable
+        expr: workspace_dependency_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenJM Workspace dependency is unavailable
+          description: A required Workspace API dependency has reported unavailable for at least 2 minutes.
+
+      - alert: OpenJMWorkspaceInternalServiceUnhealthy
+        expr: workspace_service_healthy == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenJM Workspace internal service is unhealthy
+          description: A configured Workspace internal service health probe has reported unhealthy for at least 2 minutes.
+
+      - alert: OpenJMWorkspaceWorkerFailures
+        expr: workspace_worker_consecutive_failures >= 3
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenJM Workspace worker is repeatedly failing
+          description: The background worker has recorded at least three consecutive failed ticks.
+
+      - alert: OpenJMWorkspaceWorkerStale
+        expr: workspace_worker_last_completed_age_seconds > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenJM Workspace worker has not completed recently
+          description: The background worker has not completed a successful tick for more than two minutes.
+
+      - alert: OpenJMWorkspaceHighServerErrorRate
+        expr: |
+          (
+            sum(rate(workspace_http_requests_total{status_class="5xx"}[5m]))
+            /
+            clamp_min(sum(rate(workspace_http_requests_total[5m])), 0.001)
+          ) > 0.05
+          and
+          sum(rate(workspace_http_requests_total{status_class="5xx"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenJM Workspace has a sustained HTTP 5xx rate
+          description: More than 5 percent of requests are returning 5xx responses, with at least three server errors per minute, for 10 minutes.

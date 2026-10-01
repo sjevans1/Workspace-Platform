@@ -121,6 +121,18 @@ jobs:
           docker compose ps
           docker compose logs
           exit 1
+      - name: Verify deployed monitoring endpoint
+        run: |
+          token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"
+          test -n "$token"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/metrics)" = "401"
+          curl --fail -H "Authorization: Bearer $token" http://localhost:8080/metrics > /tmp/workspace-metrics.txt
+          grep -F 'workspace_dependency_ready{dependency="database"} 1' /tmp/workspace-metrics.txt
+          grep -F 'workspace_dependency_ready{dependency="storage"} 1' /tmp/workspace-metrics.txt
+          grep -F 'workspace_service_healthy{service="collaboration"} 1' /tmp/workspace-metrics.txt
+          grep -F 'workspace_service_healthy{service="worker"} 1' /tmp/workspace-metrics.txt
+          grep -F 'workspace_http_requests_total' /tmp/workspace-metrics.txt
+          ! grep -E 'tenant_id|user_id|resource_id|document_id' /tmp/workspace-metrics.txt
       - name: Verify deployed browser workflow
         run: node scripts/test-deployment.mjs
       - name: Verify trusted HTTPS, secure cookies and WSS

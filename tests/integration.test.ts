@@ -180,6 +180,7 @@ async function connect(a = owner, p = page) {
 before(async () => {
   process.env.ENCRYPTION_KEY = "a".repeat(64);
   process.env.SETUP_TOKEN = "test-setup-token";
+  process.env.METRICS_BEARER_TOKEN = "metrics-test-token-0123456789abcdef";
   process.env.COOKIE_SECURE = "false";
   dir = await mkdtemp(`${tmpdir()}/workspace-test-`);
   process.env.STORAGE_LOCAL_PATH = dir;
@@ -265,6 +266,54 @@ after(async () => {
   await rm(dir, { recursive: true, force: true });
   done();
 });
+test("metrics endpoint is bearer-protected and excludes tenant identifiers", async () => {
+  const unauthenticated = await app.inject({ method: "GET", url: "/metrics" });
+  assert.equal(unauthenticated.statusCode, 401, unauthenticated.body);
+  assert.equal(unauthenticated.headers["www-authenticate"], "Bearer");
+
+  const wrong = await app.inject({
+    method: "GET",
+    url: "/metrics",
+    headers: { authorization: "Bearer incorrect-metrics-token-0123456789abcdef" },
+  });
+  assert.equal(wrong.statusCode, 401, wrong.body);
+
+  const accepted = await app.inject({
+    method: "GET",
+    url: "/metrics",
+    headers: {
+      authorization:
+        "Bearer metrics-test-token-0123456789abcdef",
+    },
+  });
+  assert.equal(accepted.statusCode, 200, accepted.body);
+  assert.match(
+    String(accepted.headers["content-type"]),
+    /text\/plain/,
+  );
+  assert.match(accepted.body, /workspace_up 1/);
+  assert.match(
+    accepted.body,
+    /workspace_dependency_ready\{dependency="database"\} 1/,
+  );
+  assert.match(
+    accepted.body,
+    /workspace_dependency_ready\{dependency="storage"\} 1/,
+  );
+  assert.match(
+    accepted.body,
+    /workspace_service_configured\{service="collaboration"\} 0/,
+  );
+  assert.match(
+    accepted.body,
+    /workspace_service_configured\{service="worker"\} 0/,
+  );
+  assert.doesNotMatch(
+    accepted.body,
+    new RegExp([owner.tenant, owner.id, page.id].join("|")),
+  );
+});
+
 test("self-service organisation creation is disabled by default", async () => {
   const r = await req("POST", "/organisations", { name: "Blocked tenant" });
   assert.equal(r.statusCode, 403, r.body);
