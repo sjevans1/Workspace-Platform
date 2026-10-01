@@ -14,9 +14,10 @@ const tables = [
   "organisations",
   "users",
   "memberships",
+  // Provider-bound SSO sessions depend on this tenant-owned registration.
+  "oidc_tenant_providers",
   "sessions",
   "oidc_identities",
-  "oidc_tenant_providers",
   "scim_connectors",
   "scim_users",
   "scim_groups",
