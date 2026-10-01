@@ -35,7 +35,7 @@ export function Modal({
                 element.offsetParent !== null,
             )
           : [],
-      initial = panel.current?.querySelector<HTMLElement>('[autofocus]') ||
+      initial = panel.current?.querySelector<HTMLElement>('[data-initial-focus]') ||
         focusable()[0] || panel.current;
     initial?.focus();
 
