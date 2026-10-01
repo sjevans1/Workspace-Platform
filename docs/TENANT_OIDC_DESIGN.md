@@ -24,6 +24,8 @@ An operator may configure a provider, but that alone never creates users, member
 
 ### Gate T3: login binding and authentication
 
+**T3a (schema-only foundation, separate PR):** add nullable tenant, provider ID, provider revision, expected issuer and client ID to one-time authorization states. An all-or-none database constraint and composite foreign key reject incomplete or cross-tenant bindings. The nullable legacy form keeps existing deployment-level sign-in operational. **This does not select or activate tenant IdPs and does not validate IdP discovery endpoints.** T3b must enforce exact registration/revision matching and network egress safety before any provider-specific start or callback is enabled.
+
 Require a tenant and provider selected through a trusted, deterministic route. Persist tenant ID, provider ID, revision, expected issuer/client ID, PKCE verifier, nonce, invite hash and return path against a single-use, time-limited state. A callback must load that original exact tenant/provider, reject revoked/changed registrations or mismatched issuer, and never derive provider from query parameters, email domain, ID-token claims, cookies from another flow, or a generic first active membership.
 
 Invitation-backed provisioning must verify that the invitation belongs to the state-bound tenant. An existing global user may gain a session only for the state-bound tenant if that membership is already active. Explicitly reject a cross-tenant provider attempting to authenticate a different tenant by selecting an already-linked global email.
