@@ -1637,6 +1637,66 @@ test("outbox dispatch signs webhooks and records retries without following redir
     redirectTarget.close();
   }
 });
+test("dead webhook deliveries can be replayed only by same-tenant administrators", async () => {
+  process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49661";
+  const subscription = await ok("POST", "/webhooks", {
+    url: "http://127.0.0.1:49661/recovery",
+    events: ["page.updated"],
+  });
+  await ok("PATCH", `/resources/${page.id}`, {
+    title: "Replay acceptance " + randomUUID().slice(0, 8),
+  });
+  const event = await db.tenant(owner.tenant, (q) =>
+    one(q,
+      "SELECT id FROM event_outbox WHERE tenant_id=$1 AND resource_id=$2" +
+        " AND type='page.updated' ORDER BY created_at DESC,id DESC LIMIT 1",
+      [owner.tenant, page.id],
+    ),
+  );
+  assert.ok(event?.id);
+  const deliveryId = randomUUID();
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO webhook_deliveries" +
+        "(id,tenant_id,subscription_id,event_id,status,attempts,last_error)" +
+        " VALUES($1,$2,$3,$4,'dead',8,'HTTP 503')",
+      [deliveryId, owner.tenant, subscription.id, event.id],
+    ),
+  );
+  const endpoint = `/webhooks/deliveries/${deliveryId}/replay`;
+  assert.equal((await req("POST", endpoint, {}, member)).statusCode, 403);
+  assert.equal((await req("POST", endpoint, {}, other)).statusCode, 404);
+  assert.equal((await req("POST", "/webhooks/deliveries/not-a-uuid/replay", {})).statusCode, 400);
+  const initial = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT status,attempts,last_error FROM webhook_deliveries WHERE id=$1", [deliveryId]),
+  );
+  assert.deepEqual([initial.status, initial.attempts, initial.last_error],
+    ["dead", 8, "HTTP 503"]);
+  const replay = await ok("POST", endpoint, {});
+  assert.deepEqual(replay, { ok: true, id: deliveryId, status: "pending" });
+  assert.equal((await req("POST", endpoint, {})).statusCode, 404);
+  const resumed = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT status,attempts,last_error FROM webhook_deliveries WHERE id=$1", [deliveryId]),
+  );
+  assert.deepEqual([resumed.status, resumed.attempts, resumed.last_error],
+    ["pending", 0, null]);
+  const audit = await db.tenant(owner.tenant, (q) =>
+    one(q,
+      "SELECT action FROM audit_events WHERE actor_id=$1" +
+        " AND action='integration.delivery_replayed' ORDER BY created_at DESC LIMIT 1",
+      [owner.id],
+    ),
+  );
+  assert.equal(audit?.action, "integration.delivery_replayed");
+
+  // A paused subscription must not be reactivated through delivery replay.
+  await ok("PATCH", `/webhooks/${subscription.id}`, { active: false });
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE webhook_deliveries SET status='dead' WHERE id=$1", [deliveryId]),
+  );
+  assert.equal((await req("POST", endpoint, {})).statusCode, 404);
+});
+
 test("imports run asynchronously and recheck current permissions", async () => {
   const j = await ok(
     "POST",

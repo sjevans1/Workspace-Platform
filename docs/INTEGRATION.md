@@ -92,4 +92,16 @@ Cursors are HMAC-authenticated and tenant/principal-bound. Treat them as opaque 
 
 **Consistency boundary:** this is a keyset read over already committed rows, **not** an exactly-once change-data-capture stream or a global commit-order log. A transaction that commits late with an older `created_at` can fall before a previously issued cursor. Continue using signed webhooks for prompt notification **plus a periodic overlapping `since` rescan (with event-ID deduplication) and a current-state reconciliation pass** for recovery. This also handles eventual permission changes. Avoid claiming complete ingestion solely from `has_more=false`.
 
-The original timestamp-based feed is unchanged. Dead-letter replay UI and bulk reconciliation remain future work. State-changing events are written atomically with domain updates. All external writes by a future Intelligence agent should be explicit, scoped and independently audited; the default integration created here is read-only.
+### Administrator dead-delivery replay
+
+Workspace administrators may requeue an individual **dead** webhook delivery:
+
+```bash
+curl -X POST -H "Cookie: workspace_session=$SESSION" \
+  -H "X-CSRF-Token: $CSRF_TOKEN" \
+  "$WORKSPACE_URL/api/v1/webhooks/deliveries/$DELIVERY_ID/replay"
+```
+
+This action is available only to the owning tenant's active **owner or admin** session. It requires an existing dead delivery on an **active** subscription. Requests for in-flight, delivered, missing, foreign-tenant or inactive-subscription deliveries return the same 404; other roles receive 403. A successful response requeues the **same event ID and original subscription** as `pending` with cleared retry counters/error. The normal worker performs the outbound HTTP call; the administrator request never sends one directly. The operation emits an audit event `integration.delivery_replayed`. It intentionally does not replay completed deliveries or resurrect disabled subscriptions. Replay is *at-least-once* and receivers must deduplicate event IDs and perform current-permission checks before reading source content.
+
+The administrator API is now implemented; a bulk replay workflow and a per-delivery replay control in Settings remain future work. The original timestamp-based feed is unchanged. Bulk reconciliation remains future work. State-changing events are written atomically with domain updates. All external writes by a future Intelligence agent should be explicit, scoped and independently audited; the default integration created here is read-only.

@@ -2692,6 +2692,32 @@ function dataRoutes(
       return { ok: true };
     },
   );
+  route(
+    "POST",
+    "/webhooks/deliveries/:id/replay",
+    "Requeue a dead webhook delivery for the same subscription",
+    async (q, a, r) => {
+      // A deliberate administrator action: never send webhooks inline from
+      // the request, and never reset a delivery that may already be in flight.
+      admin(a);
+      const deliveryId = id(r);
+      const resumed = await q.query(
+        "UPDATE webhook_deliveries AS d" +
+        " SET status='pending',attempts=0,next_at=now(),last_error=NULL" +
+        " FROM webhook_subscriptions AS s" +
+        " WHERE d.id=$1 AND d.tenant_id=$2" +
+        " AND d.subscription_id=s.id AND s.tenant_id=$2" +
+        " AND s.active=true AND d.status='dead'" +
+        " RETURNING d.id",
+        [deliveryId, a.tenant_id],
+      );
+      // Uniform 404 avoids leaking whether a delivery exists in another
+      // tenant, is not dead, or belongs to an inactive subscription.
+      assert(resumed.rowCount, 404, "Replayable delivery not found");
+      await emit(q, a, "integration.delivery_replayed", null);
+      return { ok: true, id: deliveryId, status: "pending" };
+    },
+  );
   route("POST", "/imports", "Queue Markdown or CSV import", async (q, a, r) => {
     const v = body(
       z
