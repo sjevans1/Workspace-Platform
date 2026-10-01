@@ -54,6 +54,7 @@ function command(
     socket.once("error", (error) => fail(error));
     socket.once("connect", () => {
       for (const part of payload) socket.write(part);
+      socket.end();
     });
     socket.on("data", (chunk) => {
       response = Buffer.concat([response, chunk]);
