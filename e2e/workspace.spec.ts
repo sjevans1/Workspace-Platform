@@ -174,6 +174,21 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   await taskCard.getByLabel("Due date", { exact: true }).fill(dateInMonth);
   await taskCard.getByLabel("Due date", { exact: true }).press("Tab");
   await expect(taskCard.getByLabel("Due date", { exact: true })).toHaveValue(dateInMonth);
+  // Board inputs persist on blur. Confirm the authoritative database value,
+  // not merely the input's optimistic DOM value, before switching views.
+  const calendarDatabaseId = new URL(page.url()).searchParams.get("page");
+  expect(calendarDatabaseId).toBeTruthy();
+  await expect.poll(async () => {
+    const response = await page.request.get(
+      `/api/v1/databases/${calendarDatabaseId}/records?limit=100`,
+    );
+    if (!response.ok()) return "not-yet-saved";
+    const entries = (await response.json()) as Array<{
+      title: string;
+      values: Record<string, unknown>;
+    }>;
+    return String(entries.find((row) => row.title === newTask)?.values.due || "");
+  }, { timeout: 20000 }).toBe(dateInMonth);
   await page.getByRole("button", { name: "Calendar", exact: true }).click();
   const calendarEvent = page.locator(".calendar-event").filter({ hasText: newTask });
   await expect(calendarEvent).toBeVisible();
