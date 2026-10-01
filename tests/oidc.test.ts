@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { oidcFromEnv } from "../packages/auth/oidc.ts";
+import { oidcFromConfig, oidcFromEnv } from "../packages/auth/oidc.ts";
 
 test("real OIDC client performs discovery, PKCE, nonce validation and verified-email enforcement", async () => {
   const { publicKey, privateKey } = await generateKeyPair("RS256"),
@@ -309,4 +309,69 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
       server.close((error) => (error ? reject(error) : resolve())),
     );
   }
+});
+
+
+test("explicit OIDC provider configurations are isolated from environment and each other", () => {
+  const savedIssuer = process.env.OIDC_ISSUER;
+  const savedId = process.env.OIDC_CLIENT_ID;
+  const first = oidcFromConfig({
+    issuer: "https://id-one.example.test/realms/one",
+    clientId: "app-one",
+    clientSecret: "secret-one",
+    label: "One SSO",
+    scopes: ["openid", "email"],
+    tokenEndpointAuthMethod: "client_secret_basic",
+  });
+  const second = oidcFromConfig({
+    issuer: "https://id-two.example.test/realms/two",
+    clientId: "app-two",
+    label: "Two SSO",
+    tokenEndpointAuthMethod: "none",
+  });
+  assert.equal(first.issuer, "https://id-one.example.test/realms/one");
+  assert.equal(first.label, "One SSO");
+  assert.equal(second.issuer, "https://id-two.example.test/realms/two");
+  assert.equal(second.label, "Two SSO");
+
+  try {
+    process.env.OIDC_ISSUER = "https://changed-env.example.test";
+    process.env.OIDC_CLIENT_ID = "changed-env-client";
+    assert.equal(first.issuer, "https://id-one.example.test/realms/one");
+    assert.equal(second.issuer, "https://id-two.example.test/realms/two");
+  } finally {
+    if (savedIssuer === undefined) delete process.env.OIDC_ISSUER;
+    else process.env.OIDC_ISSUER = savedIssuer;
+    if (savedId === undefined) delete process.env.OIDC_CLIENT_ID;
+    else process.env.OIDC_CLIENT_ID = savedId;
+  }
+  assert.throws(
+    () =>
+      oidcFromConfig({
+        issuer: "https://id-three.example.test",
+        clientId: "third",
+        clientSecret: "must-not-go-with-none",
+        tokenEndpointAuthMethod: "none",
+      }),
+    /token endpoint authentication method and client secret must agree/,
+  );
+  assert.throws(
+    () =>
+      oidcFromConfig({
+        issuer: "http://insecure.example.test",
+        clientId: "third",
+        tokenEndpointAuthMethod: "none",
+      }),
+    /OIDC issuer must use HTTPS/,
+  );
+  assert.throws(
+    () =>
+      oidcFromConfig({
+        issuer: "https://id-three.example.test",
+        clientId: "third",
+        scopes: ["email"],
+        tokenEndpointAuthMethod: "none",
+      }),
+    /OIDC_SCOPES must include openid/,
+  );
 });
