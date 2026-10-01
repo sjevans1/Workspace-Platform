@@ -1,6 +1,6 @@
 # Tenant-scoped OIDC: implementation gate
 
-Status: **design and factory groundwork only**. Deployment-level OIDC is still the only active sign-in path. The explicit `oidcFromConfig` factory is inert until a separately reviewed tenant-aware flow is implemented, tested, and deployed. Do not claim tenant SSO is available yet.
+Status (October 2026): **T1 and T2 merged**; explicit provider factory and disabled, tenant-RLS-isolated provider registrations with encrypted credentials exist. A separate fix also blocks issuer-bound SSO sessions from being downgraded by `/auth/switch`. **This PR adds T3 database binding groundwork only**; no tenant-selected login or callback, safe outbound discovery/JWKS, provider-enabled state, or tenant-specific logout is available. Deployment-level OIDC remains the only active sign-in path. Do not claim tenant SSO is available yet.
 
 ## Existing security contracts to preserve
 
@@ -23,6 +23,8 @@ Create a tenant-owned provider registry with a stable opaque provider identifier
 An operator may configure a provider, but that alone never creates users, memberships or roles. Existing deployment-level OIDC cannot be silently displaced by tenant data.
 
 ### Gate T3: login binding and authentication
+
+**Schema stage only (this PR):** add nullable-but-atomic tenant/provider/revision/issuer/client binding to login-state rows and nullable provider-ID provenance on sessions. Existing deployment states and sessions remain valid. Neither an API route nor a migration can enable tenant provider login: the separate trusted provider-selection/SSRF-safe callback logic and adversarial acceptance must ship before activation.
 
 Require a tenant and provider selected through a trusted, deterministic route. Persist tenant ID, provider ID, revision, expected issuer/client ID, PKCE verifier, nonce, invite hash and return path against a single-use, time-limited state. A callback must load that original exact tenant/provider, reject revoked/changed registrations or mismatched issuer, and never derive provider from query parameters, email domain, ID-token claims, cookies from another flow, or a generic first active membership.
 
