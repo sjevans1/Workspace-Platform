@@ -8,6 +8,16 @@ function isNotFound(error: any) {
   );
 }
 
+function isPreconditionFailure(error: any) {
+  const status = error?.$metadata?.httpStatusCode;
+  return (
+    status === 409 ||
+    status === 412 ||
+    error?.name === "PreconditionFailed" ||
+    error?.Code === "PreconditionFailed"
+  );
+}
+
 if (!process.argv.includes("--write-test")) {
   throw new Error(
     "Refusing to write to object storage without --write-test. The preflight creates and deletes one unique temporary object.",
@@ -52,7 +62,8 @@ try {
   let overwriteRejected = false;
   try {
     await storage.put(key, replacement, "text/plain");
-  } catch {
+  } catch (error) {
+    if (!isPreconditionFailure(error)) throw error;
     overwriteRejected = true;
   }
   if (!overwriteRejected) {
