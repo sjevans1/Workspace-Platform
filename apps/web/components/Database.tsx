@@ -1063,11 +1063,33 @@ function PropertiesDialog({
               </div>
             )}
             {p.type === "formula" && (
-              <input aria-label={`${p.name} formula expression`}
-                value={p.formula || ""} disabled={!editable}
-                placeholder="[unit_cost] * [quantity]"
-                onChange={(e) => update(i, { formula: e.target.value })}
-              />
+              <div className="formula-config">
+                <input aria-label={`${p.name} formula expression`}
+                  value={p.formula || ""} disabled={!editable}
+                  placeholder="[unit_cost] * [quantity]"
+                  onChange={(e) => update(i, { formula: e.target.value })}
+                />
+                <small className="muted">
+                  Insert a Number field below, then use +, -, *, / or parentheses.
+                  Only fields from this database are available.
+                </small>
+                <div role="group" aria-label={`Number references for ${p.name}`}>
+                  {props.filter((other) => other.type === "number").map((other) =>
+                    <button key={other.id} type="button" className="button quiet"
+                      disabled={!editable}
+                      aria-label={`Insert number field ${other.name}`}
+                      onClick={() => update(i, {
+                        formula: (p.formula === "0" ? "" : p.formula || "") +
+                          `[${other.id}]`,
+                      })}>
+                      {other.name}
+                    </button>)}
+                  {!props.some((other) => other.type === "number") &&
+                    <span className="muted">
+                      Add a Number property to reference it here.
+                    </span>}
+                </div>
+              </div>
             )}
             {["select", "status", "multi_select"].includes(p.type) && (
               <input
