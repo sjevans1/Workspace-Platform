@@ -17,7 +17,7 @@ docker compose ps
 curl --fail http://localhost:8080/ready
 ```
 
-The generator refuses to overwrite an existing `.env`. It creates separate owner and runtime database passwords, a 256-bit encryption key and a random setup token. Read the setup token locally and create the first account in the browser. Keep `.env` outside git and back it up securely. Rotating the encryption key without re-encrypting webhook secrets breaks those secrets; restore with the original key.
+The generator refuses to overwrite an existing `.env`. It creates separate owner and runtime database passwords, a 256-bit application encryption key, a separate 256-bit backup-encryption key, a metrics credential and a random setup token. Read the setup token locally and create the first account in the browser. Keep `.env` outside git and back it up securely. Rotating `ENCRYPTION_KEY` without re-encrypting webhook secrets breaks those secrets. Rotating `BACKUP_ENCRYPTION_KEY` does not re-encrypt existing backup files; preserve the key needed for each retained backup generation.
 
 Only Caddy is published to the host. PostgreSQL, Valkey, API and collaboration are internal Compose services. Containers run with dropped capabilities and no-new-privileges for the application image. The application runtime is the non-root `node` user. Migration and backup containers alone receive the owner database URL.
 
@@ -147,7 +147,7 @@ Set `WEBHOOK_ALLOWED_ORIGINS` to a comma-separated list of exact HTTP(S) origins
 
 ## Back up
 
-The included logical backup is intended for small deployments up to 1 GiB of attachment data. It captures a consistent SQL snapshot, canonical Yjs bytes, versions, audit records, credentials as stored, and all referenced private file bytes with SHA-256 checksums. It is not encrypted; protect the backup directory and encrypt archives with your normal backup system. Store a protected copy of `.env` separately. At larger scale, use PostgreSQL physical backups/WAL and coordinated object-store snapshots, with a tested recovery plan.
+The included logical backup is intended for small deployments up to 1 GiB of attachment data. It captures a consistent SQL snapshot, canonical Yjs bytes, versions, audit records, credentials as stored, and all referenced private file bytes with SHA-256 checksums. The serialized backup file is encrypted and authenticated with AES-256-GCM using the dedicated `BACKUP_ENCRYPTION_KEY`; known application content is not written in plaintext. Protect the backup directory and store the backup key separately in the organisation's approved secret-management/recovery process. At larger scale, use encrypted PostgreSQL physical backups/WAL and coordinated encrypted object-store snapshots, with a tested recovery plan.
 
 Stop writers so metadata and objects have a stable maintenance boundary:
 
@@ -156,17 +156,17 @@ mkdir -p backups
 # The image's non-root node user (UID 1000) must own the host backup directory.
 # Apply the appropriate ownership/ACL for your host before running the ops job.
 docker compose stop api collab worker
-docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts backup /backups/workspace-backup.json
+docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts backup /backups/workspace-backup.owb
 docker compose start api collab worker
 ```
 
-The backup command refuses to replace an existing file. Choose a new dated filename for each run. The ops profile sets `WORKSPACE_MAINTENANCE=true`; it does not itself stop other services. Always perform the explicit stop first. The web/reverse proxy may remain up to show the maintenance connection failure.
+The backup command refuses to replace an existing file. Choose a new dated filename for each run. New backups are always encrypted. Restore refuses legacy plaintext `openjm-backup-v1` files unless `ALLOW_LEGACY_PLAINTEXT_BACKUP=true` is explicitly supplied for a controlled one-time migration; never make that flag a standing deployment setting. The ops profile sets `WORKSPACE_MAINTENANCE=true`; it does not itself stop other services. Always perform the explicit stop first. The web/reverse proxy may remain up to show the maintenance connection failure.
 
 ## Restore to an empty deployment
 
-Restore into a separate fresh deployment with the **same application/schema version** and original ENCRYPTION_KEY. The tool refuses to restore into any nonempty application database or overwrite existing object keys. Do not delete the old deployment as part of a recovery test.
+Restore into a separate fresh deployment with the **same application/schema version**, original `ENCRYPTION_KEY`, and the `BACKUP_ENCRYPTION_KEY` that encrypted the selected archive. The tool refuses to restore into any nonempty application database or overwrite existing object keys. Wrong backup keys or modified ciphertext fail authenticated decryption. Do not delete the old deployment as part of a recovery test.
 
-1. Copy the source `.env` securely to the recovery directory and choose unused host ports. Preserve the original ENCRYPTION_KEY, but configure fresh PostgreSQL/file volumes and, for S3, a separate empty recovery bucket. Do not point the recovery deployment at the source database or bucket.
+1. Create a recovery `.env` securely and choose unused host ports. Preserve the original `ENCRYPTION_KEY` and the `BACKUP_ENCRYPTION_KEY` required by the selected archive, but use fresh PostgreSQL owner/runtime passwords and fresh setup/metrics credentials where practical. Configure fresh PostgreSQL/file volumes and, for S3, a separate empty recovery bucket. Do not point the recovery deployment at the source database or bucket.
 2. Start the fresh PostgreSQL and Valkey services, then run the migration service.
 3. Make the archive readable by the non-root ops user and ensure the new object destination is empty.
 4. Run restore before starting API, collaboration or worker:
@@ -174,7 +174,7 @@ Restore into a separate fresh deployment with the **same application/schema vers
 ```bash
 docker compose up -d postgres valkey
 docker compose run --rm migrate
-docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts restore /backups/workspace-backup.json
+docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts restore /backups/workspace-backup.owb
 docker compose up -d
 ```
 
@@ -194,7 +194,7 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 
 The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance is now CI-verified. Production object-store validation, broader provider compatibility and the other release-hardening items remain.
+Keep PostgreSQL and the object volume on reliable **encrypted-at-rest** storage, monitor capacity and backup success, and terminate TLS at Caddy. Encrypted logical backups are application-enforced; live PostgreSQL/files/object-store encryption is a deployment/storage control and must be evidenced separately. Secret-manager integration, disaster-recovery automation and antivirus remain deployment work described in the acceptance checklist. External metrics/alerts, OIDC/Keycloak SSO, real-provider back-channel logout, SCIM Users/Groups lifecycle and trusted-TLS acceptance are implemented. Production object-store validation, broader provider compatibility and the other release-hardening items remain.
 
 ## Real-host acceptance
 
