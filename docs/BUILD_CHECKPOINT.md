@@ -193,13 +193,15 @@ This design deliberately scans the same image later exercised by Docker/Chromium
 
 PR #30 passed final-head GitHub Actions run 36815628321 and was squash-merged to `main` at `f3ac59164f82d7736f391e18f2e924c91fda4603`. The final image is explicitly verified to exclude npm/npx, Playwright and the TypeScript compiler; a CycloneDX container SBOM is generated; Trivy reports no blocking fixable HIGH/CRITICAL OS/library findings; and all backend, deployment, Chromium, Chromium+Firefox accessibility and trusted-TLS gates remain green.
 
-## Active hardening slice: encryption at rest
+## Verified hardening slice: encryption at rest
 
 Workspace now encrypts attachment/object bytes before they reach either local filesystem storage or an S3-compatible provider. The envelope uses AES-256-GCM with a random nonce, a storage-specific HKDF-derived key and the immutable object key as authenticated additional data. New generated deployments use `STORAGE_ENCRYPTION_MODE=required`; existing deployments without the setting enter a bounded `legacy-read` upgrade state where new writes are encrypted while old plaintext objects remain readable only until migration.
 
 The maintenance migration writes encrypted replacements under new immutable keys, atomically repoints file metadata and queues the old plaintext keys for durable deletion using the existing object-deletion mechanism. It is resumable and idempotent. Logical backup files are now written as AES-256-GCM encrypted envelopes derived from the deployment key; legacy plaintext backup archives remain readable for recovery compatibility only.
 
 Regression coverage includes authenticated object encryption/key binding, real local-filesystem ciphertext verification, wrong-key failure, backup-envelope secrecy/wrong-key rejection, full plaintext-object migration lifecycle/idempotence, S3 recovery with required encryption, and raw-provider ciphertext assertions. PostgreSQL/WAL encryption remains a host/provider deployment control because whole-database field encryption would break RLS/search/query semantics.
+
+PR #32 passed final-head GitHub Actions run `36819278521` and was squash-merged to `main` at `ab9d9fd8cdfded1c558aadc5360bb97ce9081063`. Backend passed 45/45 native PostgreSQL tests plus encrypted S3 acceptance and production build. Deployment passed the production-only runtime check, container SBOM, Trivy HIGH/CRITICAL gate, live Chromium workflow, raw local-volume ciphertext verification, Chromium + Firefox keyboard/semantic acceptance, and trusted HTTPS/secure-cookie/WSS. Legacy plaintext backup restore requires explicit one-time opt-in. This slice is closed.
 
 This slice remains **in progress** until final-head native PostgreSQL tests, production S3 harness, typecheck/build, Docker deployment, Chromium + Firefox accessibility and trusted-TLS gates all pass.
 
