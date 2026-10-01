@@ -9,7 +9,7 @@ const stateSchema = z.object({
   tenant: z.uuid(),
   principal: z.uuid(),
   at: z.iso.datetime({ offset: true }),
-  id: z.uuid(),
+  id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
 }).strict();
 export type EventCursor = z.infer<typeof stateSchema>;
 const prefix = "event-v1";
@@ -40,7 +40,7 @@ export function beginEventCursor(
   principal: string,
   since?: string,
 ): EventCursor {
-  if (since && (Number.isNaN(Date.parse(since)) || since.length > 60))
+  if (since && (!z.iso.datetime({ offset: true }).safeParse(since).success || since.length > 60))
     throw new HttpError(400, "Invalid event start time");
   return stateSchema.parse({
     v: 1,
