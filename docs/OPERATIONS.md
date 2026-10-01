@@ -164,7 +164,7 @@ docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts ba
 docker compose start api collab worker
 ```
 
-The backup command refuses to replace an existing file. Choose a new dated filename for each run. The ops profile sets `WORKSPACE_MAINTENANCE=true`; it does not itself stop other services. Always perform the explicit stop first. The web/reverse proxy may remain up to show the maintenance connection failure.
+The backup command refuses to replace an existing file. Choose a new dated filename for each run. The ops profile sets `WORKSPACE_MAINTENANCE=true`; it does not itself stop other services. Always perform the explicit stop first. The web/reverse proxy may remain up to show the maintenance connection failure. Legacy plaintext `openjm-backup-v1` archives are refused by default; use `ALLOW_LEGACY_PLAINTEXT_BACKUP=true` only for a controlled one-time restore of an older archive, then unset it immediately.
 
 ## Restore to an empty deployment
 
