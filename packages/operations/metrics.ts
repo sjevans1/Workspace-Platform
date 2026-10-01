@@ -58,6 +58,7 @@ export type MetricsSnapshot = {
     | { configured: false }
   >;
   http: HttpMetricSnapshot[];
+  antivirus?: Record<"clean" | "infected" | "error", number>;
 };
 
 const label = (value: string) =>
@@ -115,6 +116,19 @@ export function renderPrometheusMetrics(snapshot: MetricsSnapshot) {
       if (value == null) continue;
       lines.push(sample(`workspace_${service}_${metric}`, value));
     }
+  }
+
+  if (snapshot.antivirus) {
+    lines.push(
+      "# HELP workspace_antivirus_scans_total File malware scans by result since process start.",
+      "# TYPE workspace_antivirus_scans_total counter",
+    );
+    for (const result of ["clean", "infected", "error"] as const)
+      lines.push(
+        sample("workspace_antivirus_scans_total", snapshot.antivirus[result], {
+          result,
+        }),
+      );
   }
 
   lines.push(
