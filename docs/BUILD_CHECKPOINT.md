@@ -185,6 +185,14 @@ A focused browser acceptance checks visible controls for accessible names, image
 
 PR #29 passed final-head GitHub Actions run 36814890004 and was squash-merged to `main` at `d4f58ea07202bbc32c929c3d208a81a5809eec91`. Backend passed 42/42 native PostgreSQL tests, TypeScript/build and the S3 harness. Deployment passed the full Chromium workflow, the focused Chromium + Firefox keyboard/semantic accessibility matrix, and trusted HTTPS/secure-cookie/WSS. WebKit/Safari coverage, full WCAG/screen-reader review and deterministic visual regression remain separate follow-on work. WebKit/Safari coverage, full WCAG/screen-reader review and deterministic visual regression remain separate follow-on work.
 
+## Active hardening slice: release image security and container SBOM
+
+The exact `openjm-workspace:local` image built by the deployment job now receives a CycloneDX container SBOM and a vulnerability gate before the stack is started. The SBOM uses Anchore's action pinned to the immutable commit for v0.24.2. The vulnerability gate uses Trivy Action v0.36.0 pinned to its immutable commit and fails on fixable HIGH/CRITICAL OS or library findings; unfixed findings do not block CI but remain subject to release risk review.
+
+This design deliberately scans the same image later exercised by Docker/Chromium rather than scanning only source files or a separately rebuilt artifact. The first final-head run will determine whether the current runtime image needs dependency/base-image remediation or development-dependency pruning. Do not add blanket vulnerability suppressions to make the gate pass.
+
+This slice remains **in progress** until the container SBOM artifact is generated, the vulnerability gate passes on final head, and all existing backend/deployment/browser/TLS acceptance remains green.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
