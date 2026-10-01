@@ -238,8 +238,16 @@ before(async () => {
   });
   member = await invite("member");
   guest = await invite("guest");
-  const tenant = (await ok("POST", "/organisations", { name: "Other tenant" }))
-    .id;
+  const tenant = randomUUID();
+  await db.tenant(tenant, async (q) => {
+    await q.query("INSERT INTO organisations(id,name) VALUES($1,'Other tenant')", [
+      tenant,
+    ]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'owner')",
+      [tenant, owner.id],
+    );
+  });
   const t = await db.tenant(tenant, (q) => createSession(q, tenant, owner.id));
   other = { cookie: `workspace_session=${t}`, csrf: csrf(t), tenant };
   collab = await createCollab(db, 1235);
@@ -257,6 +265,12 @@ after(async () => {
   await rm(dir, { recursive: true, force: true });
   done();
 });
+test("self-service organisation creation is disabled by default", async () => {
+  const r = await req("POST", "/organisations", { name: "Blocked tenant" });
+  assert.equal(r.statusCode, 403, r.body);
+  assert.match(r.body, /Self-service organisation creation is disabled/);
+});
+
 test("native integration uses the restricted production runtime database role", async () => {
   if (pg.emulated) return;
   const role = await db.system((q) =>

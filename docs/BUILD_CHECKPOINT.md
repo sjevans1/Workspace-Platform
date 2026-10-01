@@ -155,6 +155,12 @@ Workspace supports two production storage classes rather than requiring cloud ob
 
 This clarification changes the release checklist, not the storage implementation. The next cross-deployment hardening priority is operational tenant provisioning rather than waiting on a particular cloud-storage account.
 
+## Active hardening slice: operational tenant provisioning
+
+Production tenant onboarding is being moved away from ad-hoc database work and universal self-service. The new operator command atomically creates an organisation, owner membership, root workspace and `tenant.provisioned` audit event. New owners may use a local password supplied only through the process environment or a passwordless SSO mode for verified-email OIDC deployments. Existing global users are refused unless the operator explicitly chooses `--allow-existing-user`; their existing credentials are preserved.
+
+Signed-in owner/admin self-service organisation creation is now deployment-controlled and defaults off through `ALLOW_SELF_SERVICE_ORGANISATIONS=false`. The API rejects creation with HTTP 403 and the UI hides the control unless the deployment explicitly enables it. Regression coverage includes the default-off API boundary plus atomic provisioning, duplicate rejection, conservative user reuse and passwordless ownership. This slice remains **in progress** until final-head native PostgreSQL, build and deployed browser gates pass.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.

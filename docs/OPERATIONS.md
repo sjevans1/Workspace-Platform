@@ -99,6 +99,12 @@ Connector metadata and SCIM user mappings are included in logical backups. Raw t
 
 SCIM Users and Groups are implemented, including explicit owner/admin-controlled Group mapping to only `member` or `guest`. Bulk, full filter grammar, ETag concurrency and password changes are not implemented. See [SCIM directory lifecycle](SCIM.md).
 
+## Operational tenant provisioning
+
+Customer tenant creation is operator-controlled by default. `ALLOW_SELF_SERVICE_ORGANISATIONS=false` prevents signed-in administrators from creating additional organisations through the UI/API. Use the bounded operator command documented in [Operational tenant provisioning](TENANT_PROVISIONING.md) to create the organisation, owner membership, first workspace and provisioning audit record atomically.
+
+For deployments that intentionally want self-service multi-tenant creation, set `ALLOW_SELF_SERVICE_ORGANISATIONS=true` and restart the application. This is an explicit deployment choice rather than the production default.
+
 ## Branding
 
 Set PRODUCT_NAME, PRIMARY_ACCENT, LOGO_LIGHT, LOGO_DARK, FAVICON, LOGIN_BACKGROUND, SUPPORT_NAME, SUPPORT_URL, LEGAL_NAME, PRIVACY_URL and TERMS_URL for deployment-wide sign-in defaults. Administrators can override those fields for their signed-in organisation through Settings → Branding. Use HTTPS asset URLs or same-origin paths. The current interface uses the light logo; the dark logo is retained in configuration for a future dark theme.
