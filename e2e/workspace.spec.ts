@@ -966,7 +966,7 @@ test("Recent shows pages the signed-in user opened, not just modified pages", as
       item.title === name && Boolean(item.viewed_at));
   }).toBe(true);
   await page.getByRole("button", { name: "Recent", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Recently viewed" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recently viewed", level: 1 })).toBeVisible();
   await expect(page.locator(".page-card").filter({ hasText: name })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("button", { name: "Recent", exact: true })).toBeVisible();
