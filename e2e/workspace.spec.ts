@@ -1017,3 +1017,85 @@ test("Recent shows pages the signed-in user opened, not just modified pages", as
   await page.getByRole("button", { name: "Recent", exact: true }).click();
   await expect(page.locator(".page-card").filter({ hasText: name })).toBeVisible();
 });
+
+
+test("W05 browser: configure relation, search permitted record, persist, navigate and remove", async ({ page }) => {
+  await login(page);
+  const self = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": self.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const create = async (kind: "space" | "database", parent_id: string, title: string) => {
+    const response = await page.request.post("/api/v1/resources", {
+      headers, data: { kind, parent_id, title },
+    });
+    expect(response.ok(), await response.text()).toBeTruthy();
+    return response.json();
+  };
+  const stamp = Date.now();
+  const folder = await create("space", roots[0].id, "W05 relations " + stamp);
+  const clients = await create("database", folder.id, "W05 Clients " + stamp);
+  const projects = await create("database", folder.id, "W05 Projects " + stamp);
+  const clientResponse = await page.request.post(
+    `/api/v1/databases/${clients.id}/records`, {
+      headers, data: { values: { name: "Island Foods Client " + stamp } },
+    });
+  expect(clientResponse.ok(), await clientResponse.text()).toBeTruthy();
+  const client = await clientResponse.json();
+
+  await page.goto("/?page=" + projects.id);
+  await page.getByRole("button", { name: "Configure properties" }).click();
+  const schema = page.getByRole("dialog", { name: "Properties & columns" });
+  await expect(schema).toBeVisible();
+  await schema.getByRole("button", { name: "Add property" }).click();
+  await schema.getByRole("textbox", { name: "Property name" }).nth(1).fill("Client");
+  await schema.getByRole("combobox", { name: "Property type" })
+    .nth(1).selectOption("relation");
+  await schema.getByRole("textbox", { name: "Search target databases" })
+    .fill("W05 Clients " + stamp);
+  const targetSelector = schema.getByRole("combobox", {
+    name: "Related database for Client",
+  });
+  await expect(targetSelector.locator(`option[value="${clients.id}"]`)).toBeAttached();
+  await targetSelector.selectOption(clients.id);
+  await schema.getByRole("button", { name: "Save properties" }).click();
+  await expect(schema).toBeHidden();
+
+  const projectResponse = await page.request.post(
+    `/api/v1/databases/${projects.id}/records`, {
+      headers, data: { values: { name: "Falcon Project " + stamp } },
+    });
+  expect(projectResponse.ok(), await projectResponse.text()).toBeTruthy();
+  const project = await projectResponse.json();
+  await page.reload();
+  const relation = page.getByRole("group", { name: "Client" });
+  await expect(relation).toBeVisible();
+  await relation.getByRole("button", { name: "Add related record for Client" }).click();
+  await relation.getByRole("textbox", {
+    name: "Search related records for Client",
+  }).fill("Island Foods Client " + stamp);
+  await relation.getByRole("button", {
+    name: "Link record Island Foods Client " + stamp,
+  }).click();
+  const relationProperty = (await (await page.request.get(
+    `/api/v1/databases/${projects.id}`)).json()).properties
+    .find((p: any) => p.type === "relation");
+  expect(relationProperty).toBeTruthy();
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/v1/records/${project.id}`);
+    return (await response.json()).values[relationProperty.id];
+  }).toEqual([client.id]);
+  await page.reload();
+  await page.getByRole("group", { name: "Client" })
+    .getByRole("button", { name: "Open related record Island Foods Client " + stamp })
+    .click();
+  await expect(page.getByLabel("Page title", { exact: true }))
+    .toHaveValue("Island Foods Client " + stamp);
+  await page.goto("/?page=" + projects.id);
+  await page.getByRole("group", { name: "Client" })
+    .getByRole("button", { name: "Remove related record Island Foods Client " + stamp })
+    .click();
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/v1/records/${project.id}`);
+    return (await response.json()).values[relationProperty.id];
+  }).toEqual([]);
+});
