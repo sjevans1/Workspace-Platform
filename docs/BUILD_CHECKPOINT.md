@@ -91,13 +91,25 @@ The slice adds standards-based OIDC Back-Channel Logout. OIDC-created Workspace 
 
 Workspace administrator membership deactivation already revokes that tenant's active sessions, so the remaining enterprise lifecycle gap is directory-originated offboarding when the external IdP does not emit a back-channel logout event. The next acceptance step is a focused real-Keycloak host exercise configuring the client's Backchannel logout URL and proving an already-active Workspace SSO session is invalidated. The bounded continuation is committed at `docs/HERMES_KEYCLOAK_LOGOUT_ACCEPTANCE.md`.
 
+## Verified defect fix: OIDC logout audit under tenant RLS
+
+The first real-Keycloak back-channel logout host exercise proved that Keycloak 26.7.4 emitted a signed logout token to Workspace, but it also exposed a production-role defect. The original handler revoked the OIDC session and inserted the tenant audit event inside one `systemTransaction()`; under the deployed `workspace_runtime` role, the FORCE-RLS `audit_events` insert failed because `app.tenant_id` was unset. PostgreSQL rolled the transaction back, undoing the session deletion and returning HTTP 500.
+
+Hermes temporarily granted `BYPASSRLS` only in the disposable test database to finish protocol observation. That workaround demonstrated expected Keycloak emission, old-session rejection, break-glass preservation and fresh-login recovery, but it is not accepted as production evidence and must not be used in a customer deployment.
+
+PR #16 fixes the handler without weakening RLS. Before each affected tenant's audit insert, the existing system transaction now sets transaction-local `app.tenant_id`; session revocation and audit insertion remain atomic. Native integration was also hardened so the application runs as the same `workspace_runtime` role used in Docker, and explicitly proves `rolbypassrls=false`.
+
+PR #16 passed final-head GitHub Actions run 36797135204 and was squash-merged to `main` at `8965a7dfab6dce3c39d66332cd71aee2f8ad993a`. The backend passed 36/36 native PostgreSQL tests, TypeScript and production build. Docker startup/health and the deployed Chromium workflow also passed.
+
+The remaining acceptance action is one bounded real-Keycloak rerun after restoring `workspace_runtime NOBYPASSRLS`, with no database workaround. It only needs to prove: Keycloak admin session termination -> accepted back-channel POST -> audit event -> old Workspace SSO session 401, while the independent local break-glass session remains valid.
+
 ## Independent Keycloak host acceptance — passed
 
 Hermes reported complete real-provider acceptance against Workspace `1702779fa5d31a8de159ee6d476e451d90e316f3` using `quay.io/keycloak/keycloak:26.7.4` on the isolated WSL2 `openjm_workspace_sso` project. OIDC discovery used `http://keycloak.localhost:18081/realms/openjm-test` because local port 18080 was occupied.
 
 The host exercise passed existing-owner SSO linking without duplicate accounts, repeat issuer/subject login, administrator-invited passwordless member provisioning, mismatched-invitation rejection, SSO-only mode with local password login disabled, disabled-Keycloak-user rejection for new authentication, and operational health/log review. All Workspace services remained healthy with no restart loops or OIDC errors.
 
-The earlier Keycloak exercise confirmed that disabling a user prevents new IdP login but does not by itself guarantee revocation of an already-issued Workspace session. Back-channel logout support is now implemented and verified in CI; a focused real-Keycloak test must next prove logout/session termination emits the token and invalidates the active Workspace SSO session. Directory disable/offboarding without such an event remains a separate SCIM/lifecycle concern.
+The earlier Keycloak exercise confirmed that disabling a user prevents new IdP login but does not itself terminate the existing IdP session or emit back-channel logout. A later focused host exercise proved Keycloak does emit a real back-channel token on explicit session termination, but exposed the audit/RLS defect described above and therefore required a disposable workaround. The defect is now fixed and CI-verified under the restricted runtime role; one no-workaround host rerun remains. Directory disable/offboarding without a logout event remains a separate SCIM/lifecycle concern.
 
 ## First-pass completion and future work
 
