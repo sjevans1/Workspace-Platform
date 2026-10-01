@@ -2448,6 +2448,12 @@ test("reconciliation enumerates only currently accessible resources with encrypt
     "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
     [owner.tenant, hiddenId, reconcileUser],
   ));
+  // A grant arriving behind the original keyset position must not make a
+  // prior continuation silently rewind. A new full pass will discover it.
+  const resumed = await read("/events/reconcile?limit=1&cursor=" +
+    encodeURIComponent(firstCursor));
+  assert.equal(resumed.statusCode, 200, resumed.body);
+  assert.ok(!resumed.json().resources.some((v: any) => v.id === hiddenId));
   assert.ok((await scan(null)).seen.includes(hiddenId));
   await db.tenant(owner.tenant, (q) => q.query(
     "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
