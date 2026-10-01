@@ -1,8 +1,11 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 const email = "browser@example.test",
   password = "browser-password-123";
+// Subsequent sequential tests reuse the genuine authenticated session instead
+// of exhausting the production per-IP login budget in a disposable CI host.
+let cachedAuthCookies: Awaited<ReturnType<BrowserContext["cookies"]>> = [];
 
 // Deployed tests share a single source IP behind Caddy. This is an
 // acceptance isolation guard, NOT a rate-limit bypass: wait for the actual
@@ -21,7 +24,9 @@ test.beforeEach(async ({ request }) => {
   }
 });
 
-async function login(page: Page) {
+async function login(page: Page, reuseSession = true) {
+  if (reuseSession && cachedAuthCookies.length)
+    await page.context().addCookies(cachedAuthCookies);
   await page.goto("/");
   // Deployed browser tests intentionally retain production request limits.
   // An exhausted shared CI-IP limit may temporarily show the new recovery
@@ -72,6 +77,9 @@ async function login(page: Page) {
   await expect(
     page.getByRole("heading", { name: "Welcome back, Shane." }),
   ).toBeVisible();
+  if (reuseSession)
+    cachedAuthCookies = (await page.context().cookies())
+      .filter((cookie) => cookie.name === "workspace_session");
 }
 test("Caddy strips spoofed forwarding headers before API rate limiting", async ({ request }) => {
   const first = await request.get("/api/v1/auth/methods", {
@@ -130,7 +138,7 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
 
   const second = await browser.newContext();
   const other = await second.newPage();
-  await login(other);
+  await login(other, false);
   await other.goto(url);
   await expect(other.locator(".bn-editor")).toContainText(
     "Shared context survives a reload.",
