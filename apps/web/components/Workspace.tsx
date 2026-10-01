@@ -16,12 +16,16 @@ import {
   LogOut,
   Upload,
   ArrowRight,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { api, ApiError, setCsrf, notify, run, changed, go, icon, date } from "../lib/api";
 import { Modal, Empty, Spinner, Field } from "./common";
 import Resource from "./Resource";
 import Settings from "./Settings";
+import { useAppearance } from "../lib/appearance";
 export default function Workspace() {
+  const { appearance, setAppearance, resolvedTheme } = useAppearance();
   const [me, setMe] = useState<any>(),
     [setup, setSetup] = useState(false),
     [loaded, setLoaded] = useState(false),
@@ -219,8 +223,12 @@ export default function Workspace() {
     >
       <aside className="sidebar">
         <div className="brand">
-          {brand.logoLight ? (
-            <img src={brand.logoLight} alt="" />
+          {(resolvedTheme === "dark" && brand.logoDark) || brand.logoLight ? (
+            <img
+              src={(resolvedTheme === "dark" && brand.logoDark) || brand.logoLight}
+              alt=""
+              className={resolvedTheme === "dark" && !brand.logoDark ? "dark-logo-fallback" : undefined}
+            />
           ) : (
             <div className="brand-mark">✳</div>
           )}
@@ -344,6 +352,15 @@ export default function Workspace() {
           <div className="topbar-right">
             <span className="private-label">Your team’s shared space</span>
             <button
+              type="button"
+              className="icon-button"
+              aria-label={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              onClick={() => setAppearance(resolvedTheme === "dark" ? "light" : "dark")}
+            >
+              {resolvedTheme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            <button
               className="button primary small-button"
               onClick={() => setCreate({ parent: root, kind: "page" })}
             >
@@ -361,9 +378,10 @@ export default function Workspace() {
               me={me}
               onGone={() => navigate("trash")}
               create={setCreate}
+              theme={resolvedTheme}
             />
           ) : screen === "settings" ? (
-            <Settings me={me} reload={init} />
+            <Settings me={me} reload={init} appearance={appearance} setAppearance={setAppearance} />
           ) : (
             <Dashboard
               screen={screen}
