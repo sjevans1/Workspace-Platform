@@ -4,14 +4,14 @@ This is an executable alpha built from the OpenJM Workspace Astra handoff, not a
 
 ## Verified through 1 October 2026
 
-The latest production-hardening gate passed in [GitHub Actions run 36819278521](https://github.com/sjevans1/Workspace-Platform/actions/runs/36819278521), testing the encryption-at-rest final head that was squash-merged in PR #32 as `ab9d9fd8cdfded1c558aadc5360bb97ce9081063`. The native application integration suite runs as the same restricted `workspace_runtime` role used by Docker, with `NOBYPASSRLS`.
+The latest production-hardening gate passed in [GitHub Actions run 36823852010](https://github.com/sjevans1/Workspace-Platform/actions/runs/36823852010), testing the file malware scanning final head that was squash-merged in PR #35 as `1994cc1f1f749a905bd87d07fe067996cc4b3543`. The native application integration suite runs as the same restricted `workspace_runtime` role used by Docker, with `NOBYPASSRLS`.
 
 | Check | Result |
 |---|---|
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration, identity, backup and storage-encryption tests | 45 passed, 0 failed in latest native PostgreSQL gate |
+| Unit, API, collaboration, identity, backup and storage-encryption tests | 49 passed, 0 failed in latest native PostgreSQL gate |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Concurrent ACL replacement and stale-write rejection | Pass; simultaneous conflicting saves resolve as one success and one 409 |
@@ -24,7 +24,7 @@ The latest production-hardening gate passed in [GitHub Actions run 36819278521](
 | Trash cascade and restore | Pass |
 | Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL 17 test suite | 45 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
+| Native PostgreSQL 17 test suite | 49 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
 | Migration rollback/retry and historical checksum integrity | Pass; failed partial DDL rolls back, corrected retry succeeds, reruns are idempotent, applied-file drift is rejected |
 | Docker image, migrations and full Compose startup | Pass; API, collaboration and worker all report healthy before browser acceptance |
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
