@@ -7,6 +7,7 @@ import { oidcFromConfig, oidcFromEnv } from "../packages/auth/oidc.ts";
 
 test("real OIDC client performs discovery, PKCE, nonce validation and verified-email enforcement", async () => {
   const { publicKey, privateKey } = await generateKeyPair("RS256"),
+    { privateKey: untrustedPrivateKey } = await generateKeyPair("RS256"),
     jwk: any = await exportJWK(publicKey);
   jwk.kid = "workspace-test-key";
   jwk.use = "sig";
@@ -18,6 +19,7 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
     emailVerified = true,
     tokenAuthMethod: "client_secret_basic" | "client_secret_post" | "none" =
       "client_secret_basic",
+    signWithUntrustedKey = false,
     tokenRequests = 0;
 
   const server = createServer(async (req, res) => {
@@ -81,7 +83,7 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
           .setSubject("oidc-user-subject")
           .setIssuedAt(now)
           .setExpirationTime(now + 300)
-          .sign(privateKey);
+          .sign(signWithUntrustedKey ? untrustedPrivateKey : privateKey);
       return json({
         access_token: "test-access-token",
         token_type: "Bearer",
@@ -275,6 +277,47 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
     );
     assert.equal(publicProfile.email, "oidc-user@example.test");
     assert.equal(tokenRequests, 4);
+
+    // An otherwise well-formed ID Token with the correct issuer, audience,
+    // nonce and advertised kid must not authenticate when signed by a key
+    // that does not match the issuer's JWKS. This guards against accepting
+    // decoded claims without verifying their cryptographic signature.
+    signWithUntrustedKey = true;
+    const forgedStart = await publicProvider.start(redirectUri);
+    expectedNonce = forgedStart.nonce;
+    expectedChallenge = new URL(forgedStart.url).searchParams.get("code_challenge") || "";
+    await assert.rejects(
+      publicProvider.finish(
+        new URL(
+          `${redirectUri}?code=test-code&state=${encodeURIComponent(forgedStart.state)}`,
+        ),
+        {
+          state: forgedStart.state,
+          codeVerifier: forgedStart.codeVerifier,
+          nonce: forgedStart.nonce,
+        },
+      ),
+      // openid-client intentionally uses a generic error for invalid JWS.\n      // The genuine-token success cases on both sides rule out false passes.\n      /invalid response encountered|signature|verification|key|JWS|JWT/i,
+    );
+    assert.equal(tokenRequests, 5);
+    signWithUntrustedKey = false;
+
+    // A subsequent correctly signed token still succeeds on this provider.
+    const recoveryStart = await publicProvider.start(redirectUri);
+    expectedNonce = recoveryStart.nonce;
+    expectedChallenge = new URL(recoveryStart.url).searchParams.get("code_challenge") || "";
+    const recoveryProfile = await publicProvider.finish(
+      new URL(
+        `${redirectUri}?code=test-code&state=${encodeURIComponent(recoveryStart.state)}`,
+      ),
+      {
+        state: recoveryStart.state,
+        codeVerifier: recoveryStart.codeVerifier,
+        nonce: recoveryStart.nonce,
+      },
+    );
+    assert.equal(recoveryProfile.subject, "oidc-user-subject");
+    assert.equal(tokenRequests, 6);
 
     process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post";
     process.env.OIDC_CLIENT_SECRET = "";
