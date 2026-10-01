@@ -233,6 +233,11 @@ export async function records(
   const p: any[] = [id],
     where = ["r.parent_id=$1", "r.deleted_at IS NULL"];
   for (const f of config.filters) {
+    // Querying raw relation UUIDs creates an ACL side channel, even when
+    // response values are redacted. Defer relation filter semantics to W08.
+    assert(d.properties.find((field: Property) =>
+      field.id === f.property)?.type !== "relation", 400,
+      "Relation filters require permission-aware indexing");
     p.push(f.property);
     let key = `v.values->>$${p.length}`;
     if (f.op === "empty") {
@@ -261,6 +266,9 @@ export async function records(
     );
   }
   const sort = config.sort.map((s: any) => {
+    assert(d.properties.find((field: Property) =>
+      field.id === s.property)?.type !== "relation", 400,
+      "Relation sorting requires permission-aware indexing");
     p.push(s.property);
     let key = `v.values->>$${p.length}`;
     if (d.properties.find((x: any) => x.id === s.property)?.type === "number")
