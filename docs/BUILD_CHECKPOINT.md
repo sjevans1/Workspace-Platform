@@ -234,9 +234,16 @@ The post-merge `main` run #180 passed backend (59 native PostgreSQL tests, 0 ski
 
 The user requested independent sections progress in parallel. Keep isolated local work separate, publish one active integration PR, and require the exact final head's full CI before merge. Continue frequent user updates. Do not publish private browser screenshots into this public repository.
 
-## In progress — staged webhook signing-secret rotation
+## Verified engineering slice: staged webhook signing-secret rotation
 
-The continuation prepares an encrypted one-time secret without changing active delivery signing, then allows an explicit administrator activation or discard. Revision preconditions reject concurrent/stale changes. The worker holds a subscription read lock through send/commit to serialize activation with in-flight sends. New coverage checks owner/admin authority, CSRF, service-token rejection, foreign tenants, concurrent preparation, old/new signature verification, replay, audit events, backup recovery and a real Settings workflow. Native PostgreSQL CI additionally checks that activation waits for an in-flight delivery. This slice is not yet claimed CI-accepted.
+PR #52 staged signing-secret rotation is **merged** to `main` at `3a47401054a7808a2a5b112a8b9edee50d77696d`, after final-head GitHub Actions run `36844169470` passed both backend and deployment jobs. An administrator can prepare an encrypted one-time secret without changing active signatures, then explicitly activate or discard it. Revision preconditions reject stale/concurrent changes. The worker holds a subscription read lock through send/commit so activation cannot interleave with an in-flight delivery. Acceptance covers authorization/tenant boundaries, CSRF, service-token rejection, old/new signing and replay, audit, encrypted backup recovery, deployed Settings UI and native PostgreSQL concurrency. This slice is closed.
+
+## Move On continuity gate — October 1, 2026
+
+- PRs #49 (startup/session recovery) and #51 (webhook delivery replay UI) were merged with native PostgreSQL and deployed browser acceptance; PR #52 rotation followed with the same backend/deployment gate.
+- Monthly dependency maintenance PR #53 changes only `package.json`/`package-lock.json`, updating `y-protocols` 1.0.6 → 1.0.7 and `prettier` 3.6.2 → 3.9.9, plus npm lockfile reordering. Its exact head `28843484d8f9e848448fcbd99911e93db2d5e218` passed both CI jobs (GitHub Actions run `36858049083`) and was squash-merged at `1fe47687957b83c9325d71725a5985ecd7f86563`.
+- **Verification boundary:** PR-head CI acceptance is verified for #53; this checkpoint does not claim its post-merge `main` push run was inspected. Confirm a completed successful `main` run before reopening feature development. Do not relax production rate limits just to make tests pass; use real browser acceptance and inspect recurring 429s separately from application regressions.
+- Keep new functional features paused until the verified `main` baseline is stable. Use one active integration PR, require final-head full CI before merge, and delete merged engineering branches after validation. Do not expose private screenshots or secrets in this public repo.
 
 ## First-pass completion and future work
 
