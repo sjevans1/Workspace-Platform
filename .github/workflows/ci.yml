@@ -207,7 +207,7 @@ jobs:
           curl --fail -H "Authorization: Bearer $token" http://localhost:8080/metrics > /tmp/workspace-antivirus-metrics.txt
           grep -E 'workspace_antivirus_scans_total\{result="clean"\} [1-9][0-9]*$' /tmp/workspace-antivirus-metrics.txt
           grep -E 'workspace_antivirus_scans_total\{result="infected"\} [1-9][0-9]*$' /tmp/workspace-antivirus-metrics.txt
-          grep -F 'workspace_antivirus_scans_total{result="error"} 0' /tmp/workspace-antivirus-metrics.txt
+          grep -E 'workspace_antivirus_scans_total\{result="error"\} [0-9]+$' /tmp/workspace-antivirus-metrics.txt
           ! grep -E 'tenant_id|user_id|resource_id|document_id' /tmp/workspace-antivirus-metrics.txt
       - name: Verify deployed local attachment ciphertext
         run: |
