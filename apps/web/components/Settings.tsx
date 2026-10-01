@@ -758,7 +758,8 @@ export default function Settings({
               </>
             )}
             <button className="button primary">
-              Create {modal === "invite" ? "invitation" : modal}
+              {modal === "oidc" ? "Register" : "Create"}{" "}
+              {modal === "invite" ? "invitation" : modal === "oidc" ? "provider" : modal}
             </button>
           </form>
         </Modal>
