@@ -22,7 +22,7 @@ export interface Storage {
 }
 
 export type StorageEncryptionMode = "off" | "legacy-read" | "required";
-const storageMagic = Buffer.from("OJSE1");
+const storageMagic = Buffer.from("4f4a534501a55aa5", "hex");
 
 function storageKey(env: NodeJS.ProcessEnv) {
   const value = env.ENCRYPTION_KEY || "";
@@ -147,9 +147,9 @@ export function createStorage(env: NodeJS.ProcessEnv = process.env): Storage {
     throw new Error(
       "STORAGE_ENCRYPTION_MODE must be off, legacy-read, or required",
     );
+  if (mode !== "off") storageKey(env);
   const raw = createRawStorage(env);
   if (mode === "off") return raw;
-  storageKey(env);
   return {
     async put(key, value) {
       await raw.put(
