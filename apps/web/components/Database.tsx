@@ -978,10 +978,7 @@ function PropertiesDialog({
                   )
                     ? { options: p.options || ["Option 1"] }
                     : { options: undefined }),
-                  // Never retain a previously configured target or formula
-                  // when the property's type changes.
-                  target_database_id: e.target.value === "relation"
-                    ? p.target_database_id : undefined,
+                  // Clear the numeric Formula when changing property type.
                   formula: e.target.value === "formula"
                     ? p.formula || "0" : undefined,
                 })
