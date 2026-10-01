@@ -1693,3 +1693,131 @@ test("numeric filters compare values numerically and record titles respect resou
     400,
   );
 });
+
+
+test("tenant IdP registration is disabled, encrypted and isolated under tenant RLS", async () => {
+  const savedOrigins = process.env.OIDC_TENANT_ISSUER_ORIGINS;
+  process.env.OIDC_TENANT_ISSUER_ORIGINS = "https://login.example.test";
+  const registration = {
+    label: "Customer SSO",
+    issuer: "https://login.example.test/realm-one",
+    client_id: "workspace-client",
+    token_auth_method: "client_secret_post",
+    client_secret: "test-only-credential-very-secret",
+    scopes: ["openid", "profile", "email"],
+  };
+  // Earlier integration scenarios intentionally revoke the original member
+  // session. Use a dedicated active non-admin principal for this regression.
+  const viewerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,password_hash) VALUES($1,$2,'IdP Viewer',NULL)",
+      [viewerId, viewerId + "@example.test"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, viewerId],
+    );
+  });
+  const viewerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, viewerId),
+  );
+  const viewer = {
+    cookie: "workspace_session=" + viewerToken,
+    csrf: csrf(viewerToken),
+  };
+  // Similarly, use a freshly issued second-tenant owner session for isolation.
+  const otherToken = await db.tenant(other.tenant, (q) =>
+    createSession(q, other.tenant, owner.id),
+  );
+  const otherOwner = {
+    tenant: other.tenant,
+    cookie: "workspace_session=" + otherToken,
+    csrf: csrf(otherToken),
+  };
+  try {
+    assert.equal((await req("GET", "/identity/providers", undefined, null)).statusCode, 401);
+    assert.equal((await req("GET", "/identity/providers", undefined, viewer)).statusCode, 403);
+    assert.equal(
+      (await req("POST", "/identity/providers", registration, viewer)).statusCode,
+      403,
+    );
+    const badSource = await req("POST", "/identity/providers", {
+      ...registration,
+      issuer: "https://unapproved.example.test/oidc",
+    });
+    assert.equal(badSource.statusCode, 403, badSource.body);
+    const privateEndpoint = await req("POST", "/identity/providers", {
+      ...registration,
+      issuer: "https://127.0.0.1/realms/private",
+    });
+    assert.equal(privateEndpoint.statusCode, 400, privateEndpoint.body);
+    const missingSecret = await req("POST", "/identity/providers", {
+      ...registration,
+      client_secret: undefined,
+    });
+    assert.equal(missingSecret.statusCode, 400, missingSecret.body);
+    const forbiddenEnabling = await req("POST", "/identity/providers", {
+      ...registration,
+      enabled: true,
+    });
+    assert.equal(forbiddenEnabling.statusCode, 400, forbiddenEnabling.body);
+
+    const registered = await ok("POST", "/identity/providers", registration);
+    assert.equal(registered.enabled, false);
+    assert.equal(registered.require_verified_email, true);
+    assert.equal(registered.revision, 1);
+    assert.equal(registered.issuer, registration.issuer);
+    assert.equal(registered.client_id, registration.client_id);
+    assert.equal(registered.client_secret, undefined);
+    assert.doesNotMatch(JSON.stringify(registered), /test-only-credential/);
+
+    const listed = await ok("GET", "/identity/providers");
+    assert.ok(listed.find((p: any) => p.id === registered.id));
+    assert.doesNotMatch(JSON.stringify(listed), /test-only-credential|client_secret_encrypted/);
+    const stored = await db.tenant(owner.tenant, (q) =>
+      one(q, "SELECT client_secret_encrypted,enabled FROM oidc_tenant_providers WHERE id=$1", [registered.id]),
+    );
+    assert.match(stored.client_secret_encrypted, /^oidc-v1\./);
+    assert.doesNotMatch(stored.client_secret_encrypted, /test-only-credential/);
+    const { openTenantOidcSecret } = await import("../packages/auth/tenant-provider.ts");
+    assert.equal(
+      openTenantOidcSecret(stored.client_secret_encrypted, owner.tenant, registered.id),
+      registration.client_secret,
+    );
+    assert.throws(
+      () => openTenantOidcSecret(stored.client_secret_encrypted, otherOwner.tenant, registered.id),
+    );
+    const invisible = await db.tenant(otherOwner.tenant, (q) =>
+      one(q, "SELECT id FROM oidc_tenant_providers WHERE id=$1", [registered.id]),
+    );
+    assert.equal(invisible, undefined);
+
+    // Same client ID and issuer are allowed in a different tenant.
+    const otherRegistration = await ok("POST", "/identity/providers", registration, otherOwner);
+    assert.equal(otherRegistration.enabled, false);
+    assert.notEqual(otherRegistration.id, registered.id);
+    assert.ok(!(await ok("GET", "/identity/providers", undefined, otherOwner))
+      .some((p: any) => p.id === registered.id));
+    const crossTenantRevoke = await req(
+      "DELETE", "/identity/providers/" + registered.id, undefined, otherOwner,
+    );
+    assert.equal(crossTenantRevoke.statusCode, 404, crossTenantRevoke.body);
+    assert.equal((await req("DELETE", "/identity/providers/" + otherRegistration.id, undefined, viewer)).statusCode, 403);
+
+    const revoked = await ok("DELETE", "/identity/providers/" + registered.id);
+    assert.equal(revoked.ok, true);
+    assert.equal(revoked.revision, 2);
+    assert.equal((await req("DELETE", "/identity/providers/" + registered.id)).statusCode, 404);
+    assert.ok((await ok("GET", "/identity/providers"))
+      .some((p: any) => p.id === registered.id && p.revoked_at));
+    assert.ok((await ok("GET", "/identity/providers", undefined, otherOwner))
+      .some((p: any) => p.id === otherRegistration.id && !p.revoked_at));
+    const methods = await req("GET", "/auth/methods", undefined, null);
+    assert.equal(methods.statusCode, 200);
+    assert.equal(methods.json().oidc.label, "Test SSO");
+  } finally {
+    if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
+    else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
+  }
+});

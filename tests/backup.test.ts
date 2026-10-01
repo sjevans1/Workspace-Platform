@@ -12,6 +12,7 @@ import {
 } from "../scripts/backup.ts";
 import type { Storage } from "../packages/storage/index.ts";
 import { blocksToState } from "../packages/editor/server.ts";
+import { sealTenantOidcSecret, openTenantOidcSecret } from "../packages/auth/tenant-provider.ts";
 function memory() {
   const data = new Map<string, Buffer>();
   const storage: Storage = {
@@ -84,6 +85,20 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
         "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'guest',true)",
         [tenant, user],
       );
+      const providerId = randomUUID();
+      await q.query(
+        "INSERT INTO oidc_tenant_providers" +
+          " (id,tenant_id,label,issuer,client_id,token_auth_method,client_secret_encrypted,created_by)" +
+          " VALUES($1,$2,'Backup IdP','https://idp.example.test/','backup-client'," +
+          " 'client_secret_basic',$3,$4)",
+        [
+          providerId,
+          tenant,
+          sealTenantOidcSecret("backup-oidc-secret", tenant, providerId),
+          user,
+        ],
+      );
+
       await q.query(
         "INSERT INTO scim_connectors(id,tenant_id,label,token_hash,default_role,created_by) VALUES($1,$2,'Directory','backup-token-hash','guest',$3)",
         [connector, tenant, user],
@@ -165,6 +180,22 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
         [scimGroup],
       ),
     }));
+    const providers = await db.tenant(tenant, (q) =>
+      q.query(
+        "SELECT id,client_secret_encrypted,enabled FROM oidc_tenant_providers",
+      ),
+    );
+    assert.equal(providers.rows.length, 1);
+    assert.equal(providers.rows[0].enabled, false);
+    assert.equal(
+      openTenantOidcSecret(
+        providers.rows[0].client_secret_encrypted,
+        tenant,
+        providers.rows[0].id,
+      ),
+      "backup-oidc-secret",
+    );
+
     assert.equal(directory.user.rows[0].base_role, "guest");
     assert.equal(directory.group.rows[0].display_name, "Backup Group");
     assert.equal(directory.mapping.rows[0].role, "member");
