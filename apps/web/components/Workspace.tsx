@@ -163,9 +163,14 @@ export default function Workspace() {
   }, [version]);
   useEffect(() => {
     document.title = brand.productName;
+    // Preserve customer branding in both schemes. An accent tuned for a
+    // light surface may be unreadable on dark surfaces unless brightened.
+    const accent = brand.primaryAccent || "#177a64";
     document.documentElement.style.setProperty(
       "--accent",
-      brand.primaryAccent || "#177a64",
+      resolvedTheme === "dark"
+        ? `color-mix(in srgb, ${accent} 55%, #ffffff)`
+        : accent,
     );
     if (brand.favicon) {
       let el = document.querySelector(
@@ -178,7 +183,7 @@ export default function Workspace() {
       }
       el.href = brand.favicon;
     }
-  }, [brand]);
+  }, [brand, resolvedTheme]);
   const navigate = (s: string) => {
     setScreen(s);
     setCurrent("");
