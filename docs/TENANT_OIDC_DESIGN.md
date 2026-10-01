@@ -22,6 +22,8 @@ Create a tenant-owned provider registry with a stable opaque provider identifier
 
 An operator may configure a provider, but that alone never creates users, memberships or roles. Existing deployment-level OIDC cannot be silently displaced by tenant data.
 
+**Administrative UI (separate slice):** Settings → Integrations includes a disabled-only identity-provider registry. Owners and admins can register HTTPS issuer, client ID, token-endpoint authentication method and optional encrypted secret, view non-secret metadata and revoke an entry. The operator's explicit `OIDC_TENANT_ISSUER_ORIGINS` allowlist still governs acceptance. No secret is returned after creation, and neither an IdP registration nor this UI enables sign-in; no network discovery occurs. The disposable CI browser uses only the synthetic allowlisted `https://login.example.test` issuer to exercise the workflow; this is not production configuration.
+
 ### Gate T3: login binding and authentication
 
 **T3a (schema-only foundation, separate PR):** add nullable tenant, provider ID, provider revision, expected issuer and client ID to one-time authorization states. An all-or-none database constraint and composite foreign key reject incomplete or cross-tenant bindings. The nullable legacy form keeps existing deployment-level sign-in operational. **This does not select or activate tenant IdPs and does not validate IdP discovery endpoints.** T3b must enforce exact registration/revision matching and network egress safety before any provider-specific start or callback is enabled.

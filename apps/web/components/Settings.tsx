@@ -15,6 +15,8 @@ export default function Settings({
     [branding, setBranding] = useState(me.branding),
     [integrations, setIntegrations] = useState<any[]>([]),
     [scimConnectors, setScimConnectors] = useState<any[]>([]),
+    [identityProviders, setIdentityProviders] = useState<any[]>([]),
+    [oidcMethod, setOidcMethod] = useState("client_secret_basic"),
     [scimGroups, setScimGroups] = useState<any[]>([]),
     [hooks, setHooks] = useState<any>({ subscriptions: [], deliveries: [] }),
     [audit, setAudit] = useState<any[]>([]),
@@ -29,6 +31,7 @@ export default function Settings({
     setMembers(await api("/members"));
     setIntegrations(await api("/integrations"));
     setScimConnectors(await api("/scim/connectors"));
+    setIdentityProviders(await api("/identity/providers"));
     setScimGroups(await api("/scim/groups"));
     setHooks(await api("/webhooks"));
     setAudit(await api("/audit"));
@@ -305,6 +308,62 @@ export default function Settings({
           <hr className="section-divider" />
           <div className="section-title">
             <div>
+              <h2>Single sign-on provider registrations</h2>
+              <p className="muted">
+                Register customer identity providers for later activation.
+                Registrations are deliberately disabled and cannot sign anyone
+                in yet. Your administrator must also approve the issuer origin
+                in the server configuration.
+              </p>
+            </div>
+            <button
+              className="button primary"
+              onClick={() => {
+                setOidcMethod("client_secret_basic");
+                setModal("oidc");
+              }}
+            >
+              <Plus size={15} />
+              Register identity provider
+            </button>
+          </div>
+          {identityProviders.length === 0 && (
+            <p className="muted">No identity providers registered.</p>
+          )}
+          {identityProviders.map((provider: any) => (
+            <div className="integration-row" key={provider.id}>
+              <div>
+                <strong>{provider.label}</strong>
+                <small>{provider.issuer}</small>
+                <p className="small-text muted">
+                  Client: {provider.client_id} · Authentication:{" "}
+                  {provider.token_auth_method} · Revision: {provider.revision}
+                </p>
+                <p className="small-text muted">
+                  {provider.revoked_at
+                    ? "Revoked " + date(provider.revoked_at)
+                    : "Registered — sign-in disabled"}
+                </p>
+              </div>
+              {!provider.revoked_at && (
+                <button
+                  className="button"
+                  aria-label={"Revoke identity provider " + provider.label}
+                  onClick={() =>
+                    run(async () => {
+                      await api("/identity/providers/" + provider.id, "DELETE");
+                      await load();
+                    })
+                  }
+                >
+                  Revoke
+                </button>
+              )}
+            </div>
+          ))}
+          <hr className="section-divider" />
+          <div className="section-title">
+            <div>
               <h2>Directory provisioning (SCIM 2.0)</h2>
               <p className="muted">
                 Provision and deactivate member or guest access from an
@@ -503,6 +562,8 @@ export default function Settings({
                 ? "Create service credential"
                 : modal === "scim"
                   ? "Create SCIM connector"
+                  : modal === "oidc"
+                    ? "Register identity provider"
                   : modal === "webhook"
                   ? "Add event subscription"
                   : `New ${modal}`
@@ -542,6 +603,18 @@ export default function Settings({
                 setSecret(
                   `Token: ${r.token}\nPrincipal: ${r.principal_id}\nSave this token now. It will not be shown again.`,
                 );
+              } else if (modal === "oidc") {
+                await api("/identity/providers", "POST", {
+                  label: v.name,
+                  issuer: String(v.issuer).trim(),
+                  client_id: String(v.client_id).trim(),
+                  token_auth_method: oidcMethod,
+                  ...(oidcMethod === "none"
+                    ? {}
+                    : { client_secret: String(v.client_secret) }),
+                  scopes: ["openid", "profile", "email"],
+                });
+                notify("Provider registered but sign-in remains disabled.");
               } else if (modal === "scim") {
                 const r = await api("/scim/connectors", "POST", {
                   label: v.name,
@@ -605,6 +678,52 @@ export default function Settings({
                 Allow write API scopes
               </label>
             )}
+            {modal === "oidc" && (
+              <>
+                <Field label="Issuer URL (HTTPS)">
+                  <input
+                    name="issuer"
+                    type="url"
+                    placeholder="https://id.example.com/realms/organisation"
+                    pattern="https://.*"
+                    required
+                    maxLength={2048}
+                  />
+                </Field>
+                <Field label="Client ID">
+                  <input name="client_id" required maxLength={256} />
+                </Field>
+                <Field label="Token endpoint authentication">
+                  <select
+                    name="token_auth_method"
+                    value={oidcMethod}
+                    onChange={(e) => setOidcMethod(e.target.value)}
+                  >
+                    <option value="client_secret_basic">Client secret — HTTP Basic</option>
+                    <option value="client_secret_post">Client secret — POST body</option>
+                    <option value="none">Public client — no secret</option>
+                  </select>
+                </Field>
+                {oidcMethod !== "none" && (
+                  <Field label="Client secret (stored encrypted)">
+                    <input
+                      name="client_secret"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={2048}
+                      required
+                    />
+                  </Field>
+                )}
+                <p className="muted small-text">
+                  This only saves a disabled registration. There is no
+                  connection test, automatic issuer discovery, or active
+                  tenant sign-in in this release. The client secret is never
+                  displayed again.
+                </p>
+              </>
+            )}
             {modal === "scim" && (
               <>
                 <Field label="Default provisioned role">
@@ -639,7 +758,8 @@ export default function Settings({
               </>
             )}
             <button className="button primary">
-              Create {modal === "invite" ? "invitation" : modal}
+              {modal === "oidc" ? "Register" : "Create"}{" "}
+              {modal === "invite" ? "invitation" : modal === "oidc" ? "provider" : modal}
             </button>
           </form>
         </Modal>
