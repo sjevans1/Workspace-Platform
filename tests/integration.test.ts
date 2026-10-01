@@ -1726,6 +1726,15 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
     cookie: "workspace_session=" + viewerToken,
     csrf: csrf(viewerToken),
   };
+  // Similarly, use a freshly issued second-tenant owner session for isolation.
+  const otherToken = await db.tenant(other.tenant, (q) =>
+    createSession(q, other.tenant, owner.id),
+  );
+  const otherOwner = {
+    tenant: other.tenant,
+    cookie: "workspace_session=" + otherToken,
+    csrf: csrf(otherToken),
+  };
   try {
     assert.equal((await req("GET", "/identity/providers", undefined, null)).statusCode, 401);
     assert.equal((await req("GET", "/identity/providers", undefined, viewer)).statusCode, 403);
@@ -1777,21 +1786,21 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
       registration.client_secret,
     );
     assert.throws(
-      () => openTenantOidcSecret(stored.client_secret_encrypted, other.tenant, registered.id),
+      () => openTenantOidcSecret(stored.client_secret_encrypted, otherOwner.tenant, registered.id),
     );
-    const invisible = await db.tenant(other.tenant, (q) =>
+    const invisible = await db.tenant(otherOwner.tenant, (q) =>
       one(q, "SELECT id FROM oidc_tenant_providers WHERE id=$1", [registered.id]),
     );
     assert.equal(invisible, undefined);
 
     // Same client ID and issuer are allowed in a different tenant.
-    const otherRegistration = await ok("POST", "/identity/providers", registration, other);
+    const otherRegistration = await ok("POST", "/identity/providers", registration, otherOwner);
     assert.equal(otherRegistration.enabled, false);
     assert.notEqual(otherRegistration.id, registered.id);
-    assert.ok(!(await ok("GET", "/identity/providers", undefined, other))
+    assert.ok(!(await ok("GET", "/identity/providers", undefined, otherOwner))
       .some((p: any) => p.id === registered.id));
     const crossTenantRevoke = await req(
-      "DELETE", "/identity/providers/" + registered.id, undefined, other,
+      "DELETE", "/identity/providers/" + registered.id, undefined, otherOwner,
     );
     assert.equal(crossTenantRevoke.statusCode, 404, crossTenantRevoke.body);
     assert.equal((await req("DELETE", "/identity/providers/" + otherRegistration.id, undefined, viewer)).statusCode, 403);
@@ -1802,7 +1811,7 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
     assert.equal((await req("DELETE", "/identity/providers/" + registered.id)).statusCode, 404);
     assert.ok((await ok("GET", "/identity/providers"))
       .some((p: any) => p.id === registered.id && p.revoked_at));
-    assert.ok((await ok("GET", "/identity/providers", undefined, other))
+    assert.ok((await ok("GET", "/identity/providers", undefined, otherOwner))
       .some((p: any) => p.id === otherRegistration.id && !p.revoked_at));
     const methods = await req("GET", "/auth/methods", undefined, null);
     assert.equal(methods.statusCode, 200);
