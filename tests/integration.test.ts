@@ -2712,10 +2712,27 @@ test("rate limit: verified principals are independent, headers and forged tokens
   const remaining = (response: any) =>
     Number(response.headers["x-ratelimit-remaining"]);
   try {
+    // Earlier revocation/offboarding tests intentionally invalidate some
+    // shared fixtures. Use fresh active credentials here.
+    const memberId = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
+        [memberId, memberId + "@example.test", "Rate limit member"]);
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+        [owner.tenant, memberId],
+      );
+    });
+    const memberToken = await db.tenant(owner.tenant, (q) =>
+      createSession(q, owner.tenant, memberId));
+    const otherToken = await db.tenant(other.tenant, (q) =>
+      createSession(q, other.tenant, owner.id));
     const ownerFirst = await hit("/api/v1/me", owner.cookie);
     const ownerSecond = await hit("/api/v1/me", owner.cookie);
-    const memberFirst = await hit("/api/v1/me", member.cookie);
-    const otherTenant = await hit("/api/v1/me", other.cookie);
+    const memberFirst = await hit("/api/v1/me",
+      "workspace_session=" + memberToken);
+    const otherTenant = await hit("/api/v1/me",
+      "workspace_session=" + otherToken);
     for (const result of [ownerFirst, ownerSecond, memberFirst, otherTenant])
       assert.equal(result.statusCode, 200, result.body);
     assert.equal(remaining(ownerSecond), remaining(ownerFirst) - 1);
