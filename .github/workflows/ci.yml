@@ -231,6 +231,22 @@ jobs:
             }
             console.log("Verified encrypted attachment envelopes:", files.length);
           '
+      - name: Replenish browser rate-limit window without changing policy
+        run: |
+          # Chromium/Firefox and preceding deployed workflows share Caddy's
+          # inbound IP in CI. Wait for real response-header budget recovery.
+          # The API's production rate limiting remains enabled and unchanged.
+          for attempt in $(seq 1 24); do
+            headers="$(curl -sS -D - -o /dev/null http://localhost:8080/api/v1/auth/methods)"
+            remaining="$(printf '%s\n' "$headers" | awk 'tolower($1)=="x-ratelimit-remaining:" { gsub("\r","",$2); print $2; exit }')"
+            if [[ "$remaining" =~ ^[0-9]+$ ]] && [ "$remaining" -ge 240 ]; then
+              echo "Rate-limit budget available for isolated browser acceptance: $remaining"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Shared test rate-limit window did not recover" >&2
+          exit 1
       - name: Verify keyboard accessibility in Chromium and Firefox
         run: |
           E2E_BASE_URL=http://localhost:8080           E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"           npx playwright test --config=playwright.compat.config.ts
