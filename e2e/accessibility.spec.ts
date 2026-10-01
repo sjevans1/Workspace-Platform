@@ -5,6 +5,7 @@ const email = "browser@example.test",
 
 async function login(page: Page) {
   await page.goto("/");
+  await expect(page.locator("h1")).toBeVisible();
   if (
     await page
       .getByRole("heading", { name: "Make yourself at home." })
@@ -24,9 +25,30 @@ async function login(page: Page) {
   } else if (
     await page.getByRole("button", { name: "Sign in", exact: true }).isVisible()
   ) {
-    await page.getByLabel("Email", { exact: true }).fill(email);
-    await page.getByLabel("Password", { exact: true }).fill(password);
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    // The preceding deployed-browser workflows and both browser projects
+    // share the same disposable server and IP rate limit. Preserve the
+    // production limit and honor Retry-After rather than weakening it.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await page.getByLabel("Email", { exact: true }).fill(email);
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      const response = page.waitForResponse(
+        (r) => r.url().includes("/api/v1/auth/login") &&
+          r.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      const loginResponse = await response;
+      if (loginResponse.status() !== 429) {
+        expect(loginResponse.ok(), "Login should succeed or return a bounded rate limit").toBeTruthy();
+        break;
+      }
+      const retry = Number(loginResponse.headers()["retry-after"] || 0);
+      const body = await loginResponse.json().catch(() => ({}));
+      const fromBody = Number(String(body.error || "").match(/retry in (\d+) seconds?/i)?.[1] || 0);
+      const seconds = retry || fromBody || 10;
+      expect(seconds, "Only bounded login backoff is supported in acceptance").toBeLessThanOrEqual(30);
+      await page.waitForTimeout((seconds + 1) * 1000);
+      if (attempt === 3) throw Error("Exceeded bounded rate-limit retries");
+    }
   }
   await expect(
     page.getByRole("heading", { name: "Welcome back, Shane." }),
@@ -139,4 +161,44 @@ test("keyboard modal focus is trapped, restored, and semantically labelled", asy
   await expect(search).toBeHidden();
 
   expect(["chromium", "firefox"]).toContain(browserName);
+});
+
+
+test("command-K search supports arrow navigation, Enter opening, and Escape focus restoration", async ({ page }) => {
+  await login(page);
+  // Do not rely on the optional starter/demo content being installed.
+  const target = "Keyboard search target " + Date.now();
+  await page.getByRole("button", { name: "New page", exact: true }).click();
+  const create = page.getByRole("dialog", { name: "Create something new" });
+  await create.getByLabel("Name", { exact: true }).fill(target);
+  await create.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(target);
+  const trigger = page.getByRole("button", { name: "Search anything" });
+  await trigger.focus();
+  await page.keyboard.press("ControlOrMeta+k");
+  const dialog = page.getByRole("dialog", { name: "Search your workspace" });
+  await expect(dialog).toBeVisible();
+
+  const input = dialog.getByRole("combobox", { name: "Search workspace" });
+  await expect(input).toBeFocused();
+  await expect(input).toHaveAttribute("aria-expanded", "false");
+  await input.fill(target);
+  const option = dialog.getByRole("option", { name: target });
+  await expect(option).toBeVisible();
+  await expect(input).toHaveAttribute("aria-expanded", "true");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+
+  await input.press("ArrowDown");
+  await input.press("ArrowUp");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await input.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(target);
+
+  await page.keyboard.press("ControlOrMeta+k");
+  const reopen = page.getByRole("dialog", { name: "Search your workspace" });
+  await expect(reopen).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(reopen).toBeHidden();
+  expect(await semanticProblems(page)).toEqual([]);
 });
