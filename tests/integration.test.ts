@@ -381,6 +381,51 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
   });
   assert.equal(deactivated.statusCode, 200, deactivated.body);
   assert.equal(deactivated.json().active, false);
+
+  const primaryState = await db.tenant(owner.tenant, async (q) => ({
+    membership: await one(
+      q,
+      "SELECT active FROM memberships WHERE user_id=$1",
+      [managed.user_id],
+    ),
+    sessions: Number(
+      (
+        await one(
+          q,
+          "SELECT count(*) n FROM sessions WHERE tenant_id=$1 AND user_id=$2",
+          [owner.tenant, managed.user_id],
+        )
+      ).n,
+    ),
+  }));
+  assert.equal(primaryState.membership.active, false);
+  assert.equal(primaryState.sessions, 0);
+  assert.equal(
+    await db.system((q) =>
+      one(q, "SELECT * FROM session_actor($1)", [hash(tenantToken)]),
+    ),
+    undefined,
+  );
+
+  const otherState = await db.tenant(other.tenant, async (q) => ({
+    membership: await one(
+      q,
+      "SELECT active FROM memberships WHERE user_id=$1",
+      [managed.user_id],
+    ),
+    sessions: Number(
+      (
+        await one(
+          q,
+          "SELECT count(*) n FROM sessions WHERE tenant_id=$1 AND user_id=$2",
+          [other.tenant, managed.user_id],
+        )
+      ).n,
+    ),
+  }));
+  assert.equal(otherState.membership.active, true);
+  assert.equal(otherState.sessions, 1);
+
   assert.equal((await req("GET", "/me", undefined, tenantActor)).statusCode, 401);
   assert.equal((await req("GET", "/me", undefined, otherActor)).statusCode, 200);
 
