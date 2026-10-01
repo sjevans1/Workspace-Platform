@@ -1160,34 +1160,61 @@ test("canonical replacement, body search, versions and restore", async () => {
   assert.equal((await ok("GET", `/pages/${page.id}/content`)).epoch, 3);
 });
 test("page backlinks use live canonical links and never reveal restricted sources", async () => {
-  const target = await ok("POST", "/resources", {
+  // Preserve full production Fastify rate limits, with an independent
+  // disposable instance so this test never exhausts another test's budget.
+  const linksApp = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
+  const linkReq = async (
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string, data?: any, actor: any = owner,
+  ): Promise<{ statusCode: number; body: string; json: () => any }> =>
+    linksApp.inject({
+      method,
+      url: "/api/v1" + path,
+      headers: {
+        cookie: actor.cookie,
+        "x-csrf-token": actor.csrf,
+        ...(data === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(data === undefined ? {} : { payload: data }),
+    });
+  const linkOk = async (
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string, data?: any, actor: any = owner,
+  ) => {
+    const response = await linkReq(method, path, data, actor);
+    assert.ok(response.statusCode < 300,
+      `${method} ${path}: ${response.statusCode} ${response.body}`);
+    return response.json();
+  };
+  try {
+  const target = await linkOk("POST", "/resources", {
     kind: "page", parent_id: space.id, title: "Link target",
   });
-  const source = await ok("POST", "/resources", {
+  const source = await linkOk("POST", "/resources", {
     kind: "page", parent_id: space.id, title: "Accessible source",
   });
-  const privateSource = await ok("POST", "/resources", {
+  const privateSource = await linkOk("POST", "/resources", {
     kind: "page", parent_id: space.id, title: "Secret referencing source",
   });
-  const textOnly = await ok("POST", "/resources", {
+  const textOnly = await linkOk("POST", "/resources", {
     kind: "page", parent_id: space.id, title: "Plain mention source",
   });
-  const external = await ok("POST", "/resources", {
+  const external = await linkOk("POST", "/resources", {
     kind: "page", parent_id: space.id, title: "External URL source",
   });
   const link = { type: "link", href: "/?page=" + target.id,
     content: [{ type: "text", text: "Linked page", styles: {} }] };
   for (const src of [source, privateSource]) {
-    await ok("PATCH", `/pages/${src.id}/content`, {
+    await linkOk("PATCH", `/pages/${src.id}/content`, {
       blocks: [{ type: "paragraph", content: [link] }],
       expected_revision: 1,
     });
   }
-  await ok("PATCH", `/pages/${textOnly.id}/content`, {
+  await linkOk("PATCH", `/pages/${textOnly.id}/content`, {
     blocks: [{ type: "paragraph", content: "Plain mention /?page=" + target.id }],
     expected_revision: 1,
   });
-  await ok("PATCH", `/pages/${external.id}/content`, {
+  await linkOk("PATCH", `/pages/${external.id}/content`, {
     blocks: [{ type: "paragraph", content: [{
       type: "link",
       href: "https://external.example.test/?page=" + target.id,
@@ -1195,34 +1222,39 @@ test("page backlinks use live canonical links and never reveal restricted source
     }] }],
     expected_revision: 1,
   });
-  const ownerBacklinks = await ok("GET", `/resources/${target.id}/backlinks`);
+  const ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
   assert.deepEqual(
     ownerBacklinks.map((x: any) => x.id).sort(),
     [source.id, privateSource.id].sort(),
   );
-  await permissionPatch(`/resources/${privateSource.id}/permissions`, {
-    inherit: false, grants: [],
+  const policy = await linkOk("GET",
+    `/resources/${privateSource.id}/permissions`);
+  await linkOk("PATCH", `/resources/${privateSource.id}/permissions`, {
+    inherit: false, grants: [], expected_revision: policy.revision,
   });
-  const memberBacklinks = await ok("GET", `/resources/${target.id}/backlinks`,
+  const memberBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`,
     undefined, member);
   assert.deepEqual(memberBacklinks.map((x: any) => x.id), [source.id]);
   assert.doesNotMatch(JSON.stringify(memberBacklinks), /Secret referencing source/);
-  assert.equal((await req("GET",
+  assert.equal((await linkReq("GET",
     `/resources/${target.id}/backlinks`, undefined, guest)).statusCode, 404);
-  assert.equal((await req("GET",
+  assert.equal((await linkReq("GET",
     `/resources/${target.id}/backlinks`, undefined, other)).statusCode, 404);
-  assert.equal((await req("GET",
+  assert.equal((await linkReq("GET",
     `/resources/${randomUUID()}/backlinks`)).statusCode, 404);
-  assert.equal((await req("GET",
+  assert.equal((await linkReq("GET",
     `/resources/${space.id}/backlinks`)).statusCode, 404);
   // Removing a link immediately removes the backlink on the next read.
-  await ok("PATCH", `/pages/${source.id}/content`, {
+  await linkOk("PATCH", `/pages/${source.id}/content`, {
     blocks: [{ type: "paragraph", content: "Link removed" }],
     expected_revision: 2,
   });
-  const after = await ok("GET", `/resources/${target.id}/backlinks`,
+  const after = await linkOk("GET", `/resources/${target.id}/backlinks`,
     undefined, member);
   assert.deepEqual(after, []);
+  } finally {
+    await linksApp.close();
+  }
 });
 test("typed records, optimistic concurrency, saved filters and full bodies", async () => {
   database = await ok("POST", "/resources", {
