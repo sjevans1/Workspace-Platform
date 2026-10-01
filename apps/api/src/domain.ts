@@ -22,6 +22,7 @@ import {
   validateBlocks,
 } from "../../../packages/editor/server.ts";
 import { emit } from "../../../packages/events/index.ts";
+import { indexedRecordText, redactRelationValues, validateRelationWrites } from "./relations.ts";
 export const treeLock = (q: Query, t: string) =>
   q.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`tree:${t}`]);
 export async function createResource(
@@ -198,6 +199,7 @@ export async function createRecord(
   assert(d, 404, "Database not found");
   const v = validateValues(d.properties, values);
   await validatePeople(q, d.properties, v);
+  await validateRelationWrites(q, a, d.properties, v);
   const node = await createResource(q, a, {
     kind: "record",
     parent_id: id,
@@ -209,7 +211,7 @@ export async function createRecord(
   );
   await q.query("UPDATE resources SET search_text=$2 WHERE id=$1", [
     node.id,
-    Object.values(v).join(" "),
+    indexedRecordText(d.properties, v),
   ]);
   return { ...node, values: v, revision: 1 };
 }
@@ -266,16 +268,20 @@ export async function records(
     return `${key} ${s.direction === "desc" ? "DESC" : "ASC"} NULLS LAST`;
   });
   p.push(limit, offset);
-  return visible(
+  const allowedRows = await visible(
     q,
     a,
     (
       await q.query(
-        `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT $${p.length - 1} OFFSET $${p.length}`,
+        `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT ${p.length - 1} OFFSET ${p.length}`,
         p,
       )
     ).rows,
   );
+  return Promise.all(allowedRows.map(async (row) => ({
+    ...row,
+    values: await redactRelationValues(q, a, d.properties, row.values),
+  })));
 }
 export async function replaceDocument(
   q: Query,
