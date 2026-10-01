@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { createStorage, type Storage } from "../packages/storage/index.ts";
+import {
+  createStorage,
+  createUnencryptedStorage,
+  isEncryptedStoredObject,
+  type Storage,
+} from "../packages/storage/index.ts";
 import { Database } from "../packages/database/index.ts";
 import { migrate } from "../packages/database/migrate.ts";
 import { blocksToState } from "../packages/editor/server.ts";
@@ -43,6 +48,8 @@ function storageEnv(kind: "SOURCE" | "RECOVERY") {
         bool("S3_ACCEPT_FORCE_PATH_STYLE", true),
       ),
     ),
+    STORAGE_ENCRYPTION_MODE: "required",
+    ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
   } satisfies NodeJS.ProcessEnv;
 }
 
@@ -81,6 +88,8 @@ assert(
   "TEST_DATABASE_URL is required and must point to a disposable PostgreSQL server where temporary databases may be created.",
 );
 
+process.env.ENCRYPTION_KEY ||= randomBytes(32).toString("hex");
+
 const sourceEnv = storageEnv("SOURCE"),
   recoveryEnv = storageEnv("RECOVERY");
 
@@ -99,10 +108,10 @@ for (const endpoint of [sourceEnv.S3_ENDPOINT, recoveryEnv.S3_ENDPOINT]) {
   }
 }
 
-process.env.ENCRYPTION_KEY ||= randomBytes(32).toString("hex");
-
 const source = createStorage(sourceEnv),
   recovery = createStorage(recoveryEnv),
+  rawSource = createUnencryptedStorage(sourceEnv),
+  rawRecovery = createUnencryptedStorage(recoveryEnv),
   sourcePg = await testPostgres(),
   recoveryPg = await testPostgres(),
   sourceDb = new Database(sourcePg.url),
@@ -176,6 +185,15 @@ try {
     "Provider must enforce conditional immutable PUT with If-None-Match: *",
   );
   assert.deepEqual(await source.get(keys[0]), bytes[0]);
+  const rawSourceObject = await rawSource.get(keys[0]);
+  assert(
+    isEncryptedStoredObject(rawSourceObject),
+    "Provider must store the encrypted object envelope",
+  );
+  assert(
+    !rawSourceObject.includes(bytes[0]),
+    "Provider object must not contain attachment plaintext",
+  );
 
   for (const key of keys)
     await assert.rejects(
@@ -218,6 +236,10 @@ try {
 
   for (let i = 0; i < keys.length; i++) {
     assert.deepEqual(await recovery.get(keys[i]), bytes[i]);
+    assert(
+      isEncryptedStoredObject(await rawRecovery.get(keys[i])),
+      "Recovered provider object must remain encrypted at rest",
+    );
     assert.deepEqual(
       await source.get(keys[i]),
       bytes[i],
@@ -251,6 +273,8 @@ try {
   for (const key of createdSourceKeys) await safeDelete(source, key);
   source.close?.();
   recovery.close?.();
+  rawSource.close?.();
+  rawRecovery.close?.();
   await sourceDb.close();
   await recoveryDb.close();
   await sourcePg.close();
