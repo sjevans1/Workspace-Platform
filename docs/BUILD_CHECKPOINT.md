@@ -101,7 +101,7 @@ PR #16 fixes the handler without weakening RLS. Before each affected tenant's au
 
 PR #16 passed final-head GitHub Actions run 36797135204 and was squash-merged to `main` at `8965a7dfab6dce3c39d66332cd71aee2f8ad993a`. The backend passed 36/36 native PostgreSQL tests, TypeScript and production build. Docker startup/health and the deployed Chromium workflow also passed.
 
-The remaining acceptance action is one bounded real-Keycloak rerun after restoring `workspace_runtime NOBYPASSRLS`, with no database workaround. It only needs to prove: Keycloak admin session termination -> accepted back-channel POST -> audit event -> old Workspace SSO session 401, while the independent local break-glass session remains valid.
+The no-workaround regression retest has now passed on Workspace `9894b95686c6229a956b93c0a2263e4434aae184` with Keycloak 26.7.4. `workspace_runtime` was `rolsuper=false, rolbypassrls=false` before and after the test. Keycloak admin session termination returned HTTP 204 and emitted two fresh back-channel logout tokens for the two active member sessions; Workspace created two fresh `auth.oidc_backchannel_logout` audit events, recorded the logout JTIs, deleted all matching OIDC sessions, rejected the old Workspace session with HTTP 401, preserved the independent local break-glass owner session at HTTP 200, and allowed a fresh SSO login while the old session remained invalid. No HTTP 500, RLS violation, audit insertion error or service restart loop occurred. Real-Keycloak back-channel logout acceptance is therefore closed.
 
 ## Independent Keycloak host acceptance — passed
 
@@ -109,13 +109,13 @@ Hermes reported complete real-provider acceptance against Workspace `1702779fa5d
 
 The host exercise passed existing-owner SSO linking without duplicate accounts, repeat issuer/subject login, administrator-invited passwordless member provisioning, mismatched-invitation rejection, SSO-only mode with local password login disabled, disabled-Keycloak-user rejection for new authentication, and operational health/log review. All Workspace services remained healthy with no restart loops or OIDC errors.
 
-The earlier Keycloak exercise confirmed that disabling a user prevents new IdP login but does not itself terminate the existing IdP session or emit back-channel logout. A later focused host exercise proved Keycloak does emit a real back-channel token on explicit session termination, but exposed the audit/RLS defect described above and therefore required a disposable workaround. The defect is now fixed and CI-verified under the restricted runtime role; one no-workaround host rerun remains. Directory disable/offboarding without a logout event remains a separate SCIM/lifecycle concern.
+The earlier Keycloak exercise confirmed that disabling a user prevents new IdP login but does not itself terminate the existing IdP session or emit back-channel logout. The final no-workaround regression retest on `9894b95686c6229a956b93c0a2263e4434aae184` proved explicit Keycloak session termination propagates correctly while `workspace_runtime` remains `NOBYPASSRLS`; the RLS defect is closed. Directory disable/offboarding without a logout event remains a separate SCIM/lifecycle concern.
 
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next host-level acceptance phase is a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery and operational status have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; real-provider back-channel logout acceptance, directory/SCIM offboarding lifecycle, operational tenant-provisioning, external metrics/alerts and real trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+The next identity slice is directory/SCIM lifecycle and automated offboarding. The next host-level operations acceptance remains a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; directory/SCIM lifecycle, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
