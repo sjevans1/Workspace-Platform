@@ -7,8 +7,8 @@ import {
 } from "../packages/security/antivirus.ts";
 
 function completeRequest(request: Buffer) {
-  if (request.equals(Buffer.from("zPING\\0"))) return true;
-  const command = Buffer.from("zINSTREAM\\0");
+  if (request.equals(Buffer.from("zPING\0"))) return true;
+  const command = Buffer.from("zINSTREAM\0");
   if (
     request.length < command.length ||
     !request.subarray(0, command.length).equals(command)
@@ -38,7 +38,7 @@ async function fakeClamd(
       if (replied || !completeRequest(request)) return;
       replied = true;
       validate?.(request);
-      socket.end(Buffer.from(response + "\\0"));
+      socket.end(Buffer.from(response + "\0"));
     });
     socket.on("error", () => {});
   });
