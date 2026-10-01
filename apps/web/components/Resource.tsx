@@ -321,6 +321,7 @@ export default function Resource({
                     p={p}
                     value={record.values[p.id]}
                     members={members}
+                    databaseId={record.database_id}
                     disabled={!editable}
                     save={(value) =>
                       run(async () => {
