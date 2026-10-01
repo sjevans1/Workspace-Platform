@@ -2767,6 +2767,12 @@ test("W05 relation references: write validation, ACL redaction, export, and sche
     "export must not leak hidden record UUID");
   assert.ok(!JSON.stringify(safeExport).includes(clients.id),
     "export must not leak revoked target database UUID");
+  const inaccessibleTargets = await ok("GET",
+    `/databases/${projects.id}/relation-targets?search=W05%20Clients&limit=1`,
+    undefined, peer);
+  assert.deepEqual(inaccessibleTargets.items, []);
+  assert.equal(inaccessibleTargets.has_more, false,
+    "paging must not reveal hidden relation targets");
   const forbiddenPicker = await req("GET",
     `/databases/${projects.id}/relation-candidates?property=client_ref`,
     undefined, peer);
@@ -2786,4 +2792,7 @@ test("W05 relation references: write validation, ACL redaction, export, and sche
   });
   assert.equal(incompatible.statusCode, 400,
     "populated relations cannot silently convert to text");
+  const unchanged = await ok("GET", `/databases/${projects.id}`);
+  assert.equal(unchanged.properties.find((p: any) => p.id === "client_ref").type,
+    "relation", "invalid schema conversion must roll back");
 });
