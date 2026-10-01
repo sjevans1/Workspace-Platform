@@ -923,6 +923,8 @@ test("standalone appearance: dark/light/system persists and editor remains mount
   await editor.click();
   await page.keyboard.type("Theme switching preserves my document.");
   await expect(editor).toContainText("Theme switching preserves my document.");
+  await expect(page.getByRole("status").filter({ hasText: "Saved" }))
+    .toBeVisible();
 
   await page.getByRole("button", { name: "Switch to light mode" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
