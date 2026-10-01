@@ -471,6 +471,134 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
   assert.equal(adoptExisting.statusCode, 409);
   assert.equal(adoptExisting.json().scimType, "uniqueness");
 
+  const types = await scim("GET", "/ResourceTypes");
+  assert.equal(types.statusCode, 200, types.body);
+  assert.deepEqual(
+    types.json().Resources.map((item: any) => item.id).sort(),
+    ["Group", "User"],
+  );
+
+  const schemas = await scim("GET", "/Schemas");
+  assert.equal(schemas.statusCode, 200, schemas.body);
+  assert.ok(
+    schemas
+      .json()
+      .Resources.some(
+        (item: any) =>
+          item.id === "urn:ietf:params:scim:schemas:core:2.0:Group",
+      ),
+  );
+
+  const invalidGroupMember = await scim("POST", "/Groups", {
+    schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+    displayName: "Manual users are not directory members",
+    members: [{ value: member.id }],
+  });
+  assert.equal(invalidGroupMember.statusCode, 400, invalidGroupMember.body);
+  assert.equal(invalidGroupMember.json().scimType, "invalidValue");
+
+  const guestGroupResponse = await scim("POST", "/Groups", {
+    schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+    externalId: "directory-group-guests",
+    displayName: "Directory Guests",
+    members: [{ value: created.id }],
+  });
+  assert.equal(guestGroupResponse.statusCode, 201, guestGroupResponse.body);
+  const guestGroup = guestGroupResponse.json();
+  assert.equal(guestGroup.members.length, 1);
+  assert.equal(guestGroup.members[0].value, created.id);
+
+  const filteredGroup = await scim(
+    "GET",
+    '/Groups?filter=displayName%20eq%20%22Directory%20Guests%22',
+  );
+  assert.equal(filteredGroup.statusCode, 200, filteredGroup.body);
+  assert.equal(filteredGroup.json().totalResults, 1);
+  assert.equal(filteredGroup.json().Resources[0].id, guestGroup.id);
+
+  await ok("PATCH", `/scim/groups/${guestGroup.id}/role`, {
+    role: "guest",
+  });
+  let groupedMembership = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT role,active FROM memberships WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, managed.user_id],
+    ),
+  );
+  assert.equal(groupedMembership.role, "guest");
+  assert.equal(groupedMembership.active, true);
+
+  const memberGroupResponse = await scim("POST", "/Groups", {
+    schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+    externalId: "directory-group-members",
+    displayName: "Directory Members",
+    members: [{ value: created.id }],
+  });
+  assert.equal(memberGroupResponse.statusCode, 201, memberGroupResponse.body);
+  const memberGroup = memberGroupResponse.json();
+  await ok("PATCH", `/scim/groups/${memberGroup.id}/role`, {
+    role: "member",
+  });
+  groupedMembership = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT role,active FROM memberships WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, managed.user_id],
+    ),
+  );
+  assert.equal(groupedMembership.role, "member");
+  assert.equal(groupedMembership.active, true);
+
+  const removeMemberPrecedence = await scim(
+    "PATCH",
+    `/Groups/${memberGroup.id}`,
+    {
+      schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+      Operations: [
+        {
+          op: "remove",
+          path: `members[value eq "${created.id}"]`,
+        },
+      ],
+    },
+  );
+  assert.equal(
+    removeMemberPrecedence.statusCode,
+    200,
+    removeMemberPrecedence.body,
+  );
+  groupedMembership = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT role,active FROM memberships WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, managed.user_id],
+    ),
+  );
+  assert.equal(groupedMembership.role, "guest");
+  assert.equal(groupedMembership.active, true);
+
+  await ok("PATCH", `/scim/groups/${guestGroup.id}/role`, { role: null });
+  groupedMembership = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT role,active FROM memberships WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, managed.user_id],
+    ),
+  );
+  assert.equal(groupedMembership.role, "member");
+  assert.equal(groupedMembership.active, true);
+
+  const groupList = await ok("GET", "/scim/groups");
+  const guestGroupAdmin = groupList.find((item: any) => item.id === guestGroup.id);
+  assert.equal(guestGroupAdmin.member_count, 1);
+  assert.equal(guestGroupAdmin.mapped_role, null);
+
+  const deleteGuestGroup = await scim("DELETE", `/Groups/${guestGroup.id}`);
+  assert.equal(deleteGuestGroup.statusCode, 204, deleteGuestGroup.body);
+  const deleteMemberGroup = await scim("DELETE", `/Groups/${memberGroup.id}`);
+  assert.equal(deleteMemberGroup.statusCode, 204, deleteMemberGroup.body);
+
   const deleted = await scim("DELETE", `/Users/${created.id}`);
   assert.equal(deleted.statusCode, 204, deleted.body);
   assert.equal((await req("GET", "/me", undefined, freshActor)).statusCode, 401);
