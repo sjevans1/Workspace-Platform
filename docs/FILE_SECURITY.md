@@ -22,13 +22,13 @@ Workspace deliberately does not return the malware signature name to the end use
 
 ## Production scanner service
 
-The default Docker deployment uses the official ClamAV image:
+The default Docker deployment builds a small hardened scanner image from the official ClamAV base:
 
 ```
-clamav/clamav:1.5.4-debian13-slim
+FROM clamav/clamav:1.5.4-debian13-slim
 ```
 
-The scanner binary/runtime is pinned to the explicit `1.5.4-debian13-slim` image tag. Signature data is intentionally mutable operational data and is refreshed into the persistent `clamav_db` volume.
+`Dockerfile.clamav` applies current Debian security upgrades during the release build before the image is accepted. ClamAV itself remains on the explicit `1.5.4-debian13-slim` upstream line, while the derived `openjm-workspace-clamav:local` image is the artifact actually SBOMed, vulnerability-scanned and deployed. Signature data is intentionally mutable operational data and is refreshed into the persistent `clamav_db` volume.
 
 The scanner:
 
@@ -78,10 +78,10 @@ Automated acceptance covers four separate layers:
 
 - protocol-level tests for PING, INSTREAM framing, CLEAN, infected, malformed-response and unavailable-daemon behavior;
 - API integration tests proving infected and scanner-unavailable uploads create no file row/object, while infected attempts commit a `file.malware_blocked` audit event;
-- deployment CI against the real pinned ClamAV container using a harmless EICAR antivirus test signature and a clean control payload;
+- deployment CI against the hardened ClamAV release container using a harmless EICAR antivirus test signature and a clean control payload;
 - the existing deployed Chromium workflow uploads and downloads a normal private attachment while antivirus is required, proving the clean upload path through the live scanner.
 
-CI also generates a CycloneDX SBOM for the pinned ClamAV runtime image and applies the same fixable HIGH/CRITICAL Trivy policy used for the Workspace application image.
+CI also generates a CycloneDX SBOM for the hardened ClamAV runtime image and applies the same fixable HIGH/CRITICAL Trivy policy used for the Workspace application image.
 
 ## Signature updates and disconnected deployments
 
