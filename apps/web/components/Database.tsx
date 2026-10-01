@@ -91,7 +91,18 @@ export function PropertyInput({
       defaultValue={value ?? ""}
       disabled={disabled}
       placeholder="—"
+      onChange={
+        p.type === "date"
+          ? (e) => {
+              const next = e.currentTarget.value || null;
+              if (next !== (value ?? null)) save(next);
+            }
+          : undefined
+      }
       onBlur={(e) => {
+        // A native date selection may retain focus. Persist changes as soon
+        // as the browser commits the date instead of relying on blur alone.
+        if (p.type === "date") return;
         const v = e.target.value
           ? p.type === "number"
             ? Number(e.target.value)
@@ -170,7 +181,11 @@ export default function Database({
     const group = data.properties.find((p: any) =>
       ["select", "status"].includes(p.type),
     );
-    const dateField = data.properties.find((p: any) => p.type === "date");
+    // For task databases, Due date is the useful initial calendar field.
+    // Other schemas keep the first valid Date property as the fallback.
+    const dateField =
+      data.properties.find((p: any) => p.type === "date" && p.id === "due") ||
+      data.properties.find((p: any) => p.type === "date");
     if (type === "board" && !group)
       return notify("Add a Select or Status property before creating a board");
     if (type === "calendar" && !dateField)
