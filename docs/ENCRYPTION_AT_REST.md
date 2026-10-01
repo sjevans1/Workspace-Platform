@@ -77,7 +77,7 @@ The maintenance backup command writes an encrypted envelope instead of plaintext
 
 Restore decrypts the envelope before applying the existing checksum/schema/recovery validation.
 
-Legacy plaintext `openjm-backup-v1` archives remain readable for recovery compatibility, but new CLI backups are encrypted.
+Legacy plaintext `openjm-backup-v1` archives are refused by default. A controlled one-time recovery may set `ALLOW_LEGACY_PLAINTEXT_BACKUP=true` for the restore command only. New CLI backups are always encrypted.
 
 Protect backup files with normal filesystem permissions even though the payload is encrypted.
 
