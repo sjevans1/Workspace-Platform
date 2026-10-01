@@ -26,6 +26,7 @@ export default function Workspace() {
     [setup, setSetup] = useState(false),
     [loaded, setLoaded] = useState(false),
     [bootstrapError, setBootstrapError] = useState<{ message: string; retryAfterSeconds: number | null } | null>(null),
+    [autoRetryUsed, setAutoRetryUsed] = useState(false),
     [brand, setBrand] = useState<any>({ productName: "Workspace" }),
     [authMethods, setAuthMethods] = useState<any>({
       local: true,
@@ -46,7 +47,7 @@ export default function Workspace() {
       error instanceof ApiError && error.retryAfterSeconds !== null &&
       Number.isFinite(error.retryAfterSeconds) &&
       error.retryAfterSeconds >= 0
-        ? Math.min(300, error.retryAfterSeconds)
+        ? error.retryAfterSeconds
         : null;
     setBootstrapError({
       message: limited
@@ -63,6 +64,7 @@ export default function Workspace() {
         nodes.some((n: any) => n.id === v) ? v : nodes[0]?.id || "",
       );
       setBootstrapError(null);
+      setAutoRetryUsed(false);
     } catch (error) {
       // A temporary 429/5xx/network failure is not evidence of logout.
       // Preserve identity, the session token, and the previous tree.
@@ -104,6 +106,18 @@ export default function Workspace() {
     await loadResources();
     setLoaded(true);
   }
+  // Exactly one bounded automatic retry per failure episode. Honor the
+  // server's Retry-After hint, and avoid background polling storms.
+  useEffect(() => {
+    if (!bootstrapError || autoRetryUsed) return;
+    const seconds = Math.max(3, bootstrapError.retryAfterSeconds ?? 5);
+    if (seconds > 120) return; // Wait for an explicit user retry.
+    const timer = window.setTimeout(() => {
+      setAutoRetryUsed(true);
+      void init();
+    }, seconds * 1000);
+    return () => window.clearTimeout(timer);
+  }, [bootstrapError, autoRetryUsed]);
   useEffect(() => {
     init();
     const p = new URLSearchParams(location.search).get("page");
