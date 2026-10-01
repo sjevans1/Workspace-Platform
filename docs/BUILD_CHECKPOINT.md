@@ -161,13 +161,13 @@ Production tenant onboarding is being moved away from ad-hoc database work and u
 
 Signed-in owner/admin self-service organisation creation is now deployment-controlled and defaults off through `ALLOW_SELF_SERVICE_ORGANISATIONS=false`. The API rejects creation with HTTP 403 and the UI hides the control unless the deployment explicitly enables it. Regression coverage includes the default-off API boundary plus atomic provisioning, duplicate rejection, conservative user reuse and passwordless ownership. PR #25 passed final-head GitHub Actions run 36811758844 and was squash-merged to `main` at `4a6aa6fc2623561029a21e910d9d2895dc224c52`. The backend passed 39/39 native PostgreSQL tests, including the operator provisioning lifecycle regression, plus TypeScript and production build. The deployment job passed Docker startup, the deployed Chromium workflow and trusted HTTPS/secure-cookie/WSS acceptance.
 
-## Active hardening slice: external monitoring and alerts
+## Verified hardening slice: external monitoring and alerts
 
 Workspace now has an authenticated Prometheus-compatible `/metrics` endpoint backed by the existing API readiness, worker-health and collaboration-writer signals rather than a parallel health system. The endpoint returns HTTP 404 when no metrics credential is configured and HTTP 401 for a missing/incorrect bearer token. Docker deployments generate a strong `METRICS_BEARER_TOKEN`; the API reaches worker/collaboration health only over the private Compose network.
 
 Telemetry is intentionally low-cardinality and content-free: dependency/service health, bounded HTTP method + status-class counters, worker failure/staleness indicators, and collaboration connection/document counts. Tenant IDs, user IDs, resource/document IDs, route paths and customer content are not metrics labels. Reference Prometheus scrape configuration and alert rules cover target outage, dependency outage, internal service health, worker failures/staleness and sustained 5xx rate.
 
-Regression coverage exercises metrics rendering and live bearer authentication. CI deployment acceptance now scrapes through Caddy, confirms healthy dependency/service gauges and rejects identifier leakage. This slice remains **in progress** until final-head native PostgreSQL, build and deployed browser/TLS gates pass.
+Regression coverage exercises metrics rendering and live bearer authentication. CI deployment acceptance now scrapes through Caddy, confirms healthy dependency/service gauges and rejects identifier leakage. PR #26 passed final-head GitHub Actions run 36812647394 and was squash-merged to `main` at `121a37703bf265b94949b310158a97419a46e814`. The backend passed 41/41 native PostgreSQL tests, including metrics authentication and low-cardinality output regressions, plus TypeScript/build and the S3 harness. The deployment job passed authenticated `/metrics` scraping through Caddy, the normal Chromium workflow and trusted HTTPS/secure-cookie/WSS acceptance.
 
 ## First-pass completion and future work
 
