@@ -1,5 +1,10 @@
 import pg from "pg";
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+} from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +49,90 @@ export type Archive = {
   tables: Record<string, any[]>;
   objects: Record<string, { sha256: string; mime: string; data: string }>;
 };
+export type EncryptedArchive = {
+  format: "openjm-backup-envelope-v1";
+  cipher: "aes-256-gcm";
+  iv: string;
+  tag: string;
+  ciphertext: string;
+};
+const backupAad = Buffer.from("openjm-workspace-backup-envelope-v1", "utf8");
+function backupKey(env: NodeJS.ProcessEnv = process.env) {
+  const value = env.BACKUP_ENCRYPTION_KEY || "";
+  if (!/^[a-f0-9]{64}$/i.test(value))
+    throw Error("BACKUP_ENCRYPTION_KEY must be 64 hexadecimal characters");
+  return Buffer.from(value, "hex");
+}
+export function sealArchive(
+  archive: Archive,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const iv = randomBytes(12),
+    cipher = createCipheriv("aes-256-gcm", backupKey(env), iv);
+  cipher.setAAD(backupAad);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(archive), "utf8"),
+    cipher.final(),
+  ]);
+  const envelope: EncryptedArchive = {
+    format: "openjm-backup-envelope-v1",
+    cipher: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    ciphertext: ciphertext.toString("base64url"),
+  };
+  return JSON.stringify(envelope);
+}
+export function openArchive(
+  serialized: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Archive {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw Error("Backup file is not valid JSON");
+  }
+  if (parsed?.format === "openjm-backup-v1") {
+    if (env.ALLOW_LEGACY_PLAINTEXT_BACKUP !== "true")
+      throw Error(
+        "Legacy plaintext backup refused; set ALLOW_LEGACY_PLAINTEXT_BACKUP=true only for a controlled one-time restore",
+      );
+    return parsed as Archive;
+  }
+  if (
+    parsed?.format !== "openjm-backup-envelope-v1" ||
+    parsed?.cipher !== "aes-256-gcm" ||
+    typeof parsed.iv !== "string" ||
+    typeof parsed.tag !== "string" ||
+    typeof parsed.ciphertext !== "string"
+  )
+    throw Error("Backup envelope format is invalid");
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      backupKey(env),
+      Buffer.from(parsed.iv, "base64url"),
+    );
+    decipher.setAAD(backupAad);
+    decipher.setAuthTag(Buffer.from(parsed.tag, "base64url"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(parsed.ciphertext, "base64url")),
+      decipher.final(),
+    ]).toString("utf8");
+    const archive = JSON.parse(plaintext);
+    if (archive?.format !== "openjm-backup-v1")
+      throw Error("inner archive format");
+    return archive as Archive;
+  } catch (error: any) {
+    if (
+      error?.message ===
+      "BACKUP_ENCRYPTION_KEY must be 64 hexadecimal characters"
+    )
+      throw error;
+    throw Error("Backup decryption failed: wrong key or corrupt archive");
+  }
+}
 export async function backup(url: string, storage: Storage): Promise<Archive> {
   const c = new pg.Client({ connectionString: url });
   await c.connect();
@@ -156,20 +245,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     );
   const [mode, path] = process.argv.slice(2);
   if (!path || !["backup", "restore"].includes(mode))
-    throw Error("Usage: backup.ts backup|restore <archive.json>");
+    throw Error("Usage: backup.ts backup|restore <archive.owb>");
   const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
   if (!url) throw Error("Owner database URL required");
   const storage = createStorage();
   try {
     if (mode === "backup") {
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, JSON.stringify(await backup(url, storage)), {
+      await writeFile(path, sealArchive(await backup(url, storage)), {
         mode: 0o600,
         flag: "wx",
       });
       console.log(`Backup written: ${path}`);
     } else {
-      await restore(url, JSON.parse(await readFile(path, "utf8")), storage);
+      await restore(url, openArchive(await readFile(path, "utf8")), storage);
       console.log("Restore completed");
     }
   } finally {
