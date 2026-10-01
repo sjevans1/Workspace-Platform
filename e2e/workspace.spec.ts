@@ -73,6 +73,23 @@ async function login(page: Page) {
     page.getByRole("heading", { name: "Welcome back, Shane." }),
   ).toBeVisible();
 }
+test("Caddy strips spoofed forwarding headers before API rate limiting", async ({ request }) => {
+  const first = await request.get("/api/v1/auth/methods", {
+    headers: { "X-Forwarded-For": "203.0.113.17",
+      "X-Real-IP": "203.0.113.17" },
+  });
+  const second = await request.get("/api/v1/auth/methods", {
+    headers: { "X-Forwarded-For": "198.51.100.99",
+      "X-Real-IP": "198.51.100.99" },
+  });
+  expect(first.ok()).toBeTruthy();
+  expect(second.ok()).toBeTruthy();
+  const before = Number(first.headers()["x-ratelimit-remaining"]);
+  const after = Number(second.headers()["x-ratelimit-remaining"]);
+  expect(Number.isFinite(before) && Number.isFinite(after)).toBeTruthy();
+  expect(after).toBe(before - 1);
+});
+
 test("browser workflow: setup, live editing in two sessions, table/board, discussion, history, export and mobile", async ({
   page,
   browser,
