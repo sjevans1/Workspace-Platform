@@ -15,6 +15,7 @@ export default function Settings({
     [branding, setBranding] = useState(me.branding),
     [integrations, setIntegrations] = useState<any[]>([]),
     [scimConnectors, setScimConnectors] = useState<any[]>([]),
+    [scimGroups, setScimGroups] = useState<any[]>([]),
     [hooks, setHooks] = useState<any>({ subscriptions: [], deliveries: [] }),
     [audit, setAudit] = useState<any[]>([]),
     [modal, setModal] = useState(""),
@@ -28,6 +29,7 @@ export default function Settings({
     setMembers(await api("/members"));
     setIntegrations(await api("/integrations"));
     setScimConnectors(await api("/scim/connectors"));
+    setScimGroups(await api("/scim/groups"));
     setHooks(await api("/webhooks"));
     setAudit(await api("/audit"));
   }
@@ -346,6 +348,47 @@ export default function Settings({
                   Revoke
                 </button>
               )}
+            </div>
+          ))}
+          <h3>Directory group role mapping</h3>
+          <p className="muted">
+            Groups arrive from the directory through SCIM. Map only the groups
+            that should influence Workspace roles. Directory groups can map to
+            guest or member, never admin or owner.
+          </p>
+          {scimGroups.length === 0 && (
+            <p className="muted">
+              No SCIM groups have been synchronized yet.
+            </p>
+          )}
+          {scimGroups.map((group: any) => (
+            <div className="integration-row" key={group.id}>
+              <div>
+                <strong>{group.display_name}</strong>
+                <small>
+                  {group.member_count} member
+                  {group.member_count === 1 ? "" : "s"}
+                  {group.external_id ? ` · ${group.external_id}` : ""}
+                </small>
+              </div>
+              <Field label={`Role mapping for ${group.display_name}`}>
+                <select
+                  aria-label={`Role mapping for ${group.display_name}`}
+                  value={group.mapped_role || ""}
+                  onChange={(event) =>
+                    run(async () => {
+                      await api(`/scim/groups/${group.id}/role`, "PATCH", {
+                        role: event.target.value || null,
+                      });
+                      await load();
+                    })
+                  }
+                >
+                  <option value="">No role mapping</option>
+                  <option value="guest">guest</option>
+                  <option value="member">member</option>
+                </select>
+              </Field>
             </div>
           ))}
         </section>
