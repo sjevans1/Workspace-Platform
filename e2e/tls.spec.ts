@@ -12,6 +12,11 @@ async function login(page: Page) {
   const response = await page.goto("/");
   expect(response?.ok()).toBeTruthy();
   expect(response?.headers()["strict-transport-security"]).toContain("max-age=31536000");
+  expect(response?.headers()["referrer-policy"]).toBe("no-referrer");
+  expect(response?.headers()["cross-origin-opener-policy"]).toBe("same-origin");
+  expect(response?.headers()["cross-origin-resource-policy"]).toBe("same-origin");
+  expect(response?.headers()["x-permitted-cross-domain-policies"]).toBe("none");
+  expect(response?.headers()["content-security-policy"]).toContain("form-action 'self'");
 
   if (
     await page

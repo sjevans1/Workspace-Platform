@@ -325,6 +325,9 @@ test("distinct users: invitation, live view-only access, revocation and recovery
     await expect(
       teammate.getByRole("heading", { name: "Join your team." }),
     ).toBeVisible();
+    await expect
+      .poll(() => new URL(teammate.url()).search)
+      .toBe("");
     await teammate
       .getByLabel("Password", { exact: true })
       .fill("teammate-password-123");

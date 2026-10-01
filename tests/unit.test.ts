@@ -19,6 +19,7 @@ import {
   project,
   validateBlocks,
 } from "../packages/editor/server.ts";
+import { inspectFile } from "../packages/storage/index.ts";
 import * as Y from "yjs";
 import {
   HttpMetrics,
@@ -148,4 +149,24 @@ test("Prometheus metrics remain low-cardinality and aggregate status classes", (
   assert.match(output, /workspace_http_requests_total\{method="GET",status_class="2xx"\} 2/);
   assert.match(output, /workspace_http_requests_total\{method="POST",status_class="5xx"\} 1/);
   assert.doesNotMatch(output, /tenant|user_id|resource_id|document_id/);
+});
+
+
+test("attachment inspection rejects active or mismatched content", () => {
+  assert.throws(
+    () => inspectFile("payload.html", "text/html", Buffer.from("<script>alert(1)</script>")),
+    /Unsupported file extension/,
+  );
+  assert.throws(
+    () => inspectFile("fake.png", "image/png", Buffer.from("not-a-png")),
+    /Invalid PNG/,
+  );
+  assert.throws(
+    () => inspectFile("notes.txt", "image/png", Buffer.from("plain text")),
+    /MIME type mismatch/,
+  );
+  assert.throws(
+    () => inspectFile("fake.pdf", "application/pdf", Buffer.from("not a pdf")),
+    /Invalid PDF/,
+  );
 });

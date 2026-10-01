@@ -853,10 +853,13 @@ function Login({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [invite, setInvite] = useState("");
-  useEffect(
-    () => setInvite(new URLSearchParams(location.search).get("invite") || ""),
-    [],
-  );
+  useEffect(() => {
+    const value = new URLSearchParams(location.search).get("invite") || "";
+    if (value) {
+      setInvite(value);
+      history.replaceState(null, "", "/");
+    }
+  }, []);
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const v = Object.fromEntries(new FormData(e.currentTarget));

@@ -1106,9 +1106,16 @@ test("private uploads validate type and authorize parent on every download", asy
   });
   assert.equal(r.statusCode, 200, r.body);
   file = r.json();
-  assert.equal(
-    (await req("GET", `/files/${file.id}/content`)).body,
-    "Private evidence",
+  const downloaded = await req("GET", `/files/${file.id}/content`);
+  assert.equal(downloaded.body, "Private evidence");
+  assert.equal(downloaded.headers["x-content-type-options"], "nosniff");
+  assert.match(
+    String(downloaded.headers["content-security-policy"]),
+    /default-src 'none'; sandbox/,
+  );
+  assert.match(
+    String(downloaded.headers["content-disposition"]),
+    /^attachment;/,
   );
   assert.equal(
     (await req("GET", `/files/${file.id}/content`, undefined, other))
@@ -1339,17 +1346,30 @@ test("service principals default to no access and read scopes cannot write", asy
     401,
   );
 });
-test("outbox dispatch signs webhooks and records retries", async () => {
-  let received: any;
+test("outbox dispatch signs webhooks and records retries without following redirects", async () => {
+  let received: any,
+    redirectTargetHit = false;
   const receiver = createServer((r, res) => {
-    let body = "";
-    r.on("data", (b) => (body += b));
-    r.on("end", () => {
-      received = { body, headers: r.headers };
-      res.end("ok");
+      let body = "";
+      r.on("data", (b) => (body += b));
+      r.on("end", () => {
+        received = { body, headers: r.headers };
+        res.end("ok");
+      });
+    }),
+    redirect = createServer((_r, res) => {
+      res.writeHead(302, { location: "http://127.0.0.1:49663/metadata" });
+      res.end();
+    }),
+    redirectTarget = createServer((_r, res) => {
+      redirectTargetHit = true;
+      res.end("unexpected");
     });
-  });
-  await new Promise<void>((r) => receiver.listen(49661, "127.0.0.1", r));
+  await Promise.all([
+    new Promise<void>((r) => receiver.listen(49661, "127.0.0.1", r)),
+    new Promise<void>((r) => redirect.listen(49662, "127.0.0.1", r)),
+    new Promise<void>((r) => redirectTarget.listen(49663, "127.0.0.1", r)),
+  ]);
   process.env.WEBHOOK_ALLOWED_ORIGINS =
     "http://127.0.0.1:49661,http://127.0.0.1:49662";
   try {
@@ -1377,13 +1397,15 @@ test("outbox dispatch signs webhooks and records retries", async () => {
       received.headers["x-workspace-signature"],
       `sha256=${signature(h.secret, received.headers["x-workspace-timestamp"], received.body)}`,
     );
+    const deliveries = (await ok("GET", "/webhooks")).deliveries;
     assert(
-      (await ok("GET", "/webhooks")).deliveries.some(
-        (d: any) => d.status === "retry",
-      ),
+      deliveries.some((d: any) => d.status === "retry"),
     );
+    assert.equal(redirectTargetHit, false);
   } finally {
     receiver.close();
+    redirect.close();
+    redirectTarget.close();
   }
 });
 test("imports run asynchronously and recheck current permissions", async () => {
