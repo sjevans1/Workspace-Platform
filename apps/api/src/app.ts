@@ -147,6 +147,7 @@ export async function buildApp(
     oidcRedirectUri = new URL("/api/v1/auth/oidc/callback", appUrl).href,
     metricsStartedAt = Date.now(),
     httpMetrics = new HttpMetrics(),
+    antivirusMetrics = { clean: 0, infected: 0, error: 0 },
     requestStarted = new WeakMap<FastifyRequest, bigint>();
   assert(
     !metricsToken || metricsToken.length >= 32,
@@ -406,6 +407,7 @@ export async function buildApp(
           worker,
         },
         http: httpMetrics.snapshot(),
+        antivirus: antivirusMetrics,
       });
     },
   );
@@ -1756,10 +1758,12 @@ function dataRoutes(route: Route, storage: Storage) {
       try {
         scan = await antivirus.scan(bytes);
       } catch (error) {
+        antivirusMetrics.error += 1;
         if (error instanceof AntivirusUnavailableError)
           throw new HttpError(503, "Malware scanner unavailable");
         throw error;
       }
+      antivirusMetrics[scan.status] += 1;
       if (scan.status === "infected") {
         await emit(q, a, "file.malware_blocked", id(r));
         reply.code(422);
