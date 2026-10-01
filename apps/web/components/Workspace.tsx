@@ -637,14 +637,18 @@ function Dashboard({
 }
 function SearchDialog({ close }: { close: () => void }) {
   const [q, setQ] = useState(""),
-    [items, setItems] = useState<any[]>([]);
+    [items, setItems] = useState<any[]>([]),
+    [active, setActive] = useState(0);
   useEffect(() => {
     const c = new AbortController();
     const t = setTimeout(
       () =>
         run(async () => {
-          const v = await api(`/search?q=${encodeURIComponent(q)}`);
-          if (!c.signal.aborted) setItems(v);
+          const v = await api("/search?q=" + encodeURIComponent(q));
+          if (!c.signal.aborted) {
+            setItems(v);
+            setActive(0);
+          }
         }),
       200,
     );
@@ -653,39 +657,75 @@ function SearchDialog({ close }: { close: () => void }) {
       c.abort();
     };
   }, [q]);
+  const openResult = (item: any) => {
+    go(item.resource_id || item.id);
+    close();
+  };
   return (
     <Modal title="Search your workspace" close={close}>
       <div className="search-field">
-        <Search size={20} />
+        <Search size={20} aria-hidden="true" />
         <input
           autoFocus
+          data-initial-focus
+          role="combobox"
           aria-label="Search workspace"
+          aria-autocomplete="list"
+          aria-expanded={items.length > 0}
+          aria-controls="workspace-search-options"
+          aria-activedescendant={
+            items[active] ? "workspace-search-option-" + active : undefined
+          }
+          aria-describedby="workspace-search-help"
           placeholder="Find pages, projects, or files…"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setItems([]);
+            setActive(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown" && items.length) {
+              e.preventDefault();
+              setActive((v) => (v + 1) % items.length);
+            } else if (e.key === "ArrowUp" && items.length) {
+              e.preventDefault();
+              setActive((v) => (v - 1 + items.length) % items.length);
+            } else if (e.key === "Enter" && items[active]) {
+              e.preventDefault();
+              openResult(items[active]);
+            }
+          }}
         />
       </div>
-      <div className="search-results">
-        {items.map((n) => (
+      <div
+        className="search-results"
+        role="listbox"
+        id="workspace-search-options"
+        aria-label="Accessible workspace search results"
+      >
+        {items.map((n, index) => (
           <button
+            role="option"
+            id={"workspace-search-option-" + index}
+            aria-selected={index === active}
             key={n.id}
-            onClick={() => {
-              go(n.resource_id || n.id);
-              close();
-            }}
+            onMouseEnter={() => setActive(index)}
+            onClick={() => openResult(n)}
           >
             <span className="page-icon">{icon(n)}</span>
             <div>
               <strong>{n.title}</strong>
               <p>{n.snippet || n.kind}</p>
             </div>
-            <ArrowUpRight size={16} />
+            <ArrowUpRight size={16} aria-hidden="true" />
           </button>
         ))}
         {q && !items.length && <Empty title="No matching pages" />}
       </div>
-      <div className="modal-foot muted">
-        Search only includes content you can access. <kbd>esc</kbd> to close
+      <div className="modal-foot muted" id="workspace-search-help">
+        Use <kbd>↑</kbd> <kbd>↓</kbd> to select and <kbd>Enter</kbd> to open. Search
+        only includes content you can access. <kbd>Esc</kbd> closes.
       </div>
     </Modal>
   );
