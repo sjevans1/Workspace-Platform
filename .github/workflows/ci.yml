@@ -124,6 +124,23 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           severity: HIGH,CRITICAL
+      - name: Generate ClamAV runtime SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: clamav/clamav:1.5.4-debian13-slim@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
+          format: cyclonedx-json
+          output-file: openjm-workspace-clamav-sbom.cdx.json
+          artifact-name: openjm-workspace-clamav-sbom
+          upload-artifact: true
+      - name: Scan ClamAV runtime image for fixable high/critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: clamav/clamav:1.5.4-debian13-slim@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
       - name: Start deployment
         run: |
           docker compose up -d
@@ -170,7 +187,10 @@ jobs:
           if (clean.status !== "clean")
             throw new Error("Clean antivirus acceptance payload was not clean");
           const eicar = Buffer.from(
-            "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*",
+            [
+              "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EI",
+              "CAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*",
+            ].join(""),
           );
           const infected = await antivirus.scan(eicar);
           if (infected.status !== "infected")
