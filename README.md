@@ -40,6 +40,18 @@ Open **http://localhost:8080** and use `SETUP_TOKEN` from the generated `.env`. 
 - Runtime branding and user-selectable Light/Dark/Follow device appearance (including editor; browser-local preference with no server dependency), scoped REST API, transactional event outbox, signed webhooks with retries, and audit records.
 - Pluggable storage: local filesystem for self-contained/on-prem deployments, or S3-compatible object storage for private-object-store/cloud deployments; plus migrations, logical backup/restore, container configuration and CI.
 
+## Link pages without an AI dependency
+
+Open a page with edit permission and choose **Link to page** above the document.
+Search for another page you can access, select it, and the editor inserts a
+normal local page link. Open that destination page to see the permission-filtered
+**Linked from** section. Backlinks update after document changes are durably
+saved; use **Refresh links** for a new read. Only canonical internal links
+created inside Workspace count—plain text containing an ID and external URLs
+do not. Hidden, deleted, cross-tenant, or newly revoked source pages are never
+listed to unauthorized readers. This first-pass implementation scans a bounded
+set of persisted documents; a dedicated scalable link index remains future work.
+
 ## Project map
 
 | Path | Purpose |
