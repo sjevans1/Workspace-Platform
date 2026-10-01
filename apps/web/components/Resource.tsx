@@ -25,11 +25,13 @@ export default function Resource({
   me,
   onGone,
   create,
+  theme,
 }: {
   id: string;
   me: any;
   onGone: () => void;
   create: (v: any) => void;
+  theme: "light" | "dark";
 }) {
   const [node, setNode] = useState<any>(),
     [children, setChildren] = useState<any[]>([]),
@@ -329,7 +331,7 @@ export default function Resource({
               ))}
             </div>
           )}
-          <Editor id={id} user={me.user} />
+          <Editor id={id} user={me.user} theme={theme} />
         </>
       )}
       {panel === "permissions" && (
