@@ -348,6 +348,95 @@ test("metrics endpoint is bearer-protected and excludes tenant identifiers", asy
   );
 });
 
+test("recently viewed lists personal visits, not other users' edits, and revokes access", async () => {
+  const folder = await ok("POST", "/resources", {
+    kind: "space", parent_id: root.id, title: "Personal recents acceptance",
+  });
+  const first = await ok("POST", "/resources", {
+    kind: "page", parent_id: folder.id, title: "Visited only once",
+  });
+  const second = await ok("POST", "/resources", {
+    kind: "page", parent_id: folder.id, title: "Visited last",
+  });
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name) VALUES($1,$2,'Recents Peer')",
+      [peerId, peerId + "@example.test"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, peerId],
+    );
+  });
+  const peerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId),
+  );
+  const peer = {
+    cookie: "workspace_session=" + peerToken, csrf: csrf(peerToken),
+  };
+  const before = await ok("GET", "/resources?recent=true");
+  assert.ok(!before.some((n: any) => [first.id, second.id].includes(n.id)),
+    "creating and editing a page is not a visit");
+
+  assert.deepEqual(
+    (await ok("GET", "/resources?recent=true", undefined, peer))
+      .filter((n: any) => [first.id, second.id].includes(n.id)),
+    [],
+  );
+  await ok("POST", `/resources/${first.id}/bookmark`, {});
+  await new Promise<void>((resolve) => setTimeout(resolve, 8));
+  await ok("POST", `/resources/${second.id}/bookmark`, {});
+  let recentlyViewed = await ok("GET", "/resources?recent=true");
+  assert.deepEqual(
+    recentlyViewed.filter((n: any) => [first.id, second.id].includes(n.id))
+      .map((n: any) => n.id),
+    [second.id, first.id],
+  );
+  assert.ok(recentlyViewed.find((n: any) => n.id === second.id)?.viewed_at);
+
+  // A different member has an independent timeline, even in the same tenant.
+  assert.equal(
+    (await ok("GET", "/resources?recent=true", undefined, peer))
+      .some((n: any) => n.id === first.id), false,
+  );
+  await ok("POST", `/resources/${first.id}/bookmark`, {}, peer);
+  recentlyViewed = await ok("GET", "/resources?recent=true", undefined, peer);
+  assert.ok(recentlyViewed.some((n: any) => n.id === first.id));
+  assert.ok(!recentlyViewed.some((n: any) => n.id === second.id));
+
+  // Current ACLs are applied on read, not only when the visit is written.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,0) ON CONFLICT(tenant_id,resource_id,principal_id)" +
+    " DO UPDATE SET level=0",
+    [owner.tenant, folder.id, peerId],
+  ));
+  recentlyViewed = await ok("GET", "/resources?recent=true", undefined, peer);
+  assert.ok(!recentlyViewed.some((n: any) => n.id === first.id));
+  assert.equal(
+    (await req("POST", `/resources/${first.id}/bookmark`, {}, peer)).statusCode,
+    404,
+  );
+  assert.ok(
+    (await ok("GET", "/resources?recent=true"))
+      .some((n: any) => n.id === first.id),
+    "owner's timeline is unaffected by peer revocation",
+  );
+  assert.equal(
+    (await ok("GET", "/resources?recent=true", undefined, other))
+      .some((n: any) => n.id === first.id), false,
+    "the same global user in another tenant cannot see visits",
+  );
+
+  await ok("DELETE", `/resources/${second.id}`);
+  assert.equal(
+    (await ok("GET", "/resources?recent=true"))
+      .some((n: any) => n.id === second.id), false,
+    "trashed pages are excluded from personal history",
+  );
+});
+
 test("self-service organisation creation is disabled by default", async () => {
   const r = await req("POST", "/organisations", { name: "Blocked tenant" });
   assert.equal(r.statusCode, 403, r.body);
@@ -2470,94 +2559,4 @@ test("reconciliation enumerates only currently accessible resources with encrypt
   const afterDelete = await scan();
   assert.ok(!afterDelete.seen.includes(publicId));
   assert.ok(revoked.seen.includes(publicId));
-});
-
-
-test("recently viewed lists personal visits, not other users' edits, and revokes access", async () => {
-  const folder = await ok("POST", "/resources", {
-    kind: "space", parent_id: root.id, title: "Personal recents acceptance",
-  });
-  const first = await ok("POST", "/resources", {
-    kind: "page", parent_id: folder.id, title: "Visited only once",
-  });
-  const second = await ok("POST", "/resources", {
-    kind: "page", parent_id: folder.id, title: "Visited last",
-  });
-  const peerId = randomUUID();
-  await db.tenant(owner.tenant, async (q) => {
-    await q.query(
-      "INSERT INTO users(id,email,name) VALUES($1,$2,'Recents Peer')",
-      [peerId, peerId + "@example.test"],
-    );
-    await q.query(
-      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
-      [owner.tenant, peerId],
-    );
-  });
-  const peerToken = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, peerId),
-  );
-  const peer = {
-    cookie: "workspace_session=" + peerToken, csrf: csrf(peerToken),
-  };
-  const before = await ok("GET", "/resources?recent=true");
-  assert.ok(!before.some((n: any) => [first.id, second.id].includes(n.id)),
-    "creating and editing a page is not a visit");
-
-  assert.deepEqual(
-    (await ok("GET", "/resources?recent=true", undefined, peer))
-      .filter((n: any) => [first.id, second.id].includes(n.id)),
-    [],
-  );
-  await ok("POST", `/resources/${first.id}/bookmark`, {});
-  await new Promise<void>((resolve) => setTimeout(resolve, 8));
-  await ok("POST", `/resources/${second.id}/bookmark`, {});
-  let recentlyViewed = await ok("GET", "/resources?recent=true");
-  assert.deepEqual(
-    recentlyViewed.filter((n: any) => [first.id, second.id].includes(n.id))
-      .map((n: any) => n.id),
-    [second.id, first.id],
-  );
-  assert.ok(recentlyViewed.find((n: any) => n.id === second.id)?.viewed_at);
-
-  // A different member has an independent timeline, even in the same tenant.
-  assert.equal(
-    (await ok("GET", "/resources?recent=true", undefined, peer))
-      .some((n: any) => n.id === first.id), false,
-  );
-  await ok("POST", `/resources/${first.id}/bookmark`, {}, peer);
-  recentlyViewed = await ok("GET", "/resources?recent=true", undefined, peer);
-  assert.ok(recentlyViewed.some((n: any) => n.id === first.id));
-  assert.ok(!recentlyViewed.some((n: any) => n.id === second.id));
-
-  // Current ACLs are applied on read, not only when the visit is written.
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-    " VALUES($1,$2,$3,0) ON CONFLICT(tenant_id,resource_id,principal_id)" +
-    " DO UPDATE SET level=0",
-    [owner.tenant, folder.id, peerId],
-  ));
-  recentlyViewed = await ok("GET", "/resources?recent=true", undefined, peer);
-  assert.ok(!recentlyViewed.some((n: any) => n.id === first.id));
-  assert.equal(
-    (await req("POST", `/resources/${first.id}/bookmark`, {}, peer)).statusCode,
-    404,
-  );
-  assert.ok(
-    (await ok("GET", "/resources?recent=true"))
-      .some((n: any) => n.id === first.id),
-    "owner's timeline is unaffected by peer revocation",
-  );
-  assert.equal(
-    (await ok("GET", "/resources?recent=true", undefined, other))
-      .some((n: any) => n.id === first.id), false,
-    "the same global user in another tenant cannot see visits",
-  );
-
-  await ok("DELETE", `/resources/${second.id}`);
-  assert.equal(
-    (await ok("GET", "/resources?recent=true"))
-      .some((n: any) => n.id === second.id), false,
-    "trashed pages are excluded from personal history",
-  );
 });
