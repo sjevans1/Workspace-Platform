@@ -1,5 +1,7 @@
 # Production S3/object-store acceptance
 
+This procedure is **conditional**. Run it only for a Workspace deployment that selects S3-compatible object storage. A deployment using the default local filesystem adapter does not need an external S3-provider acceptance run; it must instead validate the host/attached storage through the normal deployment, persistence and backup/recovery procedures.
+
 Use this procedure to validate the OpenJM Workspace storage contract against the **actual S3-compatible provider selected for a deployment**. It is intentionally different from the CI SeaweedFS test: the acceptance harness does not create or delete buckets and does not need bucket-administration privileges.
 
 ## Safety boundary

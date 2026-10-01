@@ -103,7 +103,17 @@ SCIM Users and Groups are implemented, including explicit owner/admin-controlled
 
 Set PRODUCT_NAME, PRIMARY_ACCENT, LOGO_LIGHT, LOGO_DARK, FAVICON, LOGIN_BACKGROUND, SUPPORT_NAME, SUPPORT_URL, LEGAL_NAME, PRIVACY_URL and TERMS_URL for deployment-wide sign-in defaults. Administrators can override those fields for their signed-in organisation through Settings → Branding. Use HTTPS asset URLs or same-origin paths. The current interface uses the light logo; the dark logo is retained in configuration for a future dark theme.
 
-## Object storage
+## Storage deployment modes
+
+Workspace does **not** require cloud storage. Choose the storage mode that matches the customer deployment:
+
+- **Local filesystem** (default): attachment objects live in the persistent `files` volume or host-attached storage. This is appropriate for a self-contained/on-prem deployment and does not require an external S3 provider or S3 acceptance run.
+- **Private S3-compatible object storage**: point Workspace at an on-prem/private object store such as a compatible SeaweedFS or other S3 implementation. This preserves the S3 object model while keeping data in the customer's environment.
+- **Cloud S3-compatible object storage**: point Workspace at an approved cloud object store. The deployment remains portable because Workspace talks to the S3-compatible API rather than depending on one cloud vendor.
+
+For S3-compatible modes, complete the provider acceptance procedure before rollout. Local-filesystem deployments instead require normal host-storage capacity, permissions, persistence and backup/recovery validation.
+
+### S3-compatible object storage
 
 Local storage is the default and uses the `files` volume. For an existing authenticated S3-compatible service, including SeaweedFS S3:
 

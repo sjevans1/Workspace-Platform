@@ -149,6 +149,12 @@ The new `scripts/accept-production-s3.ts` harness uses two pre-created dedicated
 
 PR #21 passed final-head GitHub Actions run 36809767605 and was squash-merged to `main` at `c4b86d8c326fea9aee7d087af88faab076bb46a5`. The harness itself is verified in CI. The **selected production provider is not yet accepted**; that operational gate remains open until `docs/PRODUCTION_S3_ACCEPTANCE.md` passes against two dedicated buckets on that provider.
 
+## Storage deployment policy clarification
+
+Workspace supports two production storage classes rather than requiring cloud object storage. The default local filesystem adapter is a valid self-contained/on-prem deployment mode; its attachment data remains on the Workspace host or attached storage and therefore has no external-provider S3 acceptance requirement. S3-compatible storage is an optional deployment mode for private object stores or cloud providers. When S3 is selected, the existing provider-safe recovery harness remains a mandatory provider-specific acceptance gate.
+
+This clarification changes the release checklist, not the storage implementation. The next cross-deployment hardening priority is operational tenant provisioning rather than waiting on a particular cloud-storage account.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
