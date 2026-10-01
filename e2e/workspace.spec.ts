@@ -1124,3 +1124,59 @@ test("W05 browser: configure relation, search permitted record, persist, navigat
     return (await response.json()).values[relationProperty.id];
   }).toEqual([]);
 });
+
+
+test("W06 browser: configure numeric formula, render computed result and recompute", async ({ page }) => {
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const create = await page.request.post("/api/v1/resources", {
+    headers, data: { kind: "database", parent_id: roots[0].id,
+      title: "W06 Formula " + Date.now() },
+  });
+  expect(create.ok(), await create.text()).toBeTruthy();
+  const data = await create.json();
+  const route = "/api/v1/databases/" + data.id;
+  const numericFields = [
+    { id: "name", name: "Name", type: "title" },
+    { id: "units", name: "Units", type: "number" },
+    { id: "price", name: "Price", type: "number" },
+  ];
+  const configured = await page.request.patch(route, {
+    headers, data: { properties: numericFields },
+  });
+  expect(configured.ok(), await configured.text()).toBeTruthy();
+  await page.goto("/?page=" + data.id);
+  await page.getByRole("button", { name: "Configure properties" }).click();
+  const dialog = page.getByRole("dialog", { name: "Properties & columns" });
+  await dialog.getByRole("button", { name: "Add property" }).click();
+  await dialog.getByRole("textbox", { name: "Property name" }).nth(3)
+    .fill("Gross");
+  await dialog.getByRole("combobox", { name: "Property type" }).nth(3)
+    .selectOption("formula");
+  await dialog.getByRole("textbox", { name: "Gross formula expression" })
+    .fill("[units] * [price] + 2");
+  await dialog.getByRole("button", { name: "Save properties" }).click();
+  await expect(dialog).toBeHidden();
+
+  const createRecord = await page.request.post(route + "/records", {
+    headers, data: { values: { name: "W06 Order", units: 3, price: 7 } },
+  });
+  expect(createRecord.ok(), await createRecord.text()).toBeTruthy();
+  const row = await createRecord.json();
+  const definition = await (await page.request.get(route)).json();
+  const formula = definition.properties.find((p: any) => p.type === "formula");
+  expect(formula.formula).toBe("[units] * [price] + 2");
+  expect(row.values[formula.id]).toBe(23);
+  await page.reload();
+  await expect(page.locator("output.formula-result").first()).toHaveText("23");
+
+  const patched = await page.request.patch("/api/v1/records/" + row.id, {
+    headers, data: { expected_revision: row.revision, values: { price: 9 } },
+  });
+  expect(patched.ok(), await patched.text()).toBeTruthy();
+  expect((await patched.json()).values[formula.id]).toBe(29);
+  await page.reload();
+  await expect(page.locator("output.formula-result").first()).toHaveText("29");
+});
