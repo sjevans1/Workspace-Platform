@@ -60,6 +60,8 @@ Enable Keycloak's back-channel session-ID option when available so Workspace can
 
 Workspace administrator membership deactivation already invalidates that user's tenant sessions. External directory disablement is different: if the identity provider does not send a logout event, use Workspace deactivation until SCIM/directory lifecycle automation is implemented.
 
+`workspace_runtime` must remain `NOSUPERUSER NOBYPASSRLS`. Do not grant `BYPASSRLS` to make back-channel logout work. The handler supplies transaction-local tenant context for its RLS-protected audit insert; CI exercises the native application through the restricted runtime role.
+
 ## Branding
 
 Set PRODUCT_NAME, PRIMARY_ACCENT, LOGO_LIGHT, LOGO_DARK, FAVICON, LOGIN_BACKGROUND, SUPPORT_NAME, SUPPORT_URL, LEGAL_NAME, PRIVACY_URL and TERMS_URL for deployment-wide sign-in defaults. Administrators can override those fields for their signed-in organisation through Settings → Branding. Use HTTPS asset URLs or same-origin paths. The current interface uses the light logo; the dark logo is retained in configuration for a future dark theme.
