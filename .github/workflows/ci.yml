@@ -161,6 +161,28 @@ jobs:
           ! grep -E 'tenant_id|user_id|resource_id|document_id' /tmp/workspace-metrics.txt
       - name: Verify deployed browser workflow
         run: node scripts/test-deployment.mjs
+      - name: Verify deployed local attachment ciphertext
+        run: |
+          docker compose exec -T api node --input-type=module -e '
+            import { readdir, readFile } from "node:fs/promises";
+            import { join } from "node:path";
+            const files = [];
+            async function walk(root) {
+              for (const entry of await readdir(root, { withFileTypes: true })) {
+                const path = join(root, entry.name);
+                if (entry.isDirectory()) await walk(path);
+                else if (entry.isFile()) files.push(path);
+              }
+            }
+            await walk("/data/files");
+            if (!files.length) throw new Error("No deployed attachment objects found");
+            for (const path of files) {
+              const bytes = await readFile(path);
+              if (bytes.subarray(0, 8).toString("hex") !== "4f4a534501a55aa5")
+                throw new Error("Plaintext or unknown attachment envelope: " + path);
+            }
+            console.log("Verified encrypted attachment envelopes:", files.length);
+          '
       - name: Verify keyboard accessibility in Chromium and Firefox
         run: |
           E2E_BASE_URL=http://localhost:8080           E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"           npx playwright test --config=playwright.compat.config.ts
