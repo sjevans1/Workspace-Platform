@@ -851,6 +851,22 @@ export async function buildApp(
     async (q, a, r, reply) => {
       assert(!a.scopes, 403, "Human session required");
       const t = body(z.object({ tenant_id: uuid }), r).tenant_id;
+      // A tenant switch must never turn an issuer-bound OIDC session into
+      // a fresh, unbound local session. Lock the source to serialize against
+      // concurrent logout/revocation and fail closed if already revoked.
+      const source = await one(
+        q,
+        "SELECT oidc_issuer FROM sessions" +
+          " WHERE token_hash=$1 AND tenant_id=$2 AND user_id=$3" +
+          " AND scopes IS NULL AND expires_at>now() FOR UPDATE",
+        [a.tokenHash, a.tenant_id, a.user_id],
+      );
+      assert(source, 401, "Session expired or revoked");
+      assert(
+        !source.oidc_issuer,
+        403,
+        "SSO sessions cannot switch organisations; sign in to the destination organisation",
+      );
       assert(
         (
           await q.query("SELECT * FROM user_tenants($1)", [a.user_id])
