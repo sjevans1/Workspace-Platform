@@ -118,10 +118,19 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     process.env.ENCRYPTION_KEY = "b".repeat(64);
     assert.throws(() => decodeBackup(encodedArchive), /Backup decryption failed/);
     process.env.ENCRYPTION_KEY = "a".repeat(64);
+    assert.throws(
+      () => decodeBackup(JSON.stringify(archive)),
+      /Legacy plaintext backup refused/,
+    );
     assert.equal(
-      JSON.stringify(decodeBackup(JSON.stringify(archive))),
+      JSON.stringify(
+        decodeBackup(JSON.stringify(archive), {
+          ...process.env,
+          ALLOW_LEGACY_PLAINTEXT_BACKUP: "true",
+        }),
+      ),
       JSON.stringify(archive),
-      "legacy plaintext archives remain readable for recovery only",
+      "legacy plaintext archives require an explicit one-time restore opt-in",
     );
 
     await assert.rejects(
