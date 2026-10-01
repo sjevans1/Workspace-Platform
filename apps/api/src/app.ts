@@ -88,6 +88,10 @@ import {
   seedDemo,
   purgeDeletedResource,
 } from "./domain.ts";
+import {
+  indexedRecordText, redactRelationSchema, redactRelationValues,
+  validateRelationSchema, validateRelationWrites,
+} from "./relations.ts";
 type Request = FastifyRequest & { actor: Actor; sessionToken: string };
 type Handler = (
   q: Query,
@@ -1470,6 +1474,7 @@ function dataRoutes(
       return {
         ...n,
         ...d,
+        properties: await redactRelationSchema(q, a, d.properties),
         views: (
           await q.query(
             "SELECT * FROM database_views WHERE database_id=$1 ORDER BY name",
@@ -1490,13 +1495,16 @@ function dataRoutes(
       await q.query("SELECT 1 FROM databases WHERE resource_id=$1 FOR UPDATE", [
         id(r),
       ]);
+      await validateRelationSchema(q, a, id(r), v.properties);
       for (const row of (
         await q.query(
           "SELECT values FROM database_records WHERE database_id=$1",
           [id(r)],
         )
-      ).rows)
-        validateValues(v.properties, row.values);
+      ).rows) {
+        const existing = validateValues(v.properties, row.values);
+        await validateRelationWrites(q, a, v.properties, existing);
+      }
       await q.query("UPDATE databases SET properties=$2 WHERE resource_id=$1", [
         id(r),
         json(v.properties),
@@ -1601,7 +1609,11 @@ function dataRoutes(
           [n.id],
         );
       assert(v, 404, "Record not found");
-      return { ...n, ...v };
+      return {
+        ...n, ...v,
+        properties: await redactRelationSchema(q, a, v.properties),
+        values: await redactRelationValues(q, a, v.properties, v.values),
+      };
     },
     "databases.read",
   );
@@ -1633,6 +1645,7 @@ function dataRoutes(
       );
       const values = validateValues(d.properties, { ...d.values, ...v.values });
       await validatePeople(q, d.properties, values);
+      await validateRelationWrites(q, a, d.properties, v.values);
       await q.query(
         "UPDATE database_records SET values=$2,revision=revision+1 WHERE resource_id=$1",
         [n.id, json(values)],
@@ -1642,12 +1655,14 @@ function dataRoutes(
         [
           n.id,
           values[d.properties.find((p: any) => p.type === "title").id],
-          Object.values(values).join(" "),
+          indexedRecordText(d.properties, values),
           a.user_id,
         ],
       );
       await emit(q, a, "record.updated", n.id, d.revision + 1);
-      return { ...n, values, revision: d.revision + 1 };
+      return { ...n,
+        values: await redactRelationValues(q, a, d.properties, values),
+        revision: d.revision + 1 };
     },
     "databases.write",
   );
@@ -2962,7 +2977,9 @@ function dataRoutes(
             10000,
           );
         if (format === "json")
-          return { resource: n, schema: d.properties, records: rows };
+          return { resource: n,
+            schema: await redactRelationSchema(q, a, d.properties),
+            records: rows };
         assert(format === "csv", 400, "Database export requires CSV or JSON");
         reply
           .type("text/csv")
