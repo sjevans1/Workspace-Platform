@@ -187,6 +187,29 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   expect(errors).toEqual([]);
 });
 
+test("dialogs trap keyboard focus and restore the opener", async ({ page }) => {
+  await login(page);
+  const trigger = page.getByRole("button", { name: "New page", exact: true });
+  await trigger.focus();
+  await trigger.click();
+
+  const dialog = page.getByRole("dialog", { name: "Create something new" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
+
+  const close = dialog.getByRole("button", { name: "Close dialog" }),
+    create = dialog.getByRole("button", { name: "Create", exact: true });
+  await close.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(create).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test("admin can create and revoke a SCIM connector from Settings", async ({
   page,
 }) => {
