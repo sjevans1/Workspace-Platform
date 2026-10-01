@@ -35,7 +35,7 @@ async function login(page: Page) {
   for (let attempt = 0; attempt < 2 && await retry.isVisible(); attempt++) {
     const notice = await page.getByRole("alert")
       .filter({ hasText: "Workspace connection interrupted" }).innerText();
-    const explicit = notice.match(/retry after (\\d+) seconds?/i);
+    const explicit = notice.match(/retry after (\d+) seconds?/i);
     const delay = explicit ? Number(explicit[1]) : 60;
     expect(delay).toBeGreaterThanOrEqual(0);
     expect(delay).toBeLessThanOrEqual(60);
