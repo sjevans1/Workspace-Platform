@@ -514,8 +514,7 @@ export default function Settings({
                             "Prepared secret discarded. Current signing continues.",
                           );
                         } finally {
-                          await load();
-                          setRotatingWebhook("");
+                          await load().finally(() => setRotatingWebhook(""));
                         }
                       })
                     }
@@ -543,8 +542,7 @@ export default function Settings({
                           `Prepared signing secret: ${r.secret}\nConfigure your receiver to accept this secret before activation. Current signing is unchanged. Save this secret now; it will not be shown again.`,
                         );
                       } finally {
-                        await load();
-                        setRotatingWebhook("");
+                        await load().finally(() => setRotatingWebhook(""));
                       }
                     })
                   }
@@ -935,8 +933,7 @@ export default function Settings({
                   setActivation(null);
                   notify("New webhook signing secret activated.");
                 } finally {
-                  await load();
-                  setRotatingWebhook("");
+                  await load().finally(() => setRotatingWebhook(""));
                 }
               })
             }
