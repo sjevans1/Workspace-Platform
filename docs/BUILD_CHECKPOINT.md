@@ -111,11 +111,25 @@ The host exercise passed existing-owner SSO linking without duplicate accounts, 
 
 The earlier Keycloak exercise confirmed that disabling a user prevents new IdP login but does not itself terminate the existing IdP session or emit back-channel logout. The final no-workaround regression retest on `9894b95686c6229a956b93c0a2263e4434aae184` proved explicit Keycloak session termination propagates correctly while `workspace_runtime` remains `NOBYPASSRLS`; the RLS defect is closed. Directory disable/offboarding without a logout event remains a separate SCIM/lifecycle concern.
 
+## Verified hardening slice: SCIM 2.0 Users lifecycle and automated offboarding
+
+PR #17 passed the complete final-head CI gate in GitHub Actions run 36801538725 and was squash-merged to `main` at `ad8f6ed2e954b78959c1941cb0efb4535a6efb26`. The backend passed 37/37 native PostgreSQL tests under restricted `workspace_runtime`/`NOBYPASSRLS`, TypeScript and the production build. The deployment job passed image/configuration/startup and all three Chromium workflows, including the new Settings-driven SCIM connector issuance/revocation test.
+
+The slice adds tenant-scoped SCIM 2.0 Users lifecycle: connector discovery/authentication, ServiceProviderConfig/ResourceTypes/Schemas, Users list/get/create/PUT/PATCH/delete, `userName eq` and `externalId eq` filters, inactive-by-default provisioning, tenant-scoped SCIM profile metadata, audit events and logical-backup preservation. SCIM connectors can provision only `member` or `guest`; manually managed existing memberships are not silently adopted into SCIM.
+
+The security-critical offboarding rule is verified: `active:false` or SCIM DELETE deactivates the connector tenant membership and immediately deletes that tenant's Workspace sessions. A regression creates the same global user in a second tenant and proves that second membership/session remains active.
+
+Two issues were found and fixed before merge. First, SCIM handlers initially called Fastify `reply.send()` inside the tenant transaction, allowing the response to race ahead of COMMIT; SCIM now returns payloads only after the tenant transaction resolves. Second, the deployed Caddy configuration initially did not route `/scim/*` to the API; the new Chromium connector test caught this and the reverse-proxy route is now explicit.
+
+Administrators can manage connectors in Settings → Integrations → Directory provisioning (SCIM 2.0), choose a default member/guest role, copy the one-time token/base URL and revoke the connector. The deployed browser test proves a newly issued token can call SCIM discovery through Caddy and returns HTTP 401 after UI revocation.
+
+The next enterprise identity slice is SCIM Groups and an explicit group-to-Workspace-role mapping policy. Owner/admin provisioning remains deliberately outside SCIM connector authority in the current slice.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-The next identity slice is directory/SCIM lifecycle and automated offboarding. The next host-level operations acceptance remains a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; directory/SCIM lifecycle, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+The next identity slice is SCIM Groups, group membership synchronization and explicit group-to-Workspace-role mapping. The next host-level operations acceptance remains a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; SCIM Groups/provider compatibility, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 
