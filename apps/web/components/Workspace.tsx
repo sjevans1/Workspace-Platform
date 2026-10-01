@@ -854,13 +854,11 @@ function Login({
     [error, setError] = useState(""),
     [invite, setInvite] = useState("");
   useEffect(() => {
-    const fromUrl = new URLSearchParams(location.search).get("invite") || "";
-    const value = fromUrl || sessionStorage.getItem("workspace_invite") || "";
+    const value = new URLSearchParams(location.search).get("invite") || "";
     if (value) {
-      sessionStorage.setItem("workspace_invite", value);
       setInvite(value);
+      history.replaceState(null, "", "/");
     }
-    if (fromUrl) history.replaceState(null, "", "/");
   }, []);
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -894,7 +892,6 @@ function Login({
             ? { token: invite, password: v.password }
             : { email: v.email, password: v.password },
         );
-      if (invite) sessionStorage.removeItem("workspace_invite");
       history.replaceState(null, "", "/");
       await done();
     } catch (e) {
