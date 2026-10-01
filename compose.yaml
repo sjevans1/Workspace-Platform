@@ -82,7 +82,8 @@ services:
     volumes: [files:/data/files]
     environment:
       <<: *runtime
-      TRUST_PROXY: "true"
+      # Only Caddy's sanitized immediate hop is trusted (never unrestricted).
+      TRUST_PROXY: "1"
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
