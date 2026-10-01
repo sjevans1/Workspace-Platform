@@ -217,6 +217,10 @@ Docker builds a hardened ClamAV runtime from the official 1.5.4 Debian slim imag
 
 This slice deliberately implements reject-before-publish rather than a retained quarantine vault. Sandbox detonation, CDR, retroactive rescanning and false-positive release workflows remain separate future controls. PR #35 passed final-head GitHub Actions run `36823852010` and was squash-merged at `1994cc1f1f749a905bd87d07fe067996cc4b3543`: 49/49 backend tests, S3 acceptance, image/SBOM/Trivy gates for Workspace and hardened ClamAV, live EICAR/clean scanning, application EICAR rejection and metrics, clean browser upload, raw attachment ciphertext, Chromium + Firefox accessibility, and trusted HTTPS/WSS. This slice is closed.
 
+## Active engineering slice: OIDC provider interoperability
+
+From the verified PR #35 / Actions run `36823852010` malware-scanning baseline, branch `hardening/oidc-provider-compatibility` adds explicit token endpoint authentication method configuration: `client_secret_basic` (backward-compatible confidential default), `client_secret_post` (confidential alternate) and `none` (public PKCE). Configuration rejects client-secret/method mismatches and disallowed methods; advertised provider metadata must support the configured choice. The disposable OIDC issuer tests the actual authorization-code exchange, PKCE, nonce, verified email and methods, including rejection paths. Deployment environment/Compose and IDENTITY documentation are updated. This slice remains unverified until final-head native PostgreSQL tests, S3 acceptance, image/SBOM/Trivy, real browser/accessibility and trusted TLS CI pass. Per-tenant issuer configuration remains a separate follow-on engineering gate.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.

@@ -16,6 +16,8 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
     expectedNonce = "",
     expectedChallenge = "",
     emailVerified = true,
+    tokenAuthMethod: "client_secret_basic" | "client_secret_post" | "none" =
+      "client_secret_basic",
     tokenRequests = 0;
 
   const server = createServer(async (req, res) => {
@@ -34,18 +36,30 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
         response_types_supported: ["code"],
         subject_types_supported: ["public"],
         id_token_signing_alg_values_supported: ["RS256"],
-        token_endpoint_auth_methods_supported: ["client_secret_basic"],
+        token_endpoint_auth_methods_supported: [tokenAuthMethod],
         code_challenge_methods_supported: ["S256"],
       });
     }
     if (url.pathname === "/jwks") return json({ keys: [jwk] });
     if (url.pathname === "/token" && req.method === "POST") {
       tokenRequests++;
-      assert.match(String(req.headers.authorization || ""), /^Basic /);
       let raw = "";
       for await (const chunk of req) raw += chunk;
-      const form = new URLSearchParams(raw),
-        verifier = form.get("code_verifier") || "",
+      const form = new URLSearchParams(raw);
+      if (tokenAuthMethod === "client_secret_basic") {
+        assert.match(String(req.headers.authorization || ""), /^Basic /);
+        assert.equal(form.has("client_secret"), false);
+      } else {
+        assert.equal(req.headers.authorization, undefined);
+        assert.equal(form.get("client_id"), "workspace-test-client");
+        assert.equal(
+          form.get("client_secret"),
+          tokenAuthMethod === "client_secret_post"
+            ? "workspace-test-secret"
+            : null,
+        );
+      }
+      const verifier = form.get("code_verifier") || "",
         actualChallenge = createHash("sha256")
           .update(verifier)
           .digest("base64url");
@@ -92,6 +106,7 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
     label: process.env.OIDC_LABEL,
     insecure: process.env.OIDC_ALLOW_INSECURE,
     verified: process.env.OIDC_REQUIRE_VERIFIED_EMAIL,
+    tokenAuthMethod: process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD,
   };
   Object.assign(process.env, {
     OIDC_ISSUER: issuer,
@@ -204,6 +219,80 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
       /email address is not verified/i,
     );
     assert.equal(tokenRequests, 2);
+
+    // Alternate standards-compliant confidential IdPs may require a POST
+    // body client secret rather than the Keycloak-tested Basic header.
+    tokenAuthMethod = "client_secret_post";
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post";
+    emailVerified = true;
+    const postProvider = oidcFromEnv();
+    assert.ok(postProvider);
+    const post = await postProvider.start(redirectUri);
+    const postAuth = new URL(post.url);
+    expectedNonce = post.nonce;
+    expectedChallenge = postAuth.searchParams.get("code_challenge") || "";
+    const postProfile = await postProvider.finish(
+      new URL(
+        `${redirectUri}?code=test-code&state=${encodeURIComponent(post.state)}`,
+      ),
+      { state: post.state, codeVerifier: post.codeVerifier, nonce: post.nonce },
+    );
+    assert.equal(postProfile.subject, "oidc-user-subject");
+    assert.equal(postProfile.email, "oidc-user@example.test");
+    assert.equal(tokenRequests, 3);
+
+    // Discovery must reject a configured method the provider does not
+    // advertise, rather than attempting an incompatible token exchange.
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_basic";
+    const incompatible = oidcFromEnv();
+    assert.ok(incompatible);
+    await assert.rejects(
+      incompatible.start(redirectUri),
+      /does not advertise the configured token authentication method/,
+    );
+    assert.equal(tokenRequests, 3);
+
+    // A public OIDC client can still prove PKCE+nonce without transmitting
+    // a client secret. The selected discovery metadata must permit "none".
+    tokenAuthMethod = "none";
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "none";
+    process.env.OIDC_CLIENT_SECRET = "";
+    const publicProvider = oidcFromEnv();
+    assert.ok(publicProvider);
+    const publicStart = await publicProvider.start(redirectUri);
+    expectedNonce = publicStart.nonce;
+    expectedChallenge =
+      new URL(publicStart.url).searchParams.get("code_challenge") || "";
+    const publicProfile = await publicProvider.finish(
+      new URL(
+        `${redirectUri}?code=test-code&state=${encodeURIComponent(publicStart.state)}`,
+      ),
+      {
+        state: publicStart.state,
+        codeVerifier: publicStart.codeVerifier,
+        nonce: publicStart.nonce,
+      },
+    );
+    assert.equal(publicProfile.email, "oidc-user@example.test");
+    assert.equal(tokenRequests, 4);
+
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post";
+    process.env.OIDC_CLIENT_SECRET = "";
+    assert.throws(
+      () => oidcFromEnv(),
+      /token endpoint authentication method and client secret must agree/,
+    );
+    process.env.OIDC_CLIENT_SECRET = "workspace-test-secret";
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "none";
+    assert.throws(
+      () => oidcFromEnv(),
+      /token endpoint authentication method and client secret must agree/,
+    );
+    process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "unsupported";
+    assert.throws(
+      () => oidcFromEnv(),
+      /OIDC_TOKEN_ENDPOINT_AUTH_METHOD must be/,
+    );
   } finally {
     const restore = (key: string, value: string | undefined) => {
       if (value === undefined) delete process.env[key];
@@ -215,6 +304,7 @@ test("real OIDC client performs discovery, PKCE, nonce validation and verified-e
     restore("OIDC_LABEL", saved.label);
     restore("OIDC_ALLOW_INSECURE", saved.insecure);
     restore("OIDC_REQUIRE_VERIFIED_EMAIL", saved.verified);
+    restore("OIDC_TOKEN_ENDPOINT_AUTH_METHOD", saved.tokenAuthMethod);
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );

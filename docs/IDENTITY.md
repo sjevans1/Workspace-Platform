@@ -54,6 +54,7 @@ COOKIE_SECURE=true
 OIDC_ISSUER=https://id.example.com/realms/acme
 OIDC_CLIENT_ID=openjm-workspace
 OIDC_CLIENT_SECRET=<client-secret>
+OIDC_TOKEN_ENDPOINT_AUTH_METHOD=client_secret_basic
 OIDC_LABEL=Company SSO
 OIDC_SCOPES=openid profile email
 OIDC_REQUIRE_VERIFIED_EMAIL=true
@@ -65,6 +66,18 @@ LOCAL_AUTH_ENABLED=true
 The issuer must normally use HTTPS. `OIDC_ALLOW_INSECURE=true` exists only for isolated development/testing.
 
 Keep `OIDC_CLIENT_SECRET` outside source control. It is passed only to the API service in the supplied Compose deployment.
+
+### Token endpoint client authentication (provider interoperability)
+
+Workspace supports three explicit OIDC token endpoint methods using the existing authorization-code + PKCE S256 flow:
+
+- `client_secret_basic`: confidential client, HTTP Basic authentication. This remains the default when `OIDC_CLIENT_SECRET` is present and is the Keycloak-tested configuration.
+- `client_secret_post`: confidential client, client credentials in the server-to-server form body. Select this **only** when the chosen IdP advertises and requires it; always use HTTPS in production.
+- `none`: public client with no client secret, protected by PKCE, state and nonce. Clear `OIDC_CLIENT_SECRET` when selecting it. Review the IdP registration and tenant security policy before using a public client.
+
+Set `OIDC_TOKEN_ENDPOINT_AUTH_METHOD` accordingly in `.env`. If omitted, Workspace preserves historical behavior: Basic with a secret, otherwise `none`. A configured secret/method mismatch fails at startup; discovery rejects a method that the IdP explicitly does not advertise. Workspace does not auto-downgrade authentication or select a weaker method from provider metadata.
+
+This is **deployment-level** interoperability only. It does not yet add per-tenant issuer selection, MFA/ACR/AMR policy, `private_key_jwt`, or certificate-bound credentials. Never place client secrets in URLs, logs or the browser.
 
 ## Keycloak
 
@@ -184,6 +197,8 @@ CI covers:
 - invitation email mismatch rejection;
 - real OIDC discovery against a disposable issuer;
 - confidential client code exchange;
+- alternate confidential `client_secret_post` code exchange and public `none` PKCE code exchange against a disposable OIDC issuer;
+- invalid authentication-method/secret combinations and unsupported discovery metadata rejection;
 - PKCE S256 transmission;
 - signed ID-token verification;
 - nonce validation;

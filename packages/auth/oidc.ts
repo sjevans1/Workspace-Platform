@@ -50,8 +50,23 @@ export function oidcFromEnv(): OidcProvider | null {
       .split(/\s+/)
       .filter(Boolean),
     allowInsecure = process.env.OIDC_ALLOW_INSECURE === "true",
-    requireVerifiedEmail = process.env.OIDC_REQUIRE_VERIFIED_EMAIL !== "false";
+    requireVerifiedEmail = process.env.OIDC_REQUIRE_VERIFIED_EMAIL !== "false",
+    tokenAuthMethod =
+      process.env.OIDC_TOKEN_ENDPOINT_AUTH_METHOD?.trim() ||
+      (clientSecret ? "client_secret_basic" : "none");
 
+  assert(
+    ["client_secret_basic", "client_secret_post", "none"].includes(
+      tokenAuthMethod,
+    ),
+    500,
+    "OIDC_TOKEN_ENDPOINT_AUTH_METHOD must be client_secret_basic, client_secret_post, or none",
+  );
+  assert(
+    tokenAuthMethod === "none" ? !clientSecret : Boolean(clientSecret),
+    500,
+    "OIDC token endpoint authentication method and client secret must agree",
+  );
   assert(scopes.includes("openid"), 500, "OIDC_SCOPES must include openid");
   assert(
     new URL(issuer).protocol === "https:" || allowInsecure,
@@ -61,19 +76,34 @@ export function oidcFromEnv(): OidcProvider | null {
 
   let configuration: Promise<client.Configuration> | undefined,
     logoutKeys: ReturnType<typeof createRemoteJWKSet> | undefined;
+  const authentication =
+    tokenAuthMethod === "client_secret_basic"
+      ? client.ClientSecretBasic(clientSecret)
+      : tokenAuthMethod === "client_secret_post"
+        ? client.ClientSecretPost(clientSecret)
+        : client.None();
   const getConfiguration = () =>
-    (configuration ||= client.discovery(
-      new URL(issuer),
-      clientId,
-      clientSecret || undefined,
-      clientSecret
-        ? client.ClientSecretBasic(clientSecret)
-        : client.None(),
-      {
-        timeout: 10,
-        ...(allowInsecure ? { execute: [client.allowInsecureRequests] } : {}),
-      },
-    ));
+    (configuration ||= client
+      .discovery(
+        new URL(issuer),
+        clientId,
+        clientSecret || undefined,
+        authentication,
+        {
+          timeout: 10,
+          ...(allowInsecure ? { execute: [client.allowInsecureRequests] } : {}),
+        },
+      )
+      .then((config) => {
+        const supported =
+          config.serverMetadata().token_endpoint_auth_methods_supported;
+        assert(
+          !supported || supported.includes(tokenAuthMethod),
+          500,
+          "OIDC provider does not advertise the configured token authentication method",
+        );
+        return config;
+      }));
 
   return {
     label,
