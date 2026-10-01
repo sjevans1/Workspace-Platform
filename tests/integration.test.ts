@@ -1080,6 +1080,11 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
     ].schema.type,
     "array",
   );
+  const backlinksSpec = spec.paths["/api/v1/resources/{id}/backlinks"].get;
+  assert.equal(backlinksSpec.responses["200"].content["application/json"]
+    .schema.type, "array");
+  assert.equal(backlinksSpec.responses["200"].content["application/json"]
+    .schema.maxItems, 40);
   const cursorSpec = spec.paths["/api/v1/events/cursor"].get;
   assert.deepEqual(
     cursorSpec.responses["200"].content["application/json"].schema.required,
