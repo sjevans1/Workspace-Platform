@@ -9,7 +9,17 @@ export class HttpMetrics {
   private values = new Map<string, { count: number; durationSeconds: number }>();
 
   record(method: string, statusCode: number, durationMs: number) {
-    const normalizedMethod = /^[A-Z]+$/.test(method) ? method : "OTHER";
+    const normalizedMethod = new Set([
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+      "HEAD",
+    ]).has(method)
+      ? method
+      : "OTHER";
     const statusClass =
       Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599
         ? `${Math.floor(statusCode / 100)}xx`
