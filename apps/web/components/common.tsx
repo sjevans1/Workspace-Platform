@@ -35,7 +35,8 @@ export function Modal({
                 element.offsetParent !== null,
             )
           : [],
-      initial = focusable()[0] || panel.current;
+      initial = panel.current?.querySelector<HTMLElement>('[autofocus]') ||
+        focusable()[0] || panel.current;
     initial?.focus();
 
     const fn = (e: KeyboardEvent) => {
