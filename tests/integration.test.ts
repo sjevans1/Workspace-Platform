@@ -2343,3 +2343,131 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
     403,
   );
 });
+
+
+test("reconciliation enumerates only currently accessible resources with encrypted scan positions", async () => {
+  const reconcileUser = randomUUID();
+  const hiddenId = "00000000-0000-4000-8000-000000000001";
+  const publicId = "00000000-0000-4000-8000-000000000002";
+  const laterId = "00000000-0000-4000-8000-000000000003";
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,'Reconcile User',true)",
+      [reconcileUser, reconcileUser + '@service.internal'],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, reconcileUser],
+    );
+    for (const [id, name] of [
+      [hiddenId, "reconcile-hidden"],
+      [publicId, "reconcile-public"],
+      [laterId, "reconcile-next"],
+    ]) {
+      await q.query(
+        "INSERT INTO resources(id,tenant_id,parent_id,kind,title)" +
+        " VALUES($1,$2,$3,'page',$4)",
+        [id, owner.tenant, space.id, name],
+      );
+    }
+    await q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " VALUES($1,$2,$3,0)",
+      [owner.tenant, hiddenId, reconcileUser],
+    );
+  });
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, reconcileUser,
+      ["events.read", "workspace.read", "pages.read", "databases.read"],
+      "Reconcile reader"),
+  );
+  const read = (path: string, authToken = token) => req(
+    "GET", path, undefined, null,
+    { authorization: "Bearer " + authToken },
+  );
+  const scan = async (forbidden: string | null = hiddenId) => {
+    const seen: string[] = [];
+    const cursors: string[] = [];
+    let cursor: string | undefined;
+    let emptyWithMore = false;
+    for (let n = 0; n < 250; n++) {
+      const url = "/events/reconcile?limit=1" +
+        (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
+      const result = await read(url);
+      assert.equal(result.statusCode, 200, result.body);
+      const body = result.json();
+      assert.ok(body.resources.length <= 1);
+      assert.match(body.next_cursor, /^reconcile-v1\./);
+      if (forbidden) assert.ok(!result.body.includes(forbidden),
+        "inaccessible IDs must not leak in fields or opaque cursors");
+      if (!body.resources.length && body.has_more) emptyWithMore = true;
+      seen.push(...body.resources.map((v: any) => v.id));
+      cursors.push(body.next_cursor);
+      cursor = body.next_cursor;
+      if (!body.has_more) return { seen, cursors, emptyWithMore };
+    }
+    throw Error("Reconciliation pagination did not terminate");
+  };
+  const first = await scan();
+  assert.ok(first.emptyWithMore, "inaccessible raw positions can yield empty pages");
+  assert.ok(first.seen.includes(publicId));
+  assert.ok(first.seen.includes(laterId));
+  assert.ok(!first.seen.includes(hiddenId));
+  assert.equal(new Set(first.seen).size, first.seen.length);
+  assert.ok(first.seen.includes(root.id));
+  assert.ok(!first.cursors.some(c => c.includes(hiddenId)));
+
+  const firstCursor = first.cursors[0];
+  const forged = firstCursor.slice(0, -3) + "abc";
+  assert.equal((await read("/events/reconcile?cursor=" +
+    encodeURIComponent(forged))).statusCode, 400);
+  assert.equal((await req("GET", "/events/reconcile?cursor=" +
+    encodeURIComponent(firstCursor), undefined, owner)).statusCode, 400);
+  assert.equal((await req("GET", "/events/reconcile?cursor=" +
+    encodeURIComponent(firstCursor), undefined, other)).statusCode, 400);
+  assert.equal((await read("/events/reconcile?limit=101")).statusCode, 400);
+  assert.equal((await read("/events/reconcile?cursor=" +
+    "x".repeat(2050))).statusCode, 400);
+  const noEventScope = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, reconcileUser, ["pages.read"],
+      "No event scope"),
+  );
+  assert.equal((await read("/events/reconcile", noEventScope)).statusCode, 403);
+  const noPageScope = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, reconcileUser, ["events.read", "workspace.read"],
+      "No page scope"),
+  );
+  const restricted = await read("/events/reconcile?limit=100", noPageScope);
+  assert.equal(restricted.statusCode, 200);
+  assert.ok(!restricted.json().resources.some((v: any) =>
+    [hiddenId, publicId, laterId].includes(v.id)));
+
+  // A fresh full pass discovers a new grant and later observes revocation;
+  // a partial pass is never authoritative to delete cached evidence.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
+    [owner.tenant, hiddenId, reconcileUser],
+  ));
+  // A grant arriving behind the original keyset position must not make a
+  // prior continuation silently rewind. A new full pass will discover it.
+  const resumed = await read("/events/reconcile?limit=1&cursor=" +
+    encodeURIComponent(firstCursor));
+  assert.equal(resumed.statusCode, 200, resumed.body);
+  assert.ok(!resumed.json().resources.some((v: any) => v.id === hiddenId));
+  assert.ok((await scan(null)).seen.includes(hiddenId));
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,0)",
+    [owner.tenant, hiddenId, reconcileUser],
+  ));
+  const revoked = await scan();
+  assert.ok(!revoked.seen.includes(hiddenId));
+  assert.ok(first.seen.filter(id => !revoked.seen.includes(id)).length === 0);
+  await db.tenant(owner.tenant, (q) => q.query(
+    "UPDATE resources SET deleted_at=now() WHERE id=$1",
+    [publicId],
+  ));
+  const afterDelete = await scan();
+  assert.ok(!afterDelete.seen.includes(publicId));
+  assert.ok(revoked.seen.includes(publicId));
+});

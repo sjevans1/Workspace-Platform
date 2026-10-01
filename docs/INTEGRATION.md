@@ -50,6 +50,7 @@ The API verifies that both the service and the active end-user membership can ac
 | `GET /api/v1/resources/:id/permissions` | Effective level and source ACL chain |
 | `GET /api/v1/events?since=<ISO timestamp>` | Accessible event references |
 | `GET /api/v1/events/cursor?limit=100&cursor=<opaque>` | Resumable, signed keyset page of currently accessible event references; first page may use `since=<ISO>` |
+| `GET /api/v1/events/reconcile?limit=50&cursor=<opaque>` | Encrypted, tenant/principal-bound keyset scan of currently readable resource references |
 
 Available scopes: workspace.read/write, pages.read/write, databases.read/write, files.read/write, users.read, permissions.read and events.read. Administrative settings require a human administrator session even if an integration has write scopes. Service credentials cannot open collaboration sockets.
 
@@ -91,6 +92,28 @@ Begin with `?since=2026-10-01T00:00:00Z&limit=100` (or omit `since` for a full h
 Cursors are HMAC-authenticated and tenant/principal-bound. Treat them as opaque continuation values; do not parse or forge them. A cursor carried by another tenant or principal, or a tampered cursor, is rejected. Returned event IDs must still be deduplicated by the consumer, and content must always be fetched under the current permissions. A successful page is *not* proof of ongoing access.
 
 **Consistency boundary:** this is a keyset read over already committed rows, **not** an exactly-once change-data-capture stream or a global commit-order log. A transaction that commits late with an older `created_at` can fall before a previously issued cursor. Continue using signed webhooks for prompt notification **plus a periodic overlapping `since` rescan (with event-ID deduplication) and a current-state reconciliation pass** for recovery. This also handles eventual permission changes. Avoid claiming complete ingestion solely from `has_more=false`.
+
+### Current-state resource reconciliation (read-only)
+
+`GET /api/v1/events/reconcile?limit=50` starts a **new full scan** of currently accessible resource references. Supply the returned `next_cursor` as `cursor` for subsequent pages, until `has_more=false`. Each result includes **only** `id`, `kind`, `parent_id` and `updated_at` (never resource content or permission grants):
+
+```json
+{
+  "resources": [
+    { "id": "d0000000-0000-4000-8000-000000000001", "kind": "page",
+      "parent_id": "d0000000-0000-4000-8000-000000000002",
+      "updated_at": "2026-10-01T12:00:00.000Z" }
+  ],
+  "next_cursor": "reconcile-v1.<encrypted-payload>",
+  "has_more": true
+}
+```
+
+`limit` is 1–100 (default 50), counting **scanned rows**, not visible references. A page may contain an empty `resources` array with `has_more=true`; continue following the cursor. The position includes potentially inaccessible IDs and is encrypted using a dedicated AES-256-GCM/HKDF key, rather than a merely signed/reversible payload. It is bound to the current tenant and authenticated principal, expires one hour after starting a pass, and rejects tampering or cross-principal reuse. Restart the full pass when it expires. Service tokens require `events.read` and the matching `workspace.read`, `pages.read` or `databases.read` scope for each resource kind; current ACLs and PostgreSQL tenant RLS are applied to every item. A token with `events.read` alone will enumerate no resource references.
+
+**Consistency limits:** this is bounded, read-committed keyset pagination by immutable resource ID, **not** a transactionally consistent snapshot, authority to view data later, or a guarantee of full change-data-capture history. Changes to permissions, moves, deletion and new inserts during a pass may alter visibility; resources inserted or newly granted behind the cursor are found on a future **new** full pass. An expired, interrupted or partial pass must never trigger deletion of cached/indexed content solely because an ID was absent. A single completed pass is not a strong guarantee either when permissions mutate concurrently. Repeat full scans and use event overlap to distinguish transient absence before proposing conservative stale-record cleanup.
+
+**OpenJM Intelligence recovery algorithm:** process verified signed webhooks and deduplicate event IDs; periodically rescan a bounded overlapping `since` window of `/events/cursor` because commit-time ordering is not guaranteed; complete regular full `/events/reconcile` passes from a blank cursor with the **same** tenant/principal/scopes; compare only successfully completed passes and mark apparently absent references as candidates for removal, repeating the scan before cleanup. Independently reauthorize every content fetch and every retrieval/inference exposure against current Workspace permissions. On denial, fail closed and quarantine or remove stale cached evidence immediately rather than continuing to serve it. Never treat these lists as permission grants, and do not publish an Intelligence-only index to principals whose current authorization has not been checked. No writes, external calls or automatic customer-facing actions are performed by this endpoint.
 
 ### Administrator dead-delivery replay
 

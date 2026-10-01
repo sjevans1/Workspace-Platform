@@ -52,6 +52,7 @@ import {
 } from "../../../packages/branding/index.ts";
 import { emit, encrypt } from "../../../packages/events/index.ts";
 import { beginEventCursor, decodeEventCursor, encodeEventCursor } from "../../../packages/events/cursor.ts";
+import { beginReconcileCursor, decodeReconcileCursor, encodeReconcileCursor } from "../../../packages/events/reconcile-cursor.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -2617,6 +2618,48 @@ function dataRoutes(
         next_cursor: encodeEventCursor(last
           ? { ...marker, at: last.cursor_at, id: last.id }
           : marker),
+        has_more: scanned.length > limit,
+      };
+    },
+    "events.read",
+  );
+  route(
+    "GET",
+    "/events/reconcile",
+    "Scan currently accessible resource references for integration reconciliation",
+    async (q, a, r) => {
+      const p = query(r);
+      const limit = z.coerce.number().int().min(1).max(100)
+        .default(50).parse(p.limit);
+      const state = p.cursor
+        ? decodeReconcileCursor(p.cursor, a.tenant_id, a.user_id)
+        : beginReconcileCursor(a.tenant_id, a.user_id);
+
+      // The query consumes bounded raw scan positions under enforced tenant
+      // RLS, even for inaccessible resources. Never put scanned IDs or
+      // inaccessible totals in the response or an unencrypted cursor.
+      const scanned = (await q.query(
+        "SELECT id,kind,parent_id,updated_at FROM resources" +
+        " WHERE tenant_id=$1 AND id>$2::uuid AND deleted_at IS NULL" +
+        " ORDER BY id LIMIT $3",
+        [a.tenant_id, state.after, limit + 1],
+      )).rows;
+      const batch = scanned.slice(0, limit);
+      const resources = [];
+      for (const item of batch) {
+        if (a.scopes && !a.scopes.includes(pageScope(item.kind))) continue;
+        if (!(await access(q, a, item.id))) continue;
+        resources.push({
+          id: item.id, kind: item.kind, parent_id: item.parent_id,
+          updated_at: item.updated_at,
+        });
+      }
+      const last = batch.at(-1);
+      return {
+        resources,
+        next_cursor: encodeReconcileCursor({
+          ...state, after: last?.id || state.after,
+        }),
         has_more: scanned.length > limit,
       };
     },
