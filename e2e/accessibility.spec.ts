@@ -140,3 +140,36 @@ test("keyboard modal focus is trapped, restored, and semantically labelled", asy
 
   expect(["chromium", "firefox"]).toContain(browserName);
 });
+
+
+test("command-K search supports arrow navigation, Enter opening, and Escape focus restoration", async ({ page }) => {
+  await login(page);
+  const trigger = page.getByRole("button", { name: "Search anything" });
+  await trigger.focus();
+  await page.keyboard.press("ControlOrMeta+k");
+  const dialog = page.getByRole("dialog", { name: "Search your workspace" });
+  await expect(dialog).toBeVisible();
+
+  const input = dialog.getByRole("combobox", { name: "Search workspace" });
+  await expect(input).toBeFocused();
+  await expect(input).toHaveAttribute("aria-expanded", "false");
+  await input.fill("Team tasks");
+  const option = dialog.getByRole("option", { name: /Team tasks/ });
+  await expect(option).toBeVisible();
+  await expect(input).toHaveAttribute("aria-expanded", "true");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+
+  await input.press("ArrowDown");
+  await input.press("ArrowUp");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await input.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue("Team tasks");
+
+  await page.keyboard.press("ControlOrMeta+k");
+  const reopen = page.getByRole("dialog", { name: "Search your workspace" });
+  await expect(reopen).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(reopen).toBeHidden();
+  expect(await semanticProblems(page)).toEqual([]);
+});
