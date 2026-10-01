@@ -25,8 +25,7 @@ test("tenant provider secrets are authenticated and cryptographically tenant-bou
     assert.throws(() => openTenantOidcSecret(sealed, anotherTenant, provider));
     assert.throws(() => openTenantOidcSecret(sealed, tenant, anotherProvider));
     const altered = sealed.split(".");
-    altered[3] = altered[3].slice(0, -1) +
-      (altered[3].endsWith("A") ? "B" : "A");
+    altered[3] = (altered[3][0] === "A" ? "B" : "A") + altered[3].slice(1);
     assert.throws(() => openTenantOidcSecret(altered.join("."), tenant, provider));
     assert.throws(() => openTenantOidcSecret("not-an-envelope", tenant, provider));
   } finally {
