@@ -1150,10 +1150,10 @@ export async function registerScim(app: FastifyInstance, db: Database) {
 
           if (filter?.field === "displayname") {
             values.push(filter.value);
-            where.push(`lower(g.display_name)=lower(${values.length})`);
+            where.push(`lower(g.display_name)=lower($${values.length})`);
           } else if (filter?.field === "externalid") {
             values.push(filter.value);
-            where.push(`g.external_id=${values.length}`);
+            where.push(`g.external_id=$${values.length}`);
           }
 
           const total = Number(
@@ -1173,7 +1173,7 @@ export async function registerScim(app: FastifyInstance, db: Database) {
                  FROM scim_groups g
                  WHERE ${where.join(" AND ")}
                  ORDER BY lower(g.display_name),g.id
-                 LIMIT ${values.length + 1} OFFSET ${values.length + 2}`,
+                 LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
                 queryValues,
               )
             ).rows,
