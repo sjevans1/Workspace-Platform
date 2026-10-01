@@ -659,6 +659,7 @@ function SearchDialog({ close }: { close: () => void }) {
         <Search size={20} />
         <input
           autoFocus
+          aria-label="Search workspace"
           placeholder="Find pages, projects, or files…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
