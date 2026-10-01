@@ -1155,8 +1155,15 @@ test("W06 browser: configure numeric formula, render computed result and recompu
     .fill("Gross");
   await dialog.getByRole("combobox", { name: "Property type" }).nth(3)
     .selectOption("formula");
-  await dialog.getByRole("textbox", { name: "Gross formula expression" })
-    .fill("[units] * [price] + 2");
+  const expression = dialog.getByRole("textbox",
+    { name: "Gross formula expression" });
+  await expression.fill("");
+  await dialog.getByRole("button", { name: "Insert number field Units" }).click();
+  await expect(expression).toHaveValue("[units]");
+  await expression.fill("[units] * ");
+  await dialog.getByRole("button", { name: "Insert number field Price" }).click();
+  await expect(expression).toHaveValue("[units] * [price]");
+  await expression.fill("[units] * [price] + 2");
   await dialog.getByRole("button", { name: "Save properties" }).click();
   await expect(dialog).toBeHidden();
 
