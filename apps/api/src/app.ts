@@ -3,6 +3,7 @@ import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import { normalizedNetworkIdentity } from "../../../packages/security/rate-network.ts";
 import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
 import Redis from "ioredis";
@@ -222,7 +223,7 @@ export async function buildApp(
     timeWindow: "1 minute",
     ...(redis ? { redis } : {}),
     keyGenerator: async (r) => {
-      const networkKey = "ip:" + r.ip;
+      const networkKey = "ip:" + normalizedNetworkIdentity(r.ip);
       if (
         !["GET", "HEAD"].includes(r.method) ||
         !r.url.startsWith("/api/v1/") ||
