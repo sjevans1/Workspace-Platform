@@ -165,6 +165,24 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
       .getByText(newTask, { exact: true }),
   ).toBeVisible();
   await page.screenshot({ path: "docs/screenshots/board.png", fullPage: true });
+  // Calendar view shares the same saved permissions and database record model.
+  const browserNow = new Date();
+  const dateInMonth =
+    browserNow.getFullYear() + "-" +
+    String(browserNow.getMonth() + 1).padStart(2, "0") + "-15";
+  const taskCard = page.locator(".board-card").filter({ hasText: newTask });
+  await taskCard.getByLabel("Due date", { exact: true }).fill(dateInMonth);
+  await taskCard.getByLabel("Due date", { exact: true }).press("Tab");
+  await expect(taskCard.getByLabel("Due date", { exact: true })).toHaveValue(dateInMonth);
+  await page.getByRole("button", { name: "Calendar", exact: true }).click();
+  const calendarEvent = page.locator(".calendar-event").filter({ hasText: newTask });
+  await expect(calendarEvent).toBeVisible();
+  await page.getByRole("button", { name: "Next month" }).click();
+  await expect(calendarEvent).toHaveCount(0);
+  await page.getByRole("button", { name: "Previous month" }).click();
+  await expect(calendarEvent).toBeVisible();
+  await page.screenshot({ path: "docs/screenshots/calendar.png", fullPage: true });
+
   await page.setViewportSize({ width: 390, height: 844 });
   const closeSidebar = page.getByRole("button", {
     name: "Close sidebar",
