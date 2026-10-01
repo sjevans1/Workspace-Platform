@@ -130,11 +130,19 @@ test("ClamAV client treats malformed replies and unavailable daemon as scanner f
   await assert.rejects(unavailable.health(), AntivirusUnavailableError);
 });
 
-test("disabled antivirus mode is explicit and deterministic", async () => {
+test("disabled antivirus mode is explicit for development and refused in production", async () => {
   const antivirus = createAntivirus({ ANTIVIRUS_MODE: "disabled" });
   assert.equal(antivirus.enabled, false);
   await antivirus.health();
   assert.deepEqual(await antivirus.scan(Buffer.from("anything")), {
     status: "clean",
   });
+  assert.throws(
+    () =>
+      createAntivirus({
+        ANTIVIRUS_MODE: "disabled",
+        NODE_ENV: "production",
+      }),
+    /not allowed when NODE_ENV=production/,
+  );
 });
