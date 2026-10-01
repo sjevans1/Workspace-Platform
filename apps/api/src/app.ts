@@ -90,10 +90,11 @@ import {
   purgeDeletedResource,
 } from "./domain.ts";
 import {
-  indexedRecordText, redactRelationSchema, redactRelationValues,
-  validateRelationSchema, validateRelationWrites,
+  indexedRecordText, validateRelationSchema, validateRelationWrites,
 } from "./relations.ts";
-import { computedFormulaValues, validateFormulaDefinitions } from "../../../packages/formulas/index.ts";
+import { validateFormulaDefinitions } from "../../../packages/formulas/index.ts";
+import { presentedRecordValues, presentedSchema,
+  validateRollupDefinitions } from "./rollups.ts";
 type Request = FastifyRequest & {
   actor: Actor;
   sessionToken: string;
@@ -1531,7 +1532,7 @@ function dataRoutes(
       return {
         ...n,
         ...d,
-        properties: await redactRelationSchema(q, a, d.properties),
+        properties: await presentedSchema(q, a, d.properties),
         views: (
           await q.query(
             "SELECT * FROM database_views WHERE database_id=$1 ORDER BY name",
@@ -1635,6 +1636,7 @@ function dataRoutes(
       ]);
       await validateRelationSchema(q, a, id(r), v.properties);
       validateFormulaDefinitions(v.properties);
+      await validateRollupDefinitions(q, a, v.properties);
       for (const row of (
         await q.query(
           "SELECT values FROM database_records WHERE database_id=$1",
@@ -1750,9 +1752,8 @@ function dataRoutes(
       assert(v, 404, "Record not found");
       return {
         ...n, ...v,
-        properties: await redactRelationSchema(q, a, v.properties),
-        values: computedFormulaValues(v.properties,
-          await redactRelationValues(q, a, v.properties, v.values)),
+        properties: await presentedSchema(q, a, v.properties),
+        values: await presentedRecordValues(q, a, v.properties, v.values),
       };
     },
     "databases.read",
@@ -1801,8 +1802,7 @@ function dataRoutes(
       );
       await emit(q, a, "record.updated", n.id, d.revision + 1);
       return { ...n,
-        values: computedFormulaValues(d.properties,
-          await redactRelationValues(q, a, d.properties, values)),
+        values: await presentedRecordValues(q, a, d.properties, values),
         revision: d.revision + 1 };
     },
     "databases.write",
@@ -1823,7 +1823,7 @@ function dataRoutes(
         assert(d, 404, "Database not found");
         const keys = d.properties.map((p: any) => p.id);
         for (const field of [...v.config.filters, ...v.config.sort])
-          assert(!["relation", "formula"].includes(
+          assert(!["relation", "formula", "rollup"].includes(
             d.properties.find((p: any) => p.id === field.property)?.type),
             400, "Relation sorting/filtering requires permission-aware indexing");
         for (const k of [
