@@ -268,16 +268,25 @@ async function reconcileScimRole(q: Query, scimUserId: string) {
          JOIN scim_groups g ON g.id=gm.group_id AND g.deleted_at IS NULL
          JOIN scim_group_role_mappings rm ON rm.group_id=gm.group_id
          WHERE gm.scim_user_id=s.id AND rm.role='member'
-       ) AS member_group
+       ) AS member_group,
+       EXISTS(
+         SELECT 1
+         FROM scim_group_members gm
+         JOIN scim_groups g ON g.id=gm.group_id AND g.deleted_at IS NULL
+         JOIN scim_group_role_mappings rm ON rm.group_id=gm.group_id
+         WHERE gm.scim_user_id=s.id AND rm.role='guest'
+       ) AS guest_group
      FROM scim_users s
      JOIN memberships m ON m.tenant_id=s.tenant_id AND m.user_id=s.user_id
      WHERE s.id=$1 AND s.deleted_at IS NULL`,
     [scimUserId],
   );
   if (!state || ["owner", "admin"].includes(state.current_role)) return;
-  const role = state.base_role === "member" || state.member_group
+  const role = state.member_group
     ? "member"
-    : "guest";
+    : state.guest_group
+      ? "guest"
+      : state.base_role;
   await q.query(
     `UPDATE memberships m
      SET role=$2
