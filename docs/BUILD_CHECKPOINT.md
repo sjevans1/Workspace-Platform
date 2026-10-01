@@ -193,6 +193,14 @@ This design deliberately scans the same image later exercised by Docker/Chromium
 
 PR #30 passed final-head GitHub Actions run 36815628321 and was squash-merged to `main` at `f3ac59164f82d7736f391e18f2e924c91fda4603`. The final image is explicitly verified to exclude npm/npx, Playwright and the TypeScript compiler; a CycloneDX container SBOM is generated; Trivy reports no blocking fixable HIGH/CRITICAL OS/library findings; and all backend, deployment, Chromium, Chromium+Firefox accessibility and trusted-TLS gates remain green.
 
+## Active hardening slice: encrypted backups and at-rest boundaries
+
+Workspace logical backup files are being moved from plaintext JSON to an authenticated AES-256-GCM envelope (`openjm-backup-envelope-v1`) using a dedicated 256-bit `BACKUP_ENCRYPTION_KEY`. The key is generated independently from `ENCRYPTION_KEY` and is scoped to the Compose ops container rather than ordinary API/web/collaboration/worker processes. Wrong keys and modified ciphertext fail authenticated decryption before restore. Legacy plaintext archives are refused by default and require an explicit one-time `ALLOW_LEGACY_PLAINTEXT_BACKUP=true` migration override.
+
+Regression coverage checks that known tenant/page/user/file content does not appear in the serialized encrypted archive, wrong keys and tampering fail, missing keys fail closed, explicit legacy migration still works, and generated application/backup keys are distinct 256-bit values stored in a mode-0600 environment file.
+
+The at-rest acceptance document explicitly separates application-enforced backup encryption from deployment-level encryption for PostgreSQL, live attachment storage, Caddy private-key storage, host swap and provider object storage. This slice remains **in progress** until final-head native PostgreSQL tests and all deployment/browser/TLS/release-image gates pass.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
