@@ -177,6 +177,12 @@ Attachment adversarial tests now reject active/unsupported extensions, invalid i
 
 PR #27 passed final-head GitHub Actions run 36813254755 and was squash-merged to `main` at `bf3b8184a4454f048223dc6131d20c57e8ba3741`. Backend passed 42/42 native PostgreSQL tests, including webhook redirect and malicious-attachment regressions. Deployment passed the invitation URL scrub in the full Chromium workflow and the hardened TLS/security-header gate. Malware scanning/CDR, nonce/hash CSP, release-image vulnerability scanning and customer-specific penetration testing remain separate production-hardening work.
 
+## Active hardening slice: browser accessibility and focus management
+
+The shared modal component now traps keyboard focus, preserves child autofocus, closes with Escape and restores focus to the opener on close. Deployed browser coverage verifies Shift+Tab/Tab wrapping, Escape and opener restoration. A semantic browser audit checks accessible names for visible interactive controls, real labels/ARIA names for form controls, image alt attributes and duplicate DOM IDs across the home shell, search dialog and Settings. This audit exposed and fixed the workspace search field's placeholder-only labeling.
+
+The slice is intentionally dependency-free and does not claim WCAG certification. Formal axe/rule-engine scanning, screen-reader testing, full editor/database keyboard coverage, contrast/reflow/reduced-motion review and Firefox/WebKit acceptance remain future work. This slice remains **in progress** until final-head native PostgreSQL/build and deployed browser/TLS gates pass.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
