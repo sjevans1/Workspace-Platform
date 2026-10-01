@@ -77,7 +77,7 @@ export function decodeEventCursor(
     );
     if (decoded.tenant !== tenant || decoded.principal !== principal)
       throw Error("Wrong cursor principal");
-    if (new Date(decoded.at).toISOString() !== decoded.at)
+    if (Number.isNaN(Date.parse(decoded.at)))
       throw Error("Invalid datetime");
     return decoded;
   } catch {
