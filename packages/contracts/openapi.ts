@@ -127,6 +127,27 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
     },
     response: { 200: { type: "array", items: resource }, ...errors },
   },
+  "GET /resources/:id/backlinks": {
+    params: idParams,
+    response: {
+      200: {
+        type: "array",
+        maxItems: 40,
+        items: {
+          type: "object",
+          required: ["id", "title", "kind", "updated_at"],
+          additionalProperties: false,
+          properties: {
+            id: uuid,
+            title: { type: "string" },
+            kind: { enum: ["page", "record"] },
+            updated_at: dateTime,
+          },
+        },
+      },
+      ...errors,
+    },
+  },
   "GET /pages/:id/content": {
     params: idParams,
     response: { 200: pageContent, ...errors },
