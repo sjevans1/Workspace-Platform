@@ -5,6 +5,7 @@ const email = "browser@example.test",
 
 async function login(page: Page) {
   await page.goto("/");
+  await expect(page.locator("h1")).toBeVisible();
   if (
     await page
       .getByRole("heading", { name: "Make yourself at home." })
