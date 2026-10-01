@@ -183,22 +183,22 @@ try {
       missing,
       "Recovery bucket already contains a generated acceptance key",
     );
+  // Register generated recovery keys before any target write so cleanup remains
+  // bounded and effective even if a provider fails partway through restore.
+  createdRecoveryKeys.push(...keys);
 
   const archive = await backup(sourcePg.url, source);
   assert.equal(Object.keys(archive.objects).length, 2);
 
   await recovery.put(keys[0], Buffer.from("collision sentinel"), "text/plain");
-  createdRecoveryKeys.push(keys[0]);
   await assert.rejects(
     restore(recoveryPg.url, archive, recovery),
     /destination is not empty/,
     "Restore must refuse a colliding object key",
   );
   await safeDelete(recovery, keys[0]);
-  createdRecoveryKeys.splice(createdRecoveryKeys.indexOf(keys[0]), 1);
 
   await restore(recoveryPg.url, archive, recovery);
-  createdRecoveryKeys.push(...keys);
 
   const recovered = await recoveryDb.tenant(tenant, (q) =>
     q.query(
