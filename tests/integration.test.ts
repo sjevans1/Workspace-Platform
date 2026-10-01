@@ -1154,6 +1154,71 @@ test("canonical replacement, body search, versions and restore", async () => {
   });
   assert.equal((await ok("GET", `/pages/${page.id}/content`)).epoch, 3);
 });
+test("page backlinks use live canonical links and never reveal restricted sources", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "Link target",
+  });
+  const source = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "Accessible source",
+  });
+  const privateSource = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "Secret referencing source",
+  });
+  const textOnly = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "Plain mention source",
+  });
+  const external = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "External URL source",
+  });
+  const link = { type: "link", href: "/?page=" + target.id,
+    content: [{ type: "text", text: "Linked page", styles: {} }] };
+  for (const src of [source, privateSource]) {
+    await ok("PATCH", `/pages/${src.id}/content`, {
+      blocks: [{ type: "paragraph", content: [link] }],
+      expected_revision: 1,
+    });
+  }
+  await ok("PATCH", `/pages/${textOnly.id}/content`, {
+    blocks: [{ type: "paragraph", content: "Plain mention /?page=" + target.id }],
+    expected_revision: 1,
+  });
+  await ok("PATCH", `/pages/${external.id}/content`, {
+    blocks: [{ type: "paragraph", content: [{
+      type: "link",
+      href: "https://external.example.test/?page=" + target.id,
+      content: "Not a Workspace reference",
+    }] }],
+    expected_revision: 1,
+  });
+  const ownerBacklinks = await ok("GET", `/resources/${target.id}/backlinks`);
+  assert.deepEqual(
+    ownerBacklinks.map((x: any) => x.id).sort(),
+    [source.id, privateSource.id].sort(),
+  );
+  await permissionPatch(`/resources/${privateSource.id}/permissions`, {
+    inherit: false, grants: [],
+  });
+  const memberBacklinks = await ok("GET", `/resources/${target.id}/backlinks`,
+    undefined, member);
+  assert.deepEqual(memberBacklinks.map((x: any) => x.id), [source.id]);
+  assert.doesNotMatch(JSON.stringify(memberBacklinks), /Secret referencing source/);
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks`, undefined, guest)).statusCode, 404);
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks`, undefined, other)).statusCode, 404);
+  assert.equal((await req("GET",
+    `/resources/${randomUUID()}/backlinks`)).statusCode, 404);
+  assert.equal((await req("GET",
+    `/resources/${space.id}/backlinks`)).statusCode, 404);
+  // Removing a link immediately removes the backlink on the next read.
+  await ok("PATCH", `/pages/${source.id}/content`, {
+    blocks: [{ type: "paragraph", content: "Link removed" }],
+    expected_revision: 2,
+  });
+  const after = await ok("GET", `/resources/${target.id}/backlinks`,
+    undefined, member);
+  assert.deepEqual(after, []);
+});
 test("typed records, optimistic concurrency, saved filters and full bodies", async () => {
   database = await ok("POST", "/resources", {
     kind: "database",
