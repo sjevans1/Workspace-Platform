@@ -24,6 +24,9 @@
   handle /ready {
     reverse_proxy api:4000
   }
+  handle /metrics {
+    reverse_proxy api:4000
+  }
   handle {
     header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
     reverse_proxy web:3000
