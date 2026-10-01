@@ -13,6 +13,9 @@
   handle /api/* {
     reverse_proxy api:4000
   }
+  handle /scim/* {
+    reverse_proxy api:4000
+  }
   handle /health {
     reverse_proxy api:4000
   }
