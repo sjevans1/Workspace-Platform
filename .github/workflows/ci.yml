@@ -232,9 +232,9 @@ jobs:
           NODE
           echo "127.0.0.1 workspace.test" | sudo tee -a /etc/hosts
           docker compose up -d
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             all_healthy=1
-            for service in api collab worker; do
+            for service in api collab worker clamav; do
               id="$(docker compose ps -q "$service")"
               if [ -z "$id" ]; then all_healthy=0; continue; fi
               health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
