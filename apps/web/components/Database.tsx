@@ -21,13 +21,18 @@ export function PropertyInput({
   members = [],
   disabled = false,
   save,
+  databaseId,
 }: {
   p: any;
   value: any;
   members?: any[];
   disabled?: boolean;
+  databaseId?: string;
   save: (v: any) => void;
 }) {
+  if (p.type === "relation")
+    return <RelationInput p={p} value={value} disabled={disabled}
+      save={save} databaseId={databaseId} />;
   if (p.type === "checkbox")
     return (
       <input
@@ -116,6 +121,92 @@ export function PropertyInput({
     />
   );
 }
+function RelationInput({
+  p, value, disabled, save, databaseId,
+}: {
+  p: any; value: any; disabled: boolean; save: (value: any) => void;
+  databaseId?: string;
+}) {
+  const ids: string[] = Array.isArray(value) ? value : [];
+  const [labels, setLabels] = useState<Record<string, string>>({}),
+    [open, setOpen] = useState(false),
+    [search, setSearch] = useState(""),
+    [offset, setOffset] = useState(0),
+    [choices, setChoices] = useState<any[]>([]),
+    [more, setMore] = useState(false),
+    [error, setError] = useState("");
+  const idsKey = ids.join(",");
+  useEffect(() => {
+    if (!databaseId || !p.target_database_id || !idsKey) {
+      setLabels({});
+      return;
+    }
+    let canceled = false;
+    void api(`/databases/${databaseId}/relation-candidates?property=${encodeURIComponent(p.id)}&selected=${encodeURIComponent(idsKey)}`)
+      .then((result) => {
+        if (!canceled) setLabels(Object.fromEntries(
+          result.items.map((record: any) => [record.id, record.title])));
+      })
+      .catch(() => { if (!canceled) setLabels({}); });
+    return () => { canceled = true; };
+  }, [databaseId, p.target_database_id, p.id, idsKey]);
+  useEffect(() => {
+    if (!open || !databaseId || !p.target_database_id) return;
+    let canceled = false;
+    void api(`/databases/${databaseId}/relation-candidates?property=${encodeURIComponent(p.id)}&search=${encodeURIComponent(search)}&offset=${offset}`)
+      .then((result) => {
+        if (!canceled) {
+          setChoices(result.items);
+          setMore(result.has_more);
+          setError("");
+        }
+      })
+      .catch(() => {
+        if (!canceled) { setError("Unable to load permitted records"); setChoices([]); }
+      });
+    return () => { canceled = true; };
+  }, [open, databaseId, p.target_database_id, p.id, search, offset]);
+  if (!p.target_database_id)
+    return <span className="muted">Related database unavailable</span>;
+  return (
+    <div className="relation-input" role="group" aria-label={p.name}>
+      {ids.map((recordId) => (
+        <span className="relation-chip" key={recordId}>
+          <button type="button" disabled={!labels[recordId]}
+            aria-label={`Open related record ${labels[recordId] || ""}`}
+            onClick={() => go(recordId)}>
+            {labels[recordId] || "Related record"}
+          </button>
+          {!disabled && <button type="button"
+            aria-label={`Remove related record ${labels[recordId] || ""}`}
+            onClick={() => save(ids.filter((id) => id !== recordId))}>×</button>}
+        </span>
+      ))}
+      {!disabled && ids.length < 20 && <>
+        <button type="button" aria-label={`Add related record for ${p.name}`}
+          onClick={() => { setOpen(!open); setOffset(0); }}>
+          {open ? "Close picker" : "Add relation"}
+        </button>
+        {open && <div className="relation-picker">
+          <input aria-label={`Search related records for ${p.name}`}
+            value={search} placeholder="Find an accessible record"
+            onChange={(e) => { setSearch(e.target.value); setOffset(0); }} />
+          {error && <span role="alert">{error}</span>}
+          {choices.filter((choice) => !ids.includes(choice.id)).map((choice) =>
+            <button key={choice.id} type="button"
+              aria-label={`Link record ${choice.title}`}
+              onClick={() => { save([...ids, choice.id]); setOpen(false); }}>
+              {choice.title}
+            </button>)}
+          {more && <button type="button"
+            aria-label="More permitted related records"
+            onClick={() => setOffset(offset + 20)}>More</button>}
+        </div>}
+      </>}
+    </div>
+  );
+}
+
 export default function Database({
   id,
   editable,
@@ -396,6 +487,7 @@ export default function Database({
                             p={p}
                             value={row.values[p.id]}
                             members={members}
+                            databaseId={id}
                             disabled={!editable}
                             save={(value) => save(row, p.id, value)}
                           />
@@ -445,6 +537,7 @@ export default function Database({
                           p={p}
                           value={row.values[p.id]}
                           members={members}
+                          databaseId={id}
                           disabled={!editable}
                           save={(value) => save(row, p.id, value)}
                         />
