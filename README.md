@@ -32,7 +32,7 @@ Open **http://localhost:8080** and use `SETUP_TOKEN` from the generated `.env`. 
 
 ## What is implemented
 
-- Organisations, multiple workspaces, spaces, nested pages, favourites, search and trash.
+- Organisations, multiple workspaces, spaces, nested pages, **per-user recently viewed pages** (recorded on actual open and re-checked against current permissions), favourites, search and trash.
 - BlockNote Core editing, Yjs/Hocuspocus collaboration, presence, durable save acknowledgements and revision restore.
 - Typed databases with table and board views, inline edits, filtering, sorting, column settings and records that open as full pages.
 - Local authentication plus optional OpenID Connect/Keycloak SSO, invitation-backed SSO provisioning, real-provider back-channel logout, tenant-scoped SCIM 2.0 Users/Groups provisioning with explicit member/guest group-role mapping, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.

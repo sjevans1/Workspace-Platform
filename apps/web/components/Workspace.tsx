@@ -550,7 +550,7 @@ function Dashboard({
               ? "Start with a little structure."
               : screen === "trash"
                 ? "Trash"
-                : "Recently updated"}
+                : "Recently viewed"}
       </h1>
       <p className="lead">
         {screen === "home"
@@ -649,7 +649,7 @@ function Dashboard({
                     <strong>{n.title}</strong>
                     <span className="muted">
                       {n.kind === "database" ? "Database" : "Page"} ·{" "}
-                      {date(n.updated_at)}
+                      {date((screen === "recent" || screen === "home") ? (n.viewed_at || n.updated_at) : n.updated_at)}
                     </span>
                   </button>
                   {screen === "trash" && (
@@ -673,13 +673,15 @@ function Dashboard({
               title={
                 screen === "favourites"
                   ? "Keep the important pages close."
-                  : "A fresh start."
+                  : screen === "recent" || screen === "home"
+                    ? "No recently viewed pages yet."
+                    : "A fresh start."
               }
             >
               <p>
                 {screen === "favourites"
                   ? "Star any page to find it here."
-                  : "Create a page to start building shared context."}
+                  : "Open a page to see it here when you return."}
               </p>
             </Empty>
           )}
