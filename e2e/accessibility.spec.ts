@@ -43,7 +43,7 @@ async function login(page: Page) {
       }
       const retry = Number(loginResponse.headers()["retry-after"] || 0);
       const body = await loginResponse.json().catch(() => ({}));
-      const fromBody = Number(String(body.error || "").match(/retry in (\\d+) seconds?/i)?.[1] || 0);
+      const fromBody = Number(String(body.error || "").match(/retry in (\d+) seconds?/i)?.[1] || 0);
       const seconds = retry || fromBody || 10;
       expect(seconds, "Only bounded login backoff is supported in acceptance").toBeLessThanOrEqual(30);
       await page.waitForTimeout((seconds + 1) * 1000);
