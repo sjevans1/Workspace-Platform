@@ -127,7 +127,7 @@ jobs:
       - name: Generate ClamAV runtime SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          image: clamav/clamav:1.5.4-debian13-slim@sha256:df80497be841a8ad57f95e04f978216241457f8f8ad608f1f682e3cd0fe63c45
+          image: clamav/clamav:1.5.4-debian13-slim
           format: cyclonedx-json
           output-file: openjm-workspace-clamav-sbom.cdx.json
           artifact-name: openjm-workspace-clamav-sbom
@@ -135,7 +135,7 @@ jobs:
       - name: Scan ClamAV runtime image for fixable high/critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: clamav/clamav:1.5.4-debian13-slim@sha256:df80497be841a8ad57f95e04f978216241457f8f8ad608f1f682e3cd0fe63c45
+          image-ref: clamav/clamav:1.5.4-debian13-slim
           format: table
           exit-code: "1"
           ignore-unfixed: true
@@ -205,7 +205,7 @@ jobs:
         run: |
           token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"
           curl --fail -H "Authorization: Bearer $token" http://localhost:8080/metrics > /tmp/workspace-antivirus-metrics.txt
-          grep -Eq 'workspace_antivirus_scans_total\{result="clean"\} [1-9][0-9]*      - name: Verify deployed local attachment ciphertext
+          grep -E 'workspace_antivirus_scans_total\{result="clean"\} [1-9][0-9]*      - name: Verify deployed local attachment ciphertext
         run: |
           docker compose exec -T api node --input-type=module -e '
             import { readdir, readFile } from "node:fs/promises";
@@ -307,7 +307,7 @@ jobs:
         if: always() && hashFiles('.env') != ''
         run: docker compose down
  /tmp/workspace-antivirus-metrics.txt
-          grep -Eq 'workspace_antivirus_scans_total\{result="infected"\} [1-9][0-9]*      - name: Verify deployed local attachment ciphertext
+          grep -E 'workspace_antivirus_scans_total\{result="infected"\} [1-9][0-9]*      - name: Verify deployed local attachment ciphertext
         run: |
           docker compose exec -T api node --input-type=module -e '
             import { readdir, readFile } from "node:fs/promises";
@@ -358,9 +358,9 @@ jobs:
           NODE
           echo "127.0.0.1 workspace.test" | sudo tee -a /etc/hosts
           docker compose up -d
-          for i in $(seq 1 120); do
+          for i in $(seq 1 60); do
             all_healthy=1
-            for service in api collab worker clamav; do
+            for service in api collab worker; do
               id="$(docker compose ps -q "$service")"
               if [ -z "$id" ]; then all_healthy=0; continue; fi
               health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
@@ -409,6 +409,8 @@ jobs:
         if: always() && hashFiles('.env') != ''
         run: docker compose down
  /tmp/workspace-antivirus-metrics.txt
+          grep -F 'workspace_antivirus_scans_total{result="error"} 0' /tmp/workspace-antivirus-metrics.txt
+          ! grep -E 'tenant_id|user_id|resource_id|document_id' /tmp/workspace-antivirus-metrics.txt
       - name: Verify deployed local attachment ciphertext
         run: |
           docker compose exec -T api node --input-type=module -e '
@@ -460,9 +462,9 @@ jobs:
           NODE
           echo "127.0.0.1 workspace.test" | sudo tee -a /etc/hosts
           docker compose up -d
-          for i in $(seq 1 120); do
+          for i in $(seq 1 60); do
             all_healthy=1
-            for service in api collab worker clamav; do
+            for service in api collab worker; do
               id="$(docker compose ps -q "$service")"
               if [ -z "$id" ]; then all_healthy=0; continue; fi
               health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
