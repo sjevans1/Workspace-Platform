@@ -137,6 +137,10 @@ export function oidcFromConfig(settings: Readonly<OidcProviderSettings>): OidcPr
           500,
           "OIDC provider does not advertise the configured token authentication method",
         );
+        // openid-client does not require an ID Token signature check by default
+        // in the authorization-code flow. Verify the issuer's JWS against the
+        // advertised JWKS before accepting any token claims or userinfo.
+        client.enableNonRepudiationChecks(config);
         return config;
       }));
 
