@@ -1706,11 +1706,31 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
     client_secret: "test-only-credential-very-secret",
     scopes: ["openid", "profile", "email"],
   };
+  // Earlier integration scenarios intentionally revoke the original member
+  // session. Use a dedicated active non-admin principal for this regression.
+  const viewerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,password_hash) VALUES($1,$2,'IdP Viewer',NULL)",
+      [viewerId, viewerId + "@example.test"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, viewerId],
+    );
+  });
+  const viewerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, viewerId),
+  );
+  const viewer = {
+    cookie: "workspace_session=" + viewerToken,
+    csrf: csrf(viewerToken),
+  };
   try {
     assert.equal((await req("GET", "/identity/providers", undefined, null)).statusCode, 401);
-    assert.equal((await req("GET", "/identity/providers", undefined, member)).statusCode, 403);
+    assert.equal((await req("GET", "/identity/providers", undefined, viewer)).statusCode, 403);
     assert.equal(
-      (await req("POST", "/identity/providers", registration, member)).statusCode,
+      (await req("POST", "/identity/providers", registration, viewer)).statusCode,
       403,
     );
     const badSource = await req("POST", "/identity/providers", {
@@ -1774,7 +1794,7 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
       "DELETE", "/identity/providers/" + registered.id, undefined, other,
     );
     assert.equal(crossTenantRevoke.statusCode, 404, crossTenantRevoke.body);
-    assert.equal((await req("DELETE", "/identity/providers/" + otherRegistration.id, undefined, member)).statusCode, 403);
+    assert.equal((await req("DELETE", "/identity/providers/" + otherRegistration.id, undefined, viewer)).statusCode, 403);
 
     const revoked = await ok("DELETE", "/identity/providers/" + registered.id);
     assert.equal(revoked.ok, true);
