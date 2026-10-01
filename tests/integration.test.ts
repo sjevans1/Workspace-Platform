@@ -2797,6 +2797,21 @@ test("W05 relation references: write validation, ACL redaction, export, and sche
       values: { name: "Broken", client_ref: [randomUUID()] },
     })).statusCode, 404,
   );
+  const forbiddenView = await req("POST", `/databases/${projects.id}/views`, {
+    name: "Restricted reference search",
+    config: { type: "table", filters: [
+      { property: "client_ref", op: "contains", value: client.id },
+    ], sort: [] },
+  });
+  assert.equal(forbiddenView.statusCode, 400,
+    "raw relation filters must not reveal hidden references");
+  const forbiddenSort = await req("POST", `/databases/${projects.id}/views`, {
+    name: "Restricted reference sort",
+    config: { type: "table", filters: [],
+      sort: [{ property: "client_ref", direction: "asc" }] },
+  });
+  assert.equal(forbiddenSort.statusCode, 400,
+    "sorting relation UUIDs is not a supported ACL-safe operation");
   const project = await ok("POST", `/databases/${projects.id}/records`, {
     values: { name: "W05 Project Falcon", client_ref: [client.id] },
   });
