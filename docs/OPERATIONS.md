@@ -117,7 +117,7 @@ S3_SECRET_KEY=<dedicated-service-secret>
 S3_FORCE_PATH_STYLE=true
 ```
 
-Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. Object writes use the S3 If-None-Match condition so an existing key cannot be overwritten, matching local storage. The automated CI recovery drill passes against authenticated SeaweedFS 4.47; verify conditional PUT support and recovery against your selected S3 provider before rollout. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
+Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. Object writes use the S3 If-None-Match condition so an existing key cannot be overwritten, matching local storage. The automated CI recovery drill passes against authenticated SeaweedFS 4.47. For the selected production provider, use [Production S3/object-store acceptance](PRODUCTION_S3_ACCEPTANCE.md), which exercises the same immutable-write and backup/recovery contract without requiring bucket-creation privileges. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
 
 ## Webhooks
 
