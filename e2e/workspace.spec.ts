@@ -299,6 +299,54 @@ test("admin can create and revoke a SCIM connector from Settings", async ({
   expect(rejected.status()).toBe(401);
 });
 
+test("owner registers and revokes an inert tenant IdP through Settings without leaking the secret", async ({
+  page,
+}) => {
+  await login(page);
+  const previousMethods = await (await page.request.get("/api/v1/auth/methods")).json();
+
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
+  await page.getByRole("button", { name: "Integrations", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Single sign-on provider registrations" }),
+  ).toBeVisible();
+
+  const label = "Browser IdP " + randomUUID().slice(0, 8);
+  const clientSecret = "ci-test-oidc-secret-" + randomUUID();
+  const registration = page.getByRole("button", { name: "Register identity provider" });
+  await registration.click();
+  const modal = page.getByRole("dialog", { name: "Register identity provider" });
+  await modal.getByLabel("Name", { exact: true }).fill(label);
+  await modal.getByLabel("Issuer URL (HTTPS)").fill("https://login.example.test/realm-e2e");
+  await modal.getByLabel("Client ID", { exact: true }).fill("workspace-browser-client");
+  await modal.getByLabel("Token endpoint authentication").selectOption("client_secret_post");
+  await modal.getByLabel("Client secret (stored encrypted)").fill(clientSecret);
+  await modal.getByRole("button", { name: "Register provider" }).click();
+  await expect(modal).toBeHidden();
+
+  const row = page.locator(".integration-row").filter({ hasText: label });
+  await expect(row).toContainText("Registered — sign-in disabled");
+  await expect(row).toContainText("client_secret_post");
+  expect(await page.locator("body").innerText()).not.toContain(clientSecret);
+  const apiResponse = await page.request.get("/api/v1/identity/providers");
+  expect(apiResponse.status()).toBe(200);
+  const raw = await apiResponse.text();
+  expect(raw).not.toContain("client_secret_encrypted");
+  expect(raw).not.toContain(clientSecret);
+  const providers = JSON.parse(raw);
+  const idp = providers.find((p: any) => p.label === label);
+  expect(idp.enabled).toBe(false);
+  expect(idp.client_id).toBe("workspace-browser-client");
+  expect(idp.revoked_at).toBeNull();
+
+  await row.getByRole("button", { name: "Revoke identity provider " + label }).click();
+  await expect(row).toContainText("Revoked");
+  await expect(row.getByRole("button", { name: "Revoke identity provider " + label })).toHaveCount(0);
+  const after = await (await page.request.get("/api/v1/identity/providers")).json();
+  expect(after.find((p: any) => p.id === idp.id).revoked_at).toBeTruthy();
+  expect(await (await page.request.get("/api/v1/auth/methods")).json()).toEqual(previousMethods);
+});
+
 test("distinct users: invitation, live view-only access, revocation and recovery", async ({
   page,
   browser,
