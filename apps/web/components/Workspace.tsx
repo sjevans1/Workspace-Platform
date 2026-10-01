@@ -214,7 +214,7 @@ export default function Workspace() {
   if (!me)
     return (
       <>
-        {bootstrapError ? recovery : <Login setup={setup} brand={brand} auth={authMethods} done={init} />}
+        {bootstrapError ? recovery : <Login setup={setup} brand={brand} auth={authMethods} done={init} theme={resolvedTheme} />}
         {toast && (
           <div className="toast" role="alert">
             {toast}
@@ -981,11 +981,13 @@ function Login({
   brand,
   auth,
   done,
+  theme,
 }: {
   setup: boolean;
   brand: any;
   auth: any;
   done: () => Promise<void>;
+  theme: "light" | "dark";
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -1048,8 +1050,12 @@ function Login({
     >
       <section className="login-card">
         <div className="brand">
-          {brand.logoLight ? (
-            <img src={brand.logoLight} alt="" />
+          {(theme === "dark" && brand.logoDark) || brand.logoLight ? (
+            <img
+              src={(theme === "dark" && brand.logoDark) || brand.logoLight}
+              alt=""
+              className={theme === "dark" && !brand.logoDark ? "dark-logo-fallback" : undefined}
+            />
           ) : (
             <div className="brand-mark">✳</div>
           )}
