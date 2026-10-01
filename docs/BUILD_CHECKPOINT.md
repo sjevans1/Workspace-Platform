@@ -8,7 +8,7 @@ Build the self-hosted OpenJM Workspace first pass from the Astra handoff. The us
 
 ## Verified baseline and evidence
 
-Current verified production-hardening baseline: PR #32 merge `ab9d9fd8cdfded1c558aadc5360bb97ce9081063` with final-head CI https://github.com/sjevans1/Workspace-Platform/actions/runs/36819278521.
+Current verified production-hardening baseline: PR #35 merge `1994cc1f1f749a905bd87d07fe067996cc4b3543` with final-head CI https://github.com/sjevans1/Workspace-Platform/actions/runs/36823852010.
 
 - Backend job passed: 45 native PostgreSQL tests, TypeScript, encrypted S3 acceptance and production build.
 - Deployment job passed: Docker image, migrations, full Compose startup and readiness.
