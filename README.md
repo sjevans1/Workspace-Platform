@@ -72,6 +72,7 @@ The tests use isolated PGlite instances by default. Set `TEST_DATABASE_URL` to a
 - [Operations and restore procedure](docs/OPERATIONS.md)
 - [Operational tenant provisioning](docs/TENANT_PROVISIONING.md)
 - [External monitoring and alerts](docs/MONITORING.md)
+- [Adversarial security acceptance](docs/SECURITY_ACCEPTANCE.md)
 - [Production S3/object-store acceptance](docs/PRODUCTION_S3_ACCEPTANCE.md)
 - [Acceptance and known gaps](docs/ACCEPTANCE.md)
 - [Third-party licenses](THIRD_PARTY_LICENSES.md) and [CycloneDX SBOM](docs/sbom.cdx.json)
