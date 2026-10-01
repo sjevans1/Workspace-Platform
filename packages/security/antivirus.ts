@@ -94,7 +94,11 @@ export function createAntivirus(
   if (!["required", "disabled"].includes(mode))
     throw new Error("ANTIVIRUS_MODE must be required or disabled");
 
-  if (mode === "disabled")
+  if (mode === "disabled") {
+    if (env.NODE_ENV === "production")
+      throw new Error(
+        "ANTIVIRUS_MODE=disabled is not allowed when NODE_ENV=production",
+      );
     return {
       enabled: false,
       async scan() {
@@ -102,6 +106,7 @@ export function createAntivirus(
       },
       async health() {},
     };
+  }
 
   const host = env.ANTIVIRUS_HOST?.trim() || "clamav",
     port = positiveInteger(env.ANTIVIRUS_PORT, 3310, 1, 65535),
