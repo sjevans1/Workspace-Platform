@@ -98,6 +98,23 @@ jobs:
           docker compose config --quiet
       - name: Build application container
         run: docker compose build api
+      - name: Generate container SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: openjm-workspace:local
+          format: cyclonedx-json
+          output-file: openjm-workspace-container-sbom.cdx.json
+          artifact-name: openjm-workspace-container-sbom
+          upload-artifact: true
+      - name: Scan release image for fixable high/critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: openjm-workspace:local
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
       - name: Start deployment
         run: |
           docker compose up -d
