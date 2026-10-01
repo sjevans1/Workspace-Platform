@@ -200,7 +200,11 @@ export async function buildApp(
         }
       : false,
     bodyLimit: 6291456,
-    trustProxy: proxyMode === "1" ? 1 : false,
+    // Fastify v5 accepts an explicit trust function; only hop 0 is Caddy.
+    // Any additional upstream XFF entries remain untrusted.
+    trustProxy: proxyMode === "1"
+      ? (_address: string, hop: number) => hop === 0
+      : false,
     requestIdHeader: false,
   });
   const redis = process.env.REDIS_URL
