@@ -4,7 +4,7 @@ A self-hosted, white-label workspace for shared knowledge, collaborative pages a
 
 **Status: working alpha, not the completed production MVP.** The backend, collaboration protocol, tenant isolation and backup round trip have automated coverage. See [acceptance status and remaining work](docs/ACCEPTANCE.md) for the exact verification boundary.
 
-[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36797135204): 36 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and the complete desktop/mobile Chromium workflow. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff. Real Keycloak 26.7.4 login/provisioning and no-workaround back-channel logout have also passed on the disposable WSL2 host; directory/SCIM lifecycle remains the next enterprise identity gap.
+[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36801538725): 37 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and three deployed Chromium workflows including SCIM connector administration. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff. Real Keycloak 26.7.4 login/provisioning and no-workaround back-channel logout have also passed on the disposable WSL2 host; SCIM Users provisioning/offboarding is now implemented and Groups/role mapping is the next enterprise identity gap.
 
 ## Start locally
 
@@ -35,7 +35,7 @@ Open **http://localhost:8080** and use `SETUP_TOKEN` from the generated `.env`. 
 - Organisations, multiple workspaces, spaces, nested pages, favourites, search and trash.
 - BlockNote Core editing, Yjs/Hocuspocus collaboration, presence, durable save acknowledgements and revision restore.
 - Typed databases with table and board views, inline edits, filtering, sorting, column settings and records that open as full pages.
-- Local authentication plus optional OpenID Connect/Keycloak SSO, invitation-backed SSO provisioning, real-provider back-channel logout, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.
+- Local authentication plus optional OpenID Connect/Keycloak SSO, invitation-backed SSO provisioning, real-provider back-channel logout, tenant-scoped SCIM 2.0 Users provisioning/offboarding, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.
 - Page discussions and mentions, private file attachments, Markdown/CSV imports and Markdown/CSV/JSON exports.
 - Runtime branding, scoped REST API, transactional event outbox, signed webhooks with retries, and audit records.
 - Local and S3-compatible storage adapters, migrations, logical backup/restore, container configuration and CI.
@@ -67,6 +67,7 @@ The tests use isolated PGlite instances by default. Set `TEST_DATABASE_URL` to a
 
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)
 - [Identity and enterprise SSO](docs/IDENTITY.md)
+- [SCIM directory lifecycle](docs/SCIM.md)
 - [API and Intelligence integration](docs/INTEGRATION.md)
 - [Operations and restore procedure](docs/OPERATIONS.md)
 - [Acceptance and known gaps](docs/ACCEPTANCE.md)
