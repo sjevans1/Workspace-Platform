@@ -229,7 +229,64 @@ test("admin can create and revoke a SCIM connector from Settings", async ({
   expect(discovery.ok()).toBeTruthy();
   expect(discovery.headers()["content-type"]).toContain("application/scim+json");
 
+  const directoryEmail = `browser-directory-${randomUUID()}@example.test`;
+  const createdUserResponse = await page.request.post("/scim/v2/Users", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/scim+json",
+    },
+    data: {
+      schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+      userName: directoryEmail,
+      displayName: "Browser Directory User",
+      emails: [{ value: directoryEmail, primary: true }],
+      active: true,
+    },
+  });
+  expect(createdUserResponse.status()).toBe(201);
+  const directoryUser = await createdUserResponse.json();
+
+  const groupName = `Browser Directory Group ${randomUUID().slice(0, 8)}`;
+  const createdGroupResponse = await page.request.post("/scim/v2/Groups", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/scim+json",
+    },
+    data: {
+      schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+      displayName: groupName,
+      members: [{ value: directoryUser.id }],
+    },
+  });
+  expect(createdGroupResponse.status()).toBe(201);
+
   await secret.getByRole("button", { name: "Close dialog" }).click();
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Settings & members", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Integrations", exact: true }).click();
+
+  const groupRole = page.getByLabel(`Role mapping for ${groupName}`, {
+    exact: true,
+  });
+  await expect(groupRole).toHaveValue("");
+  await groupRole.selectOption("member");
+  await expect(groupRole).toHaveValue("member");
+  let directoryMembers = await (
+    await page.request.get("/api/v1/members")
+  ).json();
+  expect(
+    directoryMembers.find((item: any) => item.email === directoryEmail)?.role,
+  ).toBe("member");
+
+  await groupRole.selectOption("");
+  await expect(groupRole).toHaveValue("");
+  directoryMembers = await (await page.request.get("/api/v1/members")).json();
+  expect(
+    directoryMembers.find((item: any) => item.email === directoryEmail)?.role,
+  ).toBe("guest");
+
   const row = page.locator(".integration-row").filter({ hasText: label });
   await expect(row).toContainText("Default role: guest");
   await row.getByRole("button", { name: "Revoke", exact: true }).click();
