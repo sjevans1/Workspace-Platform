@@ -57,7 +57,7 @@ services:
   migrate:
     <<: *app
     restart: "no"
-    command: [npm, run, migrate]
+    command: [node, --import, tsx, packages/database/migrate.ts]
     environment:
       MIGRATION_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/workspace
       RUNTIME_DB_PASSWORD: ${RUNTIME_DB_PASSWORD}
@@ -65,7 +65,7 @@ services:
       postgres: { condition: service_healthy }
   api:
     <<: *app
-    command: [npm, run, "start:api"]
+    command: [node, --import, tsx, apps/api/src/main.ts]
     volumes: [files:/data/files]
     environment:
       <<: *runtime
@@ -98,7 +98,7 @@ services:
       retries: 5
   collab:
     <<: *app
-    command: [npm, run, "start:collab"]
+    command: [node, --import, tsx, apps/collab/src/main.ts]
     environment:
       <<: *runtime
       COLLAB_HEALTH_PORT: "1235"
@@ -119,7 +119,7 @@ services:
       start_period: 5s
   worker:
     <<: *app
-    command: [npm, run, "start:worker"]
+    command: [node, --import, tsx, apps/worker/src/main.ts]
     volumes: [files:/data/files]
     environment:
       <<: *runtime
@@ -143,7 +143,7 @@ services:
       start_period: 12s
   web:
     <<: *app
-    command: [npm, run, start, -w, apps/web]
+    command: [node, node_modules/next/dist/bin/next, start, apps/web, --hostname, 0.0.0.0]
     environment:
       API_INTERNAL_URL: http://api:4000
     depends_on:
