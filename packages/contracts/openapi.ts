@@ -223,6 +223,42 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
       ...errors,
     },
   },
+  "GET /events/reconcile": {
+    querystring: {
+      type: "object",
+      properties: {
+        cursor: { type: "string", minLength: 1, maxLength: 2048 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+    response: {
+      200: {
+        type: "object",
+        required: ["resources", "next_cursor", "has_more"],
+        properties: {
+          resources: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["id", "kind", "parent_id", "updated_at"],
+              properties: {
+                id: uuid,
+                kind: { enum: ["workspace", "space", "page", "database", "record"] },
+                parent_id: { anyOf: [uuid, { type: "null" }] },
+                updated_at: dateTime,
+              },
+              additionalProperties: false,
+            },
+          },
+          next_cursor: { type: "string" },
+          has_more: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      ...errors,
+    },
+  },
   "POST /imports": {
     body: {
       type: "object",
