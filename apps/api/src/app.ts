@@ -1500,14 +1500,17 @@ function dataRoutes(
         "SELECT id,title FROM resources WHERE kind='database'" +
         " AND deleted_at IS NULL AND id<>$1" +
         " AND position($2 in lower(title))>0" +
-        " ORDER BY lower(title),id LIMIT $3 OFFSET $4",
-        [source.id, search, limit + 1, offset],
+        " ORDER BY lower(title),id",
+        [source.id, search],
       )).rows;
+      // Pagination is over accessible matches only: never reveal the count
+      // or location of filtered-out target databases through has_more/offset.
+      const readable = await visible(q, a, rows);
       return {
-        items: (await visible(q, a, rows.slice(0, limit))).map((item) =>
+        items: readable.slice(offset, offset + limit).map((item) =>
           ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
-        has_more: rows.length > limit,
+        has_more: readable.length > offset + limit,
       };
     },
     "databases.read",
@@ -1550,14 +1553,15 @@ function dataRoutes(
         "SELECT id,title FROM resources WHERE kind='record'" +
         " AND parent_id=$1 AND deleted_at IS NULL" +
         " AND position($2 in lower(title))>0" +
-        " ORDER BY lower(title),id LIMIT $3 OFFSET $4",
-        [target.id, search, limit + 1, offset],
+        " ORDER BY lower(title),id",
+        [target.id, search],
       )).rows;
+      const readable = await visible(q, a, rows);
       return {
-        items: (await visible(q, a, rows.slice(0, limit))).map((item) =>
+        items: readable.slice(offset, offset + limit).map((item) =>
           ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
-        has_more: rows.length > limit,
+        has_more: readable.length > offset + limit,
       };
     },
     "databases.read",
