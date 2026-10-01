@@ -127,7 +127,7 @@ For S3-compatible modes, complete the provider acceptance procedure before rollo
 
 ### Storage encryption upgrade
 
-New deployments use `STORAGE_ENCRYPTION_MODE=required`. Existing deployments without the setting start in `legacy-read` so old plaintext objects remain readable while all new writes are encrypted. Before treating an upgraded deployment as accepted, stop writers, run `npm run migrate:storage-encryption` through the ops profile, confirm the migration report, set `STORAGE_ENCRYPTION_MODE=required`, and restart. Full procedure and key-management boundaries are in [Encryption at rest](ENCRYPTION_AT_REST.md).
+New deployments use `STORAGE_ENCRYPTION_MODE=required`. Existing deployments without the setting start in `legacy-read` so old plaintext objects remain readable while all new writes are encrypted. Before treating an upgraded deployment as accepted, stop writers, run `node --import tsx scripts/migrate-storage-encryption.ts` through the ops profile, confirm the migration report, set `STORAGE_ENCRYPTION_MODE=required`, and restart. Full procedure and key-management boundaries are in [Encryption at rest](ENCRYPTION_AT_REST.md).
 
 ### S3-compatible object storage
 
