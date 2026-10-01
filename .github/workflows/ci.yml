@@ -96,7 +96,8 @@ jobs:
         run: |
           node scripts/init-env.mjs
           # Test-only metadata: registration never performs discovery/network I/O.
-          echo 'OIDC_TENANT_ISSUER_ORIGINS=https://login.example.test' >> .env
+          sed -i 's|^OIDC_TENANT_ISSUER_ORIGINS=.*|OIDC_TENANT_ISSUER_ORIGINS=https://login.example.test|' .env
+          grep -Fx 'OIDC_TENANT_ISSUER_ORIGINS=https://login.example.test' .env
           docker compose config --quiet
       - name: Build release containers
         run: docker compose build api clamav
