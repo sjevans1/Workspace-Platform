@@ -3,6 +3,7 @@ import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import { normalizedNetworkIdentity } from "../../../packages/security/rate-network.ts";
 import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
 import Redis from "ioredis";
@@ -92,7 +93,13 @@ import {
   indexedRecordText, redactRelationSchema, redactRelationValues,
   validateRelationSchema, validateRelationWrites,
 } from "./relations.ts";
-type Request = FastifyRequest & { actor: Actor; sessionToken: string };
+type Request = FastifyRequest & {
+  actor: Actor;
+  sessionToken: string;
+  // Verified by the global limiter, then reused by the route auth handler.
+  rateActor?: Actor;
+  rateSessionToken?: string;
+};
 type Handler = (
   q: Query,
   a: Actor,
@@ -177,6 +184,15 @@ export async function buildApp(
   };
   const collabHealthUrl = healthTarget("COLLAB"),
     workerHealthUrl = healthTarget("WORKER");
+  // Only a Caddy-controlled, single upstream hop may supply X-Forwarded-For.
+  // The Caddy edge overwrites incoming client-supplied forwarding headers.
+  // Direct developer launches never trust those headers.
+  const proxyMode = process.env.TRUST_PROXY;
+  assert(
+    !proxyMode || proxyMode === "false" || proxyMode === "1",
+    500,
+    "TRUST_PROXY must be false or 1 (one sanitized Caddy hop); never true",
+  );
   const app = Fastify({
     logger: logging
       ? {
@@ -189,7 +205,11 @@ export async function buildApp(
         }
       : false,
     bodyLimit: 6291456,
-    trustProxy: process.env.TRUST_PROXY === "true",
+    // Fastify v5 accepts an explicit trust function; only hop 0 is Caddy.
+    // Any additional upstream XFF entries remain untrusted.
+    trustProxy: proxyMode === "1"
+      ? (_address: string, hop: number) => hop === 0
+      : false,
     requestIdHeader: false,
   });
   const redis = process.env.REDIS_URL
@@ -198,9 +218,43 @@ export async function buildApp(
   await app.register(cookie);
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(rateLimit, {
+    // Keep the existing per-network budget for public and sensitive routes.
+    // Valid authenticated page/data reads instead use a per-tenant principal
+    // budget so coworkers behind a single corporate NAT cannot exhaust each
+    // other's allowance. Never trust a user-supplied identity/header/token
+    // without verifying the session against the database first.
     max: 300,
     timeWindow: "1 minute",
     ...(redis ? { redis } : {}),
+    keyGenerator: async (r) => {
+      const networkKey = "ip:" + normalizedNetworkIdentity(r.ip);
+      if (
+        !["GET", "HEAD"].includes(r.method) ||
+        !r.url.startsWith("/api/v1/") ||
+        r.url.startsWith("/api/v1/auth/") ||
+        r.url.startsWith("/api/v1/setup")
+      ) return networkKey;
+      const authorization = r.headers.authorization;
+      const isBearer = !!authorization;
+      const credential = isBearer
+        ? authorization?.startsWith("Bearer ") ? authorization.slice(7) : ""
+        : r.cookies.workspace_session;
+      if (!credential) return networkKey;
+      try {
+        const actor = await authenticate(db, credential);
+        // A service token must use Bearer transport; a human session must
+        // use its cookie. Transport mismatch is not a verified identity.
+        if (isBearer ? !actor.scopes : !!actor.scopes) return networkKey;
+        const request = r as Request;
+        request.rateActor = actor;
+        request.rateSessionToken = credential;
+        return "principal:" + actor.tenant_id + ":" + actor.user_id;
+      } catch {
+        // Forged, expired or revoked sessions must share their actual network
+        // key; a caller cannot evade throttling with arbitrary cookie values.
+        return networkKey;
+      }
+    },
   });
   await app.register(multipart, { limits: { fileSize: 26214400, files: 1 } });
   app.addContentTypeParser(
@@ -262,7 +316,9 @@ export async function buildApp(
     r.sessionToken = header?.startsWith("Bearer ")
       ? header.slice(7)
       : r.cookies.workspace_session || "";
-    r.actor = await authenticate(db, r.sessionToken);
+    r.actor = r.rateSessionToken === r.sessionToken && r.rateActor
+      ? r.rateActor
+      : await authenticate(db, r.sessionToken);
     r.actor.requestId = r.id;
     assert(
       header ? !!r.actor.scopes : !r.actor.scopes,

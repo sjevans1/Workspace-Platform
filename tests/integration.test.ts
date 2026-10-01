@@ -2694,6 +2694,88 @@ test("recently viewed lists personal visits, not other users' edits, and revokes
 });
 
 
+test("rate limit: verified principals are independent, headers and forged tokens cannot spoof identity", async () => {
+  // Same Fastify production middleware and isolated limiter store, not a
+  // bypass/relaxed test configuration.
+  const limitedApp = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
+  const hit = (url: string, cookie?: string, forwarded?: string) =>
+    limitedApp.inject({
+      method: "GET",
+      url,
+      remoteAddress: "198.51.100.9",
+      headers: {
+        ...(cookie ? { cookie } : {}),
+        ...(forwarded ? { "x-forwarded-for": forwarded,
+          "x-real-ip": forwarded } : {}),
+      },
+    });
+  const remaining = (response: any) =>
+    Number(response.headers["x-ratelimit-remaining"]);
+  try {
+    // Earlier revocation/offboarding tests intentionally invalidate some
+    // shared fixtures. Use fresh active credentials here.
+    const memberId = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
+        [memberId, memberId + "@example.test", "Rate limit member"]);
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+        [owner.tenant, memberId],
+      );
+    });
+    const memberToken = await db.tenant(owner.tenant, (q) =>
+      createSession(q, owner.tenant, memberId));
+    const otherToken = await db.tenant(other.tenant, (q) =>
+      createSession(q, other.tenant, owner.id));
+    const ownerFirst = await hit("/api/v1/me", owner.cookie);
+    const ownerSecond = await hit("/api/v1/me", owner.cookie);
+    const memberFirst = await hit("/api/v1/me",
+      "workspace_session=" + memberToken);
+    const otherTenant = await hit("/api/v1/me",
+      "workspace_session=" + otherToken);
+    for (const result of [ownerFirst, ownerSecond, memberFirst, otherTenant])
+      assert.equal(result.statusCode, 200, result.body);
+    assert.equal(remaining(ownerSecond), remaining(ownerFirst) - 1);
+    assert.equal(remaining(memberFirst), remaining(ownerFirst),
+      "the second authenticated user gets an independent limit");
+    assert.equal(remaining(otherTenant), remaining(ownerFirst),
+      "a separate tenant gets an independent limit");
+
+    // Authentication routes retain the IP/network limiter even when a
+    // valid logged-in user's cookie is sent to a public endpoint.
+    const unauth = await hit("/api/v1/auth/methods", undefined, "203.0.113.5");
+    const publicWithCookie = await hit("/api/v1/auth/methods",
+      owner.cookie, "203.0.113.99");
+    assert.equal(unauth.statusCode, 200);
+    assert.equal(publicWithCookie.statusCode, 200);
+    assert.equal(remaining(publicWithCookie), remaining(unauth) - 1);
+
+    // Network-key exhaustion cannot be avoided by rotating forwarding
+    // headers. The direct Fastify deployment intentionally distrusts them.
+    let blocked: any;
+    for (let n = 0; n < 301; n++) {
+      const response = await hit("/api/v1/auth/methods", undefined,
+        "2001:db8::" + (n + 100).toString(16));
+      if (response.statusCode === 429) {
+        blocked = response;
+        break;
+      }
+    }
+    assert.ok(blocked, "forged XFF addresses did not evade the 300/min ceiling");
+    assert.ok(Number(blocked.headers["retry-after"]) >= 0);
+
+    // New forged session values don't turn invalid requests into
+    // principal-key requests; the unauthenticated network budget stays
+    // exhausted and rejects them before any protected operation.
+    const fake = await hit("/api/v1/me",
+      "workspace_session=forged-" + randomUUID(), "192.0.2.111");
+    assert.equal(fake.statusCode, 429, fake.body);
+  } finally {
+    await limitedApp.close();
+  }
+});
+
+
 test("W05 relation references: write validation, ACL redaction, export, and schema safety", async () => {
   const clients = await ok("POST", "/resources", {
     kind: "database", parent_id: space.id, title: "W05 Clients",

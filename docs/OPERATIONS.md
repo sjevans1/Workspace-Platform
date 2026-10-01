@@ -19,6 +19,16 @@ curl --fail http://localhost:8080/ready
 
 The generator refuses to overwrite an existing `.env`. It creates separate owner and runtime database passwords, a 256-bit encryption key and a random setup token. New generated environments also set `STORAGE_ENCRYPTION_MODE=required`, so attachment/object bytes are encrypted before local or S3 storage. Read the setup token locally and create the first account in the browser. Keep `.env` outside git and back it up securely. Do not rotate the encryption key without a planned re-encryption procedure; restore with the original key.
 
+Only Caddy is published to the host. PostgreSQL, Valkey, API and collaboration are internal Compose services.
+
+### Proxy trust and authenticated rate limits (W01)
+
+In Compose, **Caddy is the only allowed public ingress**. It discards caller-provided `X-Forwarded-For` and `X-Real-IP` values and substitutes its actual client socket peer. The API uses `TRUST_PROXY=1`, which allows **exactly one** upstream hop; unrestricted `TRUST_PROXY=true` now fails startup. For direct Node/WSL development, leave `TRUST_PROXY` unset (equivalent to false). **Never expose API port 4000 directly while `TRUST_PROXY=1`; that setting requires a private Caddy-to-API network.** Do not use caller-supplied `X-Real-IP`, `X-Forwarded-For`, email address or other unverified headers for throttling.
+
+Unauthenticated paths, login/setup/OIDC endpoints and mutations retain IP-based limits and their existing sensitive per-route caps. **Read-only** `GET/HEAD /api/v1/*` calls use a verified active tenant/user principal limit (300/min) only after the existing session or bearer token has been validated against server-side session state; revoked/forged credentials fall back to the network limit. This prevents authenticated coworkers behind the same corporate NAT from accidentally sharing a read quota without letting attackers create new limit keys by rotating arbitrary headers/cookies. Active sessions must still pass every normal route ACL and CSRF check.
+
+An upstream L7 balancer in front of Caddy is **not trusted by default**: Caddy treats its socket peer as the client, a conservative shared-network limit for unauthenticated endpoints. Deployers must explicitly review, trust and regression-test an appropriate upstream proxy chain before changing that policy; do not enable broad private-CIDR or all-hops trust as a shortcut.
+
 Only Caddy is published to the host. PostgreSQL, Valkey, API and collaboration are internal Compose services. Containers run with dropped capabilities and no-new-privileges for the application image. The application runtime is the non-root `node` user. Migration and backup containers alone receive the owner database URL.
 
 The default listener is HTTP on localhost port 8080. It has `COOKIE_SECURE=false` for local evaluation. Do not expose this configuration to the internet.
