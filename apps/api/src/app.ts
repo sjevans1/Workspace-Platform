@@ -57,6 +57,7 @@ import {
   templates,
   blocksToMarkdown,
 } from "../../../packages/editor/server.ts";
+import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
 import {
   createStorage,
   inspectFile,
@@ -1013,6 +1014,42 @@ export async function buildApp(
           )
         )?.favourite,
       };
+    },
+  );
+  route(
+    "GET",
+    "/resources/:id/backlinks",
+    "List readable pages with internal links to this document",
+    async (q, a, r) => {
+      const target = await requireAccess(q, a, id(r));
+      scope(a, pageScope(target.kind));
+      assert(["page", "record"].includes(target.kind), 404, "Page not found");
+      // Bounded read-only scan of links in canonical persisted blocks.
+      // A UUID mentioned in plain text or an external URL is not a link.
+      const candidates = (
+        await q.query(
+          "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
+          " FROM page_documents d JOIN resources source" +
+          " ON source.id=d.resource_id AND source.tenant_id=d.tenant_id" +
+          " WHERE d.tenant_id=$1 AND source.id<>$2" +
+          " AND source.deleted_at IS NULL AND source.kind IN ('page','record')" +
+          " AND d.blocks::text LIKE $3" +
+          " ORDER BY source.updated_at DESC,source.id DESC LIMIT 300",
+          [a.tenant_id, target.id, "%" + target.id + "%"],
+        )
+      ).rows;
+      const result = [];
+      for (const source of candidates) {
+        if (!linkedWorkspaceResources(source.blocks).has(target.id)) continue;
+        if (a.scopes && !a.scopes.includes(pageScope(source.kind))) continue;
+        if (!(await access(q, a, source.id))) continue;
+        result.push({
+          id: source.id, title: source.title,
+          kind: source.kind, updated_at: source.updated_at,
+        });
+        if (result.length === 40) break;
+      }
+      return result;
     },
   );
   route(
