@@ -382,8 +382,10 @@ export async function registerScim(app: FastifyInstance, db: Database) {
         });
       };
 
-      const send = (reply: FastifyReply, value: unknown, status = 200) =>
-        reply.code(status).type(SCIM_JSON).send(value);
+      const send = (reply: FastifyReply, value: unknown, status = 200) => {
+        reply.code(status).type(SCIM_JSON);
+        return value;
+      };
 
       scim.get("/ServiceProviderConfig", async (request, reply) =>
         tenant(request, async () =>
@@ -787,7 +789,7 @@ export async function registerScim(app: FastifyInstance, db: Database) {
             [id],
           );
           await audit(q, context.tenant_id, request.id, "scim.user.deleted");
-          return reply.code(204).send();
+          return send(reply, null, 204);
         }),
       );
     },
