@@ -62,6 +62,20 @@ Workspace administrator membership deactivation already invalidates that user's 
 
 `workspace_runtime` must remain `NOSUPERUSER NOBYPASSRLS`. Do not grant `BYPASSRLS` to make back-channel logout work. The handler supplies transaction-local tenant context for its RLS-protected audit insert; CI exercises the native application through the restricted runtime role.
 
+## SCIM directory provisioning
+
+SCIM Users provisioning/offboarding is available at `${APP_URL}/scim/v2`. It requires no deployment-wide SCIM environment variables. An organisation owner/admin creates a tenant-scoped connector in **Settings → Integrations → Directory provisioning (SCIM 2.0)**.
+
+The raw bearer token is shown once and Workspace stores only its hash. Put the raw value in the directory provider's secret store. For rotation, create and validate a replacement connector before revoking the old connector.
+
+The Caddy deployment explicitly proxies `/scim/*` to the API. Use the same trusted HTTPS Workspace origin in production; do not expose an alternate direct API port for SCIM.
+
+A SCIM connector belongs to one organisation. `active:false` or SCIM DELETE deactivates that membership and immediately revokes that organisation's active Workspace sessions for the user. If the same global Workspace user belongs to another organisation, that other tenant is intentionally unaffected.
+
+Connector metadata and SCIM user mappings are included in logical backups. Raw tokens are never stored; because the hash is restored, an identity provider holding the existing raw token can continue authenticating after a successful restore of the same deployment data.
+
+The first slice implements Users only. SCIM Groups, group-role mapping, Bulk, full filter grammar, ETag concurrency and password changes are not implemented. See [SCIM directory lifecycle](SCIM.md).
+
 ## Branding
 
 Set PRODUCT_NAME, PRIMARY_ACCENT, LOGO_LIGHT, LOGO_DARK, FAVICON, LOGIN_BACKGROUND, SUPPORT_NAME, SUPPORT_URL, LEGAL_NAME, PRIVACY_URL and TERMS_URL for deployment-wide sign-in defaults. Administrators can override those fields for their signed-in organisation through Settings → Branding. Use HTTPS asset URLs or same-origin paths. The current interface uses the light logo; the dark logo is retained in configuration for a future dark theme.
@@ -135,7 +149,7 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 
 The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO is implemented, but a real provider/TLS acceptance run and directory lifecycle controls remain.
+Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Host-level encryption, secret-manager integration, external metrics/alerts, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users lifecycle are implemented. Trusted-TLS acceptance, SCIM Groups/provider compatibility and the other release-hardening items remain.
 
 ## Real-host acceptance
 
