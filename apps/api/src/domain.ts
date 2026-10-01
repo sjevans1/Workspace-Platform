@@ -239,7 +239,9 @@ export async function records(
     assert(d.properties.find((field: Property) =>
       field.id === f.property)?.type !== "relation" &&
       d.properties.find((field: Property) =>
-        field.id === f.property)?.type !== "formula", 400,
+        field.id === f.property)?.type !== "formula" &&
+      d.properties.find((field: Property) =>
+        field.id === f.property)?.type !== "rollup", 400,
       "Relation filters require permission-aware indexing");
     p.push(f.property);
     let key = `v.values->>$${p.length}`;
@@ -272,7 +274,9 @@ export async function records(
     assert(d.properties.find((field: Property) =>
       field.id === s.property)?.type !== "relation" &&
       d.properties.find((field: Property) =>
-        field.id === s.property)?.type !== "formula", 400,
+        field.id === s.property)?.type !== "formula" &&
+      d.properties.find((field: Property) =>
+        field.id === s.property)?.type !== "rollup", 400,
       "Relation sorting requires permission-aware indexing");
     p.push(s.property);
     let key = `v.values->>$${p.length}`;
