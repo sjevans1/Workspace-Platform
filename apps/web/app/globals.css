@@ -2051,3 +2051,147 @@ nav button:hover,
 .bootstrap-notice p {
   margin: 9px 0 12px;
 }
+
+
+/* Personal appearance mode. This only affects presentation; all data, ACLs,
+   and collaboration run unchanged with or without other OpenJM products. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --accent: #74d7aa;
+  --ink: #e3efe8;
+  --muted: #acc1b3;
+  --border: #36493f;
+  --sidebar: #192820;
+  --surface: #142019;
+  --soft: #24362b;
+  --sage: #254132;
+  background: var(--surface);
+}
+:root[data-theme="dark"] body,
+:root[data-theme="dark"] .workspace,
+:root[data-theme="dark"] .main-scroll,
+:root[data-theme="dark"] .workspace main,
+:root[data-theme="dark"] .topbar {
+  background: var(--surface);
+  color: var(--ink);
+}
+:root[data-theme="dark"] :is(
+  input, textarea, select, .button, .workspace-select,
+  .page-card, .modal, .dropdown, .board-card, .login-card,
+  .calendar-event, .record-table input, .cell-content input:focus,
+  .cell-content select:focus
+) {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--ink);
+}
+:root[data-theme="dark"] :is(
+  .page-card, .space-card, .template-card, .collection-row,
+  .record-table, .settings-section, .board-column, .modal
+) {
+  border-color: var(--border);
+}
+:root[data-theme="dark"] :is(
+  .sidebar, .board-column, .login-page, .hero,
+  .art-sheet, .art-sheet > div, .workspace-symbol,
+  .space-card > span, .template-icon, .tag, .permission-pill,
+  kbd, .view-tabs button.selected, .art-sheet > span
+) {
+  background: var(--soft);
+  color: var(--ink);
+  border-color: var(--border);
+}
+:root[data-theme="dark"] :is(
+  .tag, .permission-pill, .document-meta, .profile small, .tree-title,
+  .tree-expand, .search-trigger, .private-label, .crumb > span,
+  .collection-row small, .record-properties label, .hero p,
+  .hero .eyebrow, .space-card small, .breadcrumbs button,
+  .page-card .muted, .document-meta, .field > span,
+  .modal-foot, .activity-list div span:not(.activity-dot),
+  .comment small, .history-row small
+) {
+  color: var(--muted);
+}
+:root[data-theme="dark"] :is(
+  .document-title, .hero h2, .page-card strong, .space-card strong,
+  .collection-row strong, .tree-item.selected .tree-title,
+  .modal h2, .settings-section h2
+) {
+  color: var(--ink);
+}
+:root[data-theme="dark"] :is(
+  nav button, .sidebar-bottom > button, .icon-button,
+  .comment-actions button
+) {
+  color: var(--muted);
+}
+:root[data-theme="dark"] :is(
+  nav button.active, .sidebar-bottom > button.active,
+  nav button:hover, .sidebar-bottom > button:hover,
+  .tree-item:hover, .tree-item.selected,
+  .icon-button:hover, .dropdown button:hover, .dropdown a:hover,
+  .collection-row:hover, .search-results > button:hover,
+  .template-card:hover, .record-table tr:hover
+) {
+  background: var(--sage);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .button.primary,
+:root[data-theme="dark"] .primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10251b;
+}
+:root[data-theme="dark"] .button.primary:hover,
+:root[data-theme="dark"] .primary:hover {
+  background: #9aeac0;
+  border-color: #9aeac0;
+}
+:root[data-theme="dark"] .danger,
+:root[data-theme="dark"] .dropdown .danger { color: #f49b88; }
+:root[data-theme="dark"] .danger-button {
+  color: #fff;
+  background: #a8453c;
+  border-color: #a8453c;
+}
+:root[data-theme="dark"] .status-select,
+:root[data-theme="dark"] .status-in-progress,
+:root[data-theme="dark"] .status-done {
+  background: var(--sage) !important;
+  color: var(--ink) !important;
+}
+:root[data-theme="dark"] .error {
+  background: #472622;
+  color: #ffb0a0 !important;
+}
+:root[data-theme="dark"] :is(.art-sheet i, .status-dot, .activity-dot) {
+  background: #496854;
+}
+:root[data-theme="dark"] .art-dot {
+  background: #31543b;
+  border-color: var(--soft);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .avatar,
+:root[data-theme="dark"] .presence .avatar {
+  background: #315341;
+  border-color: var(--surface);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .brand img.dark-logo-fallback {
+  filter: brightness(0) invert(1);
+}
+:root[data-theme="dark"] .bn-container {
+  --bn-colors-editor-text: var(--ink);
+  --bn-colors-editor-background: var(--surface);
+}
+:root[data-theme="dark"] .bn-editor {
+  color: var(--ink);
+}
+:root[data-theme="dark"] .scrim {
+  background: #050f0bd1;
+}
+:root[data-theme="dark"] .toast {
+  background: #30483a;
+  color: #f0fff5;
+}

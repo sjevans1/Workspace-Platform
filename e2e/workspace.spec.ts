@@ -891,3 +891,60 @@ test("recoverable 429 and 503 bootstrap errors preserve authentication and allow
   await page.getByRole("button", { name: "Retry loading workspace" }).click();
   await expect(page.getByRole("heading", { name: "Welcome back, Shane." })).toBeVisible();
 });
+
+
+test("standalone appearance: dark/light/system persists and editor remains mounted", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
+  const preference = page.getByRole("combobox", { name: "Colour theme" });
+  await expect(preference).toBeVisible();
+
+  await preference.selectOption("dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => page.evaluate(
+    () => getComputedStyle(document.documentElement).backgroundColor,
+  )).toBe("rgb(20, 32, 25)");
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Colour theme" }))
+    .toHaveValue("dark");
+
+  await page.getByRole("button", { name: "New page", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create something new" });
+  await dialog.getByLabel("Name", { exact: true })
+    .fill("Appearance acceptance " + Date.now());
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  const editor = page.locator(".bn-editor");
+  await expect(editor).toBeVisible();
+  await expect(editor).toHaveCSS("color", "rgb(227, 239, 232)");
+  await editor.click();
+  await page.keyboard.type("Theme switching preserves my document.");
+  await expect(editor).toContainText("Theme switching preserves my document.");
+  await expect(page.getByRole("status").filter({ hasText: "Saved" }))
+    .toBeVisible();
+
+  await page.getByRole("button", { name: "Switch to light mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(editor).toContainText("Theme switching preserves my document.");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator(".bn-editor"))
+    .toContainText("Theme switching preserves my document.");
+
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
+  await page.getByRole("combobox", { name: "Colour theme" })
+    .selectOption("system");
+  const preferredDark = await page.evaluate(
+    () => matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  await expect(page.locator("html"))
+    .toHaveAttribute("data-theme", preferredDark ? "dark" : "light");
+  await page.reload();
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Colour theme" }))
+    .toHaveValue("system");
+});

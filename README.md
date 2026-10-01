@@ -37,7 +37,7 @@ Open **http://localhost:8080** and use `SETUP_TOKEN` from the generated `.env`. 
 - Typed databases with table and board views, inline edits, filtering, sorting, column settings and records that open as full pages.
 - Local authentication plus optional OpenID Connect/Keycloak SSO, invitation-backed SSO provisioning, real-provider back-channel logout, tenant-scoped SCIM 2.0 Users/Groups provisioning with explicit member/guest group-role mapping, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.
 - Page discussions and mentions, private file attachments, Markdown/CSV imports and Markdown/CSV/JSON exports.
-- Runtime branding, scoped REST API, transactional event outbox, signed webhooks with retries, and audit records.
+- Runtime branding and user-selectable Light/Dark/Follow device appearance (including editor; browser-local preference with no server dependency), scoped REST API, transactional event outbox, signed webhooks with retries, and audit records.
 - Pluggable storage: local filesystem for self-contained/on-prem deployments, or S3-compatible object storage for private-object-store/cloud deployments; plus migrations, logical backup/restore, container configuration and CI.
 
 ## Project map

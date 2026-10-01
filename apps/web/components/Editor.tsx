@@ -13,12 +13,14 @@ function Body({
   user,
   id,
   readOnly,
+  theme,
 }: {
   provider: HocuspocusProvider;
   doc: Y.Doc;
   user: any;
   id: string;
   readOnly: boolean;
+  theme: "light" | "dark";
 }) {
   const editor = useCreateBlockNote(
     withCollaboration({
@@ -35,9 +37,9 @@ function Body({
     }),
     [doc, provider],
   );
-  return <BlockNoteView editor={editor} editable={!readOnly} theme="light" />;
+  return <BlockNoteView editor={editor} editable={!readOnly} theme={theme} />;
 }
-export default function Editor({ id, user }: { id: string; user: any }) {
+export default function Editor({ id, user, theme }: { id: string; user: any; theme: "light" | "dark" }) {
   const [connection, setConnection] = useState<any>(),
     [status, setStatus] = useState("Connecting…"),
     [people, setPeople] = useState<string[]>([]),
@@ -141,7 +143,7 @@ export default function Editor({ id, user }: { id: string; user: any }) {
         </span>
       </div>
       {connection ? (
-        <Body {...connection} user={user} id={id} />
+        <Body {...connection} user={user} id={id} theme={theme} />
       ) : (
         <div className="loading">Opening document…</div>
       )}

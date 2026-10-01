@@ -16,12 +16,16 @@ import {
   LogOut,
   Upload,
   ArrowRight,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { api, ApiError, setCsrf, notify, run, changed, go, icon, date } from "../lib/api";
 import { Modal, Empty, Spinner, Field } from "./common";
 import Resource from "./Resource";
 import Settings from "./Settings";
+import { useAppearance } from "../lib/appearance";
 export default function Workspace() {
+  const { appearance, setAppearance, resolvedTheme } = useAppearance();
   const [me, setMe] = useState<any>(),
     [setup, setSetup] = useState(false),
     [loaded, setLoaded] = useState(false),
@@ -159,9 +163,14 @@ export default function Workspace() {
   }, [version]);
   useEffect(() => {
     document.title = brand.productName;
+    // Preserve customer branding in both schemes. An accent tuned for a
+    // light surface may be unreadable on dark surfaces unless brightened.
+    const accent = brand.primaryAccent || "#177a64";
     document.documentElement.style.setProperty(
       "--accent",
-      brand.primaryAccent || "#177a64",
+      resolvedTheme === "dark"
+        ? `color-mix(in srgb, ${accent} 55%, #ffffff)`
+        : accent,
     );
     if (brand.favicon) {
       let el = document.querySelector(
@@ -174,7 +183,7 @@ export default function Workspace() {
       }
       el.href = brand.favicon;
     }
-  }, [brand]);
+  }, [brand, resolvedTheme]);
   const navigate = (s: string) => {
     setScreen(s);
     setCurrent("");
@@ -205,7 +214,7 @@ export default function Workspace() {
   if (!me)
     return (
       <>
-        {bootstrapError ? recovery : <Login setup={setup} brand={brand} auth={authMethods} done={init} />}
+        {bootstrapError ? recovery : <Login setup={setup} brand={brand} auth={authMethods} done={init} theme={resolvedTheme} />}
         {toast && (
           <div className="toast" role="alert">
             {toast}
@@ -219,8 +228,12 @@ export default function Workspace() {
     >
       <aside className="sidebar">
         <div className="brand">
-          {brand.logoLight ? (
-            <img src={brand.logoLight} alt="" />
+          {(resolvedTheme === "dark" && brand.logoDark) || brand.logoLight ? (
+            <img
+              src={(resolvedTheme === "dark" && brand.logoDark) || brand.logoLight}
+              alt=""
+              className={resolvedTheme === "dark" && !brand.logoDark ? "dark-logo-fallback" : undefined}
+            />
           ) : (
             <div className="brand-mark">✳</div>
           )}
@@ -344,6 +357,15 @@ export default function Workspace() {
           <div className="topbar-right">
             <span className="private-label">Your team’s shared space</span>
             <button
+              type="button"
+              className="icon-button"
+              aria-label={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              onClick={() => setAppearance(resolvedTheme === "dark" ? "light" : "dark")}
+            >
+              {resolvedTheme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            <button
               className="button primary small-button"
               onClick={() => setCreate({ parent: root, kind: "page" })}
             >
@@ -361,9 +383,10 @@ export default function Workspace() {
               me={me}
               onGone={() => navigate("trash")}
               create={setCreate}
+              theme={resolvedTheme}
             />
           ) : screen === "settings" ? (
-            <Settings me={me} reload={init} />
+            <Settings me={me} reload={init} appearance={appearance} setAppearance={setAppearance} />
           ) : (
             <Dashboard
               screen={screen}
@@ -958,11 +981,13 @@ function Login({
   brand,
   auth,
   done,
+  theme,
 }: {
   setup: boolean;
   brand: any;
   auth: any;
   done: () => Promise<void>;
+  theme: "light" | "dark";
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -1025,8 +1050,12 @@ function Login({
     >
       <section className="login-card">
         <div className="brand">
-          {brand.logoLight ? (
-            <img src={brand.logoLight} alt="" />
+          {(theme === "dark" && brand.logoDark) || brand.logoLight ? (
+            <img
+              src={(theme === "dark" && brand.logoDark) || brand.logoLight}
+              alt=""
+              className={theme === "dark" && !brand.logoDark ? "dark-logo-fallback" : undefined}
+            />
           ) : (
             <div className="brand-mark">✳</div>
           )}
