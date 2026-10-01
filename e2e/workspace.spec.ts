@@ -3,6 +3,24 @@ import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 const email = "browser@example.test",
   password = "browser-password-123";
+
+// Deployed tests share a single source IP behind Caddy. This is an
+// acceptance isolation guard, NOT a rate-limit bypass: wait for the actual
+// server budget to recover before opening another multi-user browser test.
+// Production API limits and login-specific caps remain unchanged.
+test.beforeEach(async ({ request }) => {
+  test.setTimeout(240000);
+  for (let attempt = 0; attempt < 26; attempt++) {
+    const response = await request.get("/api/v1/auth/methods");
+    const raw = response.headers()["x-ratelimit-remaining"];
+    const remaining = raw === undefined ? NaN : Number(raw);
+    if (response.ok() && Number.isFinite(remaining) && remaining >= 260) return;
+    if (attempt === 25)
+      throw new Error("Shared test rate-limit window did not replenish");
+    await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+  }
+});
+
 async function login(page: Page) {
   await page.goto("/");
   await expect(page.locator("h1")).toBeVisible();
