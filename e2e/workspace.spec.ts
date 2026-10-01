@@ -1194,3 +1194,85 @@ test("W06 browser: configure numeric formula, render computed result and recompu
   await page.reload();
   await expect(page.locator("output.formula-result").first()).toHaveText("29");
 });
+
+
+test("W07 browser: configure sum Rollup and recompute linked Number values", async ({ page }) => {
+  await login(page);
+  const actor = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": actor.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const create = async (kind: "space" | "database", parent: string, title: string) => {
+    const response = await page.request.post("/api/v1/resources", {
+      headers, data: { kind, parent_id: parent, title },
+    });
+    expect(response.ok(), await response.text()).toBeTruthy();
+    return response.json();
+  };
+  const stamp = Date.now();
+  const folder = await create("space", roots[0].id, "W07 Rollups " + stamp);
+  const clients = await create("database", folder.id, "W07 Clients " + stamp);
+  const projects = await create("database", folder.id, "W07 Projects " + stamp);
+  const targetPath = "/api/v1/databases/" + clients.id;
+  const sourcePath = "/api/v1/databases/" + projects.id;
+  const clientsSchema = await page.request.patch(targetPath, { headers, data: {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "revenue", name: "Revenue", type: "number" },
+    ],
+  } });
+  expect(clientsSchema.ok(), await clientsSchema.text()).toBeTruthy();
+  const clientResponse = await page.request.post(targetPath + "/records", {
+    headers, data: { values: { name: "W07 Client " + stamp, revenue: 40 } },
+  });
+  expect(clientResponse.ok(), await clientResponse.text()).toBeTruthy();
+  const client = await clientResponse.json();
+  const initialSchema = await page.request.patch(sourcePath, { headers, data: {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "clients", name: "Clients", type: "relation",
+        target_database_id: clients.id },
+    ],
+  } });
+  expect(initialSchema.ok(), await initialSchema.text()).toBeTruthy();
+  await page.goto("/?page=" + projects.id);
+  await page.getByRole("button", { name: "Configure properties" }).click();
+  const dialog = page.getByRole("dialog", { name: "Properties & columns" });
+  await dialog.getByRole("button", { name: "Add property" }).click();
+  await dialog.getByRole("textbox", { name: "Property name" }).nth(2)
+    .fill("Linked revenue");
+  await dialog.getByRole("combobox", { name: "Property type" }).nth(2)
+    .selectOption("rollup");
+  await dialog.getByRole("combobox",
+    { name: "Rollup source relation for Linked revenue" })
+    .selectOption("clients");
+  await dialog.getByRole("combobox",
+    { name: "Rollup operation for Linked revenue" })
+    .selectOption("sum");
+  const numeric = dialog.getByRole("combobox",
+    { name: "Rollup numeric field for Linked revenue" });
+  await expect(numeric.locator('option[value="revenue"]')).toBeAttached();
+  await numeric.selectOption("revenue");
+  await dialog.getByRole("button", { name: "Save properties" }).click();
+  await expect(dialog).toBeHidden();
+  const itemResponse = await page.request.post(sourcePath + "/records", {
+    headers, data: {
+      values: { name: "W07 Project " + stamp, clients: [client.id] },
+    },
+  });
+  expect(itemResponse.ok(), await itemResponse.text()).toBeTruthy();
+  const item = await itemResponse.json();
+  const property = (await (await page.request.get(sourcePath)).json())
+    .properties.find((p: any) => p.type === "rollup");
+  expect(property).toBeTruthy();
+  expect(item.values[property.id]).toBe(40);
+  await page.reload();
+  await expect(page.locator("output.rollup-result").first()).toHaveText("40");
+  const change = await page.request.patch("/api/v1/records/" + client.id, {
+    headers, data: {
+      values: { revenue: 60 }, expected_revision: client.revision,
+    },
+  });
+  expect(change.ok(), await change.text()).toBeTruthy();
+  await page.reload();
+  await expect(page.locator("output.rollup-result").first()).toHaveText("60");
+});
