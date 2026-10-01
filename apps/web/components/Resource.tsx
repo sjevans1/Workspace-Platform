@@ -55,6 +55,12 @@ export default function Resource({
     window.addEventListener("workspace-changed", fn);
     return () => window.removeEventListener("workspace-changed", fn);
   }, [id]);
+  useEffect(() => {
+    if (node?.id !== id) return;
+    // Record an actual human visit once per opened resource, not once per
+    // edit/refresh. Failure to record cosmetic history must not block editing.
+    void api(`/resources/${id}/bookmark`, "POST", {}).catch(() => {});
+  }, [id, node?.id]);
   if (!node) return <Spinner />;
   const editable = node.effective_permission >= 3;
   const collection = ["space", "workspace"].includes(node.kind);
