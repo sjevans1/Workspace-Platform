@@ -187,6 +187,60 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   expect(errors).toEqual([]);
 });
 
+test("admin can create and revoke a SCIM connector from Settings", async ({
+  page,
+}) => {
+  await login(page);
+  await page
+    .getByRole("button", { name: "Settings & members", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Settings & members", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Integrations", exact: true }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Directory provisioning (SCIM 2.0)",
+      exact: true,
+    }),
+  ).toBeVisible();
+
+  const label = `Browser SCIM ${Date.now()}`;
+  await page
+    .getByRole("button", { name: "Create SCIM connector", exact: true })
+    .click();
+  const create = page.getByRole("dialog", { name: "Create SCIM connector" });
+  await create.getByLabel("Name", { exact: true }).fill(label);
+  await create.getByLabel("Default provisioned role").selectOption("guest");
+  await create.getByRole("button", { name: "Create scim", exact: true }).click();
+
+  const secret = page.getByRole("dialog", { name: "Keep this somewhere safe" });
+  const value = await secret
+    .getByLabel("Created credential or invitation")
+    .inputValue();
+  expect(value).toContain("SCIM base URL:");
+  expect(value).toContain("Default role: guest");
+  const token = value.match(/Bearer token: (scim_[A-Za-z0-9_-]+)/)?.[1];
+  expect(token).toBeTruthy();
+
+  const discovery = await page.request.get("/scim/v2/ServiceProviderConfig", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(discovery.ok()).toBeTruthy();
+  expect(discovery.headers()["content-type"]).toContain("application/scim+json");
+
+  await secret.getByRole("button", { name: "Close dialog" }).click();
+  const row = page.locator(".integration-row").filter({ hasText: label });
+  await expect(row).toContainText("Default role: guest");
+  await row.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect(row).toContainText("Revoked");
+
+  const rejected = await page.request.get("/scim/v2/ServiceProviderConfig", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(rejected.status()).toBe(401);
+});
+
 test("distinct users: invitation, live view-only access, revocation and recovery", async ({
   page,
   browser,
