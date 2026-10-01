@@ -91,7 +91,7 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium firefox
       - name: Validate deployment configuration
         run: |
           node scripts/init-env.mjs
@@ -135,6 +135,9 @@ jobs:
           ! grep -E 'tenant_id|user_id|resource_id|document_id' /tmp/workspace-metrics.txt
       - name: Verify deployed browser workflow
         run: node scripts/test-deployment.mjs
+      - name: Verify keyboard accessibility in Chromium and Firefox
+        run: |
+          E2E_BASE_URL=http://localhost:8080           E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"           npx playwright test --config=playwright.compat.config.ts
       - name: Verify trusted HTTPS, secure cookies and WSS
         run: |
           docker compose down
