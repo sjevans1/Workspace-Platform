@@ -63,6 +63,7 @@ import {
   HttpMetrics,
   fetchHealth,
   renderPrometheusMetrics,
+  type MetricsSnapshot,
 } from "../../../packages/operations/metrics.ts";
 import {
   registerScim,
@@ -314,7 +315,7 @@ export async function buildApp(
   const serviceMetrics = async (
     service: "collaboration" | "worker",
     url: string,
-  ) => {
+  ): Promise<MetricsSnapshot["services"][string]> => {
     if (!url) return { configured: false as const };
     const health = await fetchHealth(url);
     if (service === "collaboration")
