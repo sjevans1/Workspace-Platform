@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 export function Modal({
   title,
@@ -12,13 +12,60 @@ export function Modal({
   close: () => void;
   wide?: boolean;
 }) {
+  const dialog = useRef<HTMLElement>(null),
+    closeRef = useRef(close);
+  closeRef.current = close;
   useEffect(() => {
+    const node = dialog.current,
+      previous =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null,
+      selector =
+        'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      focusable = () =>
+        node
+          ? [...node.querySelectorAll<HTMLElement>(selector)].filter(
+              (item) =>
+                item.offsetParent !== null &&
+                item.getAttribute("aria-hidden") !== "true",
+            )
+          : [];
+    if (!node) return;
+    queueMicrotask(() => {
+      if (!node.isConnected || node.contains(document.activeElement)) return;
+      (focusable()[0] || node).focus();
+    });
     const fn = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) {
+        e.preventDefault();
+        node.focus();
+        return;
+      }
+      const first = items[0],
+        last = items[items.length - 1],
+        active = document.activeElement;
+      if (e.shiftKey && (active === first || !node.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", fn);
-    return () => window.removeEventListener("keydown", fn);
-  }, [close]);
+    return () => {
+      window.removeEventListener("keydown", fn);
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
   return (
     <div
       className="scrim"
@@ -27,6 +74,8 @@ export function Modal({
       }}
     >
       <section
+        ref={dialog}
+        tabIndex={-1}
         className={`modal ${wide ? "wide" : ""}`}
         role="dialog"
         aria-modal="true"
