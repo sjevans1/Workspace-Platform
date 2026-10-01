@@ -4,7 +4,7 @@ A self-hosted, white-label workspace for shared knowledge, collaborative pages a
 
 **Status: working alpha, not the completed production MVP.** The backend, collaboration protocol, tenant isolation and backup round trip have automated coverage. See [acceptance status and remaining work](docs/ACCEPTANCE.md) for the exact verification boundary.
 
-[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36792189577): 35 native PostgreSQL tests, TypeScript/production build, Docker startup and the complete desktop/mobile Chromium workflow passed, including OIDC back-channel session-revocation coverage. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff.
+[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36797135204): 36 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and the complete desktop/mobile Chromium workflow. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff.
 
 ## Start locally
 
