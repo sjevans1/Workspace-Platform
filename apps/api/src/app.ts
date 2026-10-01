@@ -51,6 +51,7 @@ import {
   brandingSchema,
 } from "../../../packages/branding/index.ts";
 import { emit, encrypt } from "../../../packages/events/index.ts";
+import { beginEventCursor, decodeEventCursor, encodeEventCursor } from "../../../packages/events/cursor.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -2516,6 +2517,59 @@ function dataRoutes(
         if (e.resource_id && (await access(q, a, e.resource_id, true)))
           out.push(e);
       return out;
+    },
+    "events.read",
+  );
+  route(
+    "GET",
+    "/events/cursor",
+    "Page through permission-filtered integration events",
+    async (q, a, r) => {
+      const p = query(r);
+      assert(!(p.cursor && p.since), 400, "Provide cursor or since, not both");
+      const limit = z.coerce.number().int().min(1).max(200)
+        .default(100).parse(p.limit);
+      const marker = p.cursor
+        ? decodeEventCursor(p.cursor, a.tenant_id, a.user_id)
+        : beginEventCursor(a.tenant_id, a.user_id, p.since);
+
+      // Keyset scan is ordered by the original PostgreSQL microsecond
+      // timestamp and UUID. Convert cursor timestamps in SQL, not JavaScript:
+      // JS Dates truncate microseconds and can repeat a full page indefinitely.
+      const scanned = (
+        await q.query(
+          "SELECT id,tenant_id,type,resource_id,version,created_at," +
+          " to_char(created_at AT TIME ZONE 'UTC'," +
+          " 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS cursor_at" +
+          " FROM event_outbox" +
+          " WHERE tenant_id=$1 AND (created_at,id)>($2::timestamptz,$3::uuid)" +
+          " ORDER BY created_at,id LIMIT $4",
+          [a.tenant_id, marker.at, marker.id, limit + 1],
+        )
+      ).rows;
+      const batch = scanned.slice(0, limit);
+      const events = [];
+      for (const event of batch) {
+        if (!event.resource_id ||
+            !(await access(q, a, event.resource_id, true)))
+          continue;
+        events.push({
+          id: event.id,
+          tenant_id: event.tenant_id,
+          type: event.type,
+          resource_id: event.resource_id,
+          version: event.version,
+          created_at: event.created_at,
+        });
+      }
+      const last = batch.at(-1);
+      return {
+        events,
+        next_cursor: encodeEventCursor(last
+          ? { ...marker, at: last.cursor_at, id: last.id }
+          : marker),
+        has_more: scanned.length > limit,
+      };
     },
     "events.read",
   );
