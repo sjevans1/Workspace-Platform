@@ -2491,7 +2491,8 @@ test("recently viewed lists personal visits, not other users' edits, and revokes
       ...(data === undefined ? {} : { payload: data }),
     });
   const recentOk = async (
-    method: string, path: string, data?: any, actor: any = owner,
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string, data?: any, actor: any = owner,
   ) => {
     const response = await recentReq(method, path, data, actor);
     assert.ok(response.statusCode < 300,
