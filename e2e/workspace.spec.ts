@@ -380,6 +380,63 @@ test("owner registers and revokes an inert tenant IdP through Settings without l
   expect(await (await page.request.get("/api/v1/auth/methods")).json()).toEqual(previousMethods);
 });
 
+test("admin can requeue only a dead delivery on an active webhook in Settings", async ({
+  page,
+}) => {
+  await login(page);
+  const subscriptionId = randomUUID();
+  const pausedSubscriptionId = randomUUID();
+  const deliveryId = randomUUID();
+  const pausedDeliveryId = randomUUID();
+  const deliveredId = randomUUID();
+  const eventId = randomUUID();
+  let status = "dead";
+  let replayRequests = 0;
+  let csrfPresent = false;
+
+  await page.route("**/api/v1/webhooks/deliveries/*/replay", async (route) => {
+    replayRequests++;
+    csrfPresent = Boolean(route.request().headers()["x-csrf-token"]);
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().url()).toContain(deliveryId);
+    status = "pending";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, id: deliveryId, status }),
+    });
+  });
+  await page.route("**/api/v1/webhooks", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        subscriptions: [
+          { id: subscriptionId, url: "https://events.example.test/inbox", active: true, events: ["page.updated"] },
+          { id: pausedSubscriptionId, url: "https://events.example.test/paused", active: false, events: ["page.updated"] },
+        ],
+        deliveries: [
+          { id: deliveryId, event_id: eventId, subscription_id: subscriptionId, status, attempts: status === "dead" ? 8 : 0, last_error: status === "dead" ? "HTTP 503" : null },
+          { id: pausedDeliveryId, event_id: randomUUID(), subscription_id: pausedSubscriptionId, status: "dead", attempts: 8, last_error: "HTTP 502" },
+          { id: deliveredId, event_id: randomUUID(), subscription_id: subscriptionId, status: "delivered", attempts: 1, last_error: null },
+        ],
+      }),
+    });
+  });
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
+  await page.getByRole("button", { name: "Webhooks", exact: true }).click();
+  const replay = page.getByRole("button", { name: "Replay delivery " + deliveryId });
+  await expect(replay).toBeVisible();
+  await expect(page.getByText("Subscription paused")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Replay delivery " + pausedDeliveryId })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Replay delivery " + deliveredId })).toHaveCount(0);
+  await replay.click();
+  await expect(replay).toHaveCount(0);
+  expect(replayRequests).toBe(1);
+  expect(csrfPresent).toBe(true);
+});
+
 test("distinct users: invitation, live view-only access, revocation and recovery", async ({
   page,
   browser,
