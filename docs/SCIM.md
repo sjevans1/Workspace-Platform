@@ -1,37 +1,33 @@
 # SCIM 2.0 directory lifecycle
 
-OpenJM Workspace implements a tenant-scoped SCIM 2.0 **Users** lifecycle for enterprise directory provisioning and offboarding.
+OpenJM Workspace implements tenant-scoped SCIM 2.0 **Users and Groups** for enterprise directory provisioning, offboarding and conservative role synchronization.
 
-This slice intentionally focuses on the security-critical user lifecycle. SCIM Groups and group-to-Workspace-role mapping are not implemented yet.
+Authentication and authorization remain separate. A SCIM connector manages directory-owned user/group state inside exactly one Workspace organisation. It cannot create `owner` or `admin` access, and it cannot silently adopt an existing manually managed membership.
 
 ## Provisioning model
 
-Each SCIM connector belongs to exactly one Workspace organisation.
+Each SCIM connector belongs to exactly one Workspace organisation and has a default provisioned role of `member` or `guest`.
 
 A connector can:
 
-- discover the Workspace SCIM service;
-- create SCIM-managed Workspace users;
-- list and retrieve its tenant's SCIM-managed users;
-- filter users by `userName eq` or `externalId eq`;
-- update supported user attributes;
-- activate or deactivate a SCIM-managed membership;
-- delete a SCIM-managed resource;
-- immediately revoke that tenant's Workspace sessions when the directory deactivates or deletes the user.
+- discover the Workspace SCIM service and User/Group schemas;
+- create, list, retrieve, update and delete SCIM-managed Users;
+- activate/deactivate SCIM-managed tenant memberships;
+- create, list, retrieve, update and delete SCIM Groups;
+- synchronize Group membership using SCIM User resource IDs;
+- immediately revoke that tenant's Workspace sessions when a User is deactivated or deleted.
 
-A connector cannot provision owner or administrator roles. Its configured default role is either `member` or `guest`.
-
-Workspace does not silently convert an existing manually managed membership into a SCIM-managed membership. This prevents a newly connected directory from unexpectedly taking ownership of an existing privileged/manual account.
+Workspace administrators separately decide whether a synchronized SCIM Group should influence Workspace role. Directory-provided group names do not grant roles automatically.
 
 ## Create a connector
 
-An organisation owner/admin can create a connector in:
+An organisation owner/admin creates a connector in:
 
 **Settings → Integrations → Directory provisioning (SCIM 2.0)**
 
 Choose:
 
-- a connector label;
+- connector label;
 - default provisioned role: `member` or `guest`.
 
 Workspace returns:
@@ -39,13 +35,11 @@ Workspace returns:
 - SCIM base URL: `${APP_URL}/scim/v2`;
 - a bearer token beginning with `scim_`.
 
-The raw token is shown once. Store it in the identity provider's secret store. Workspace stores only its hash.
+The raw token is shown once. Workspace stores only its hash. Connector metadata, last-used time and revocation state are visible in Settings. Revoking a connector immediately makes its bearer token unusable.
 
-Connector metadata, last-used time and revocation state are visible in Settings. Revoking the connector immediately makes the bearer token unusable.
+For rotation, create a replacement connector, configure and verify it at the identity provider, then revoke the old connector.
 
-For token rotation, create a replacement connector, update the identity provider, verify it can authenticate, then revoke the old connector.
-
-## Authentication
+## Authentication and tenant isolation
 
 SCIM requests use HTTP Bearer authentication:
 
@@ -53,7 +47,7 @@ SCIM requests use HTTP Bearer authentication:
 Authorization: Bearer scim_<secret>
 ```
 
-The connector lookup establishes exactly one Workspace tenant before any SCIM resource access. The SCIM tables themselves use FORCE RLS under the same tenant isolation model as the rest of Workspace.
+The connector lookup establishes one Workspace tenant before any resource operation. SCIM connector, User, Group, Group-member and Group-role-mapping tables use tenant isolation / FORCE RLS under the production runtime role.
 
 Do not send SCIM credentials in query parameters or logs.
 
@@ -70,8 +64,10 @@ Discovery:
 - `GET /ServiceProviderConfig`
 - `GET /ResourceTypes`
 - `GET /ResourceTypes/User`
+- `GET /ResourceTypes/Group`
 - `GET /Schemas`
 - `GET /Schemas/{User-schema-URI}`
+- `GET /Schemas/{Group-schema-URI}`
 
 Users:
 
@@ -82,76 +78,112 @@ Users:
 - `PATCH /Users/{id}`
 - `DELETE /Users/{id}`
 
+Groups:
+
+- `GET /Groups`
+- `GET /Groups/{id}`
+- `POST /Groups`
+- `PUT /Groups/{id}`
+- `PATCH /Groups/{id}`
+- `DELETE /Groups/{id}`
+
 Supported list filters:
 
-- `userName eq "user@example.com"`
-- `externalId eq "directory-id"`
+- Users: `userName eq "user@example.com"`
+- Users: `externalId eq "directory-id"`
+- Groups: `displayName eq "Finance"`
+- Groups: `externalId eq "directory-group-id"`
 
-The current slice does not implement the full SCIM filter grammar, sorting, Bulk, password changes or ETag concurrency.
+The implementation intentionally does not claim the complete SCIM filter grammar, sorting, Bulk, password changes or ETag conditional updates.
 
-## User lifecycle behavior
+## User lifecycle
 
 ### Create
 
-A new SCIM user requires an email address supplied through the primary/first `emails` entry or a `userName` that is itself a valid email address.
+A new SCIM User requires an email address through the primary/first `emails` entry or an email-form `userName`.
 
-If `active` is omitted, Workspace provisions the membership **inactive by default**. The directory must explicitly send `active: true` to activate access.
+If `active` is omitted, Workspace provisions the membership **inactive by default**. The directory must explicitly send `active: true` to enable access.
 
 A newly created Workspace user is passwordless unless another supported authentication path later establishes credentials.
 
-The connector's configured default role is applied only on initial membership creation.
+The connector's configured default role becomes the SCIM User's **base role**. This base role is retained so Workspace can safely restore it when no administrator-approved Group role mapping applies.
 
 ### Existing Workspace identities
 
-Workspace users are global identities, while organisation memberships are tenant-specific.
+Workspace users are global identities; organisation memberships are tenant-specific.
 
-If the same email already exists globally but has no membership in the connector's tenant, SCIM may create the tenant membership and its SCIM mapping.
+If the same email already exists globally but has no membership in the connector tenant, SCIM may create that tenant membership and mapping.
 
-If a membership already exists in that tenant and has never been SCIM-managed, SCIM returns a conflict rather than silently taking ownership.
+If a membership already exists in the tenant and has never been SCIM-managed, SCIM returns a conflict rather than silently taking ownership. This also prevents manual users from being inserted into SCIM Groups: Group members must reference live SCIM User resource IDs from the same tenant.
 
-Once a membership is SCIM-managed, its active/inactive lifecycle remains under SCIM control even if an administrator later changes the Workspace role. This ensures directory offboarding cannot be blocked merely because the employee was later promoted inside Workspace.
+SCIM never manages `owner` or `admin` memberships.
 
-### Attribute boundaries
+### Attributes
 
-In this first slice:
+For Users:
 
 - `userName` is immutable after provisioning;
 - primary email is immutable after provisioning;
-- `displayName` and `externalId` are mutable;
-- `active` is mutable.
+- `displayName`, `externalId` and `active` are mutable.
 
-SCIM display metadata is tenant-scoped and does not overwrite the global Workspace user's display profile for other organisations.
+SCIM display metadata is tenant-scoped and does not overwrite the global Workspace user profile for other organisations.
 
-### Deactivate
+### Deactivate / reactivate / delete
 
-Sending `active: false` immediately:
+Sending `active: false`:
 
-1. marks the membership inactive in the connector's organisation;
-2. deletes active Workspace sessions for that user **in that organisation**;
-3. emits a `scim.user.deactivated` audit event.
+1. marks the membership inactive in the connector organisation;
+2. deletes active Workspace sessions for that user in that organisation;
+3. emits `scim.user.deactivated`.
 
-A global user may belong to multiple organisations. Deactivation through one tenant's SCIM connector does **not** deactivate memberships or sessions in another tenant.
+Other organisations remain untouched.
 
-### Reactivate
+Sending `active: true` reactivates the tenant membership, but previously revoked sessions remain invalid; the user must authenticate again.
 
-Sending `active: true` reactivates the tenant membership. The user must then authenticate normally to obtain a new Workspace session.
+`DELETE /Users/{id}` deactivates the membership, revokes tenant sessions and tombstones the SCIM mapping. It does not delete the global Workspace identity or other-tenant memberships.
 
-Previously revoked sessions do not become valid again.
+## Group lifecycle
 
-### Delete
+SCIM Groups are directory synchronization objects. A Group contains references to live SCIM User resource IDs.
 
-`DELETE /Users/{id}` is a SCIM lifecycle deletion, not deletion of the global Workspace identity.
+Supported operations include full replacement with PUT and PATCH operations for:
 
-It:
+- `displayName`;
+- `externalId`;
+- `members` add/replace/remove;
+- removal of an individual member with a path such as `members[value eq "<scim-user-id>"]`.
 
-- deactivates the membership;
-- revokes that tenant's active Workspace sessions;
-- tombstones the SCIM mapping;
-- returns the resource as no longer available through SCIM.
+Group synchronization **does not activate or deactivate users**. User access lifecycle remains controlled by the SCIM User `active` state.
 
-Other-tenant memberships remain untouched.
+Deleting a Group removes its role mapping and membership links, tombstones the Group, and recomputes affected users' roles.
 
-## PATCH
+## Explicit Group → Workspace role mapping
+
+Synchronized Groups do not change Workspace roles merely because they exist.
+
+An organisation owner/admin chooses mappings in:
+
+**Settings → Integrations → Directory group role mapping**
+
+Each Group may be mapped to:
+
+- no Workspace role;
+- `guest`;
+- `member`.
+
+`owner` and `admin` are deliberately unavailable.
+
+Role resolution for a SCIM-managed User is deterministic:
+
+1. if any current mapped Group grants `member`, effective role is `member`;
+2. otherwise, if any current mapped Group grants `guest`, effective role is `guest`;
+3. otherwise, effective role returns to the User's original SCIM base role.
+
+This means explicit `member` mapping wins when multiple mapped Groups conflict, while clearing/removing mappings restores the provisioned baseline. Role recomputation does not change the membership's active/inactive state.
+
+Group mappings affect only SCIM-managed memberships. They are not page/ACL grants.
+
+## PATCH schema
 
 PATCH uses:
 
@@ -159,55 +191,57 @@ PATCH uses:
 urn:ietf:params:scim:api:messages:2.0:PatchOp
 ```
 
-Supported attributes in this slice:
+User PATCH supports `active`, `displayName` and `externalId`; `userName` may only repeat its existing value.
 
-- `active`
-- `displayName`
-- `externalId`
+Group PATCH supports the Group attributes and membership operations described above.
 
-`userName` may be repeated only with the same value; changing it is rejected as immutable.
-
-PATCH operation names are accepted case-insensitively.
+Operation names are accepted case-insensitively.
 
 ## Backup and restore
 
 Logical backups include:
 
-- SCIM connector records, including token hashes;
-- SCIM user mappings.
+- SCIM connector records and token hashes;
+- SCIM User mappings and base roles;
+- SCIM Groups;
+- Group membership links;
+- administrator-approved Group role mappings.
 
-The raw bearer token is never stored in plaintext. Because the connector hash is restored, an existing raw token held by the identity provider continues to authenticate after a successful restore of the same deployment data.
+The raw bearer token is never stored in plaintext. Because its hash is restored, an existing raw token held by the identity provider continues to authenticate after a successful restore of the same deployment data.
 
-Protect backup archives as credentials and directory mappings are security-sensitive metadata.
+Protect backup archives because connector hashes and directory mappings are security-sensitive metadata.
 
 ## Operational behavior
 
-SCIM responses are not released until the tenant database transaction has committed. This is important for offboarding: once the identity provider receives a successful deactivation response, subsequent Workspace requests observe the committed inactive membership/session revocation state.
+SCIM responses are returned only after the tenant database transaction commits. For offboarding, a successful response therefore represents committed membership/session state.
 
 The reverse proxy routes `/scim/*` to the API service. Keep SCIM behind the same trusted HTTPS origin as Workspace in production.
 
-Audit actions include:
+Directory audit actions include:
 
 - `scim.user.provisioned`
 - `scim.user.activated`
 - `scim.user.deactivated`
 - `scim.user.updated`
 - `scim.user.deleted`
-- connector creation/revocation events through the normal Workspace event/audit path.
+- `scim.group.created`
+- `scim.group.updated`
+- `scim.group.deleted`
+
+Connector and Group-role-mapping administration also flows through the normal Workspace event/audit path.
 
 ## Current boundaries
 
 Not yet implemented:
 
-- SCIM Groups;
-- group membership synchronization;
-- group-to-Workspace-role mapping;
+- automatic IdP group/realm-role claim mapping outside SCIM;
 - group-to-page/ACL mapping;
+- per-tenant IdP configuration in one shared deployment;
 - full SCIM filter grammar;
 - sorting;
 - Bulk;
 - password change;
 - ETag conditional updates;
-- automatic provider-specific configuration for Entra ID, Okta or other directory products.
+- provider-specific setup automation or compatibility certification for Entra ID, Okta and other directory products.
 
-The next enterprise identity slice should build Groups and an explicit, conservative mapping policy rather than allowing arbitrary directory groups to create owner/admin access.
+The role boundary is intentional: external directory data may synchronize membership structure, but privileged Workspace roles and resource ACLs require separate Workspace-admin control.
