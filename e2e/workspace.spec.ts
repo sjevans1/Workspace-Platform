@@ -909,6 +909,7 @@ test("standalone appearance: dark/light/system persists and editor remains mount
 
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Colour theme" }))
     .toHaveValue("dark");
 
@@ -943,6 +944,7 @@ test("standalone appearance: dark/light/system persists and editor remains mount
   await expect(page.locator("html"))
     .toHaveAttribute("data-theme", preferredDark ? "dark" : "light");
   await page.reload();
+  await page.getByRole("button", { name: "Settings & members", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Colour theme" }))
     .toHaveValue("system");
 });
