@@ -83,6 +83,8 @@ Automated acceptance covers four separate layers:
 
 CI also generates a CycloneDX SBOM for the hardened ClamAV runtime image and applies the same fixable HIGH/CRITICAL Trivy policy used for the Workspace application image.
 
+PR #35 final-head Actions run 36823852010 passed 49/49 backend tests, encrypted S3 acceptance, both release-image SBOM/Trivy gates, scanner readiness, live EICAR detection, Workspace API EICAR rejection with no publication, scan counters, clean browser upload/download, raw attachment ciphertext, Chromium + Firefox accessibility and trusted HTTPS/WSS. The slice was squash-merged at `1994cc1f1f749a905bd87d07fe067996cc4b3543`.
+
 ## Signature updates and disconnected deployments
 
 Fresh malware signatures are operational data, not application source.
