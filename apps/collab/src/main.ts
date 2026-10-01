@@ -7,6 +7,7 @@ const db = new Database(),
   stopHealth = await startInternalHealthServer(
     Number(process.env.COLLAB_HEALTH_PORT || 1235),
     () => collab.health(),
+    process.env.COLLAB_HEALTH_HOST || "127.0.0.1",
   );
 
 let stopping = false;
