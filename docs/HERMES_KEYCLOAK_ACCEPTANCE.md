@@ -28,7 +28,9 @@ Use these isolated names/ports unless already occupied:
 - Workspace HTTP: `127.0.0.1:8082`
 - Workspace HTTPS placeholder: `127.0.0.1:8445`
 - Keycloak container: `openjm-keycloak-test`
-- Keycloak HTTP: `127.0.0.1:18080`
+- Keycloak HTTP: `127.0.0.1:18081`
+
+Port `18080` is reserved for the OpenJM Enterprise AI local OpenAI-compatible model runtime and must not be used by Workspace test infrastructure.
 - Realm: `openjm-test`
 - Client ID: `openjm-workspace`
 
@@ -50,7 +52,7 @@ git log -1 --oneline
 docker ps --format 'table {{.Names}}\t{{.Ports}}'
 ```
 
-Confirm the existing source/recovery projects are left untouched and ports 8082, 8445 and 18080 are available.
+Confirm the existing source/recovery projects are left untouched and ports 8082, 8445 and 18081 are available.
 
 Set:
 
@@ -73,7 +75,7 @@ HTTP_PORT=8082
 HTTPS_PORT=8445
 COOKIE_SECURE=false
 
-OIDC_ISSUER=http://keycloak.localhost:18080/realms/openjm-test
+OIDC_ISSUER=http://keycloak.localhost:18081/realms/openjm-test
 OIDC_CLIENT_ID=openjm-workspace
 OIDC_CLIENT_SECRET=<random-test-secret>
 OIDC_LABEL=OpenJM Test SSO
@@ -115,20 +117,20 @@ Create a realm import file under a private temporary/test-data directory. It mus
 
 Do not commit the realm import or secrets.
 
-Start Keycloak on the Workspace test project's Docker network with the network alias `keycloak.localhost`, with its internal HTTP port also set to 18080 so the issuer URL is identical from the browser and Workspace API container:
+Start Keycloak on the Workspace test project's Docker network with the network alias `keycloak.localhost`, with its internal HTTP port also set to 18081 so the issuer URL is identical from the browser and Workspace API container:
 
 ```bash
 docker run -d \
   --name openjm-keycloak-test \
   --network openjm_workspace_sso_default \
   --network-alias keycloak.localhost \
-  -p 127.0.0.1:18080:18080 \
+  -p 127.0.0.1:18081:18081 \
   -m 1g \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=<private-test-admin> \
   -e KC_BOOTSTRAP_ADMIN_PASSWORD=<private-test-password> \
   -v <private-realm-json>:/opt/keycloak/data/import/openjm-test.json:ro \
   quay.io/keycloak/keycloak:26.7.4 \
-  start-dev --http-port=18080 --import-realm
+  start-dev --http-port=18081 --import-realm
 ```
 
 If Docker generated a different network name, determine the exact disposable `openjm_workspace_sso` default network rather than guessing. Do not attach Keycloak to the source/recovery network.
@@ -136,14 +138,14 @@ If Docker generated a different network name, determine the exact disposable `op
 Wait until:
 
 ```bash
-curl --fail http://keycloak.localhost:18080/realms/openjm-test/.well-known/openid-configuration
+curl --fail http://keycloak.localhost:18081/realms/openjm-test/.well-known/openid-configuration
 ```
 
 works from the host.
 
 Also verify discovery from a disposable container on the Workspace SSO network, without exposing secrets. The issuer reported by discovery must exactly match:
 
-`http://keycloak.localhost:18080/realms/openjm-test`
+`http://keycloak.localhost:18081/realms/openjm-test`
 
 ## Phase 3 — start Workspace and bootstrap locally
 
