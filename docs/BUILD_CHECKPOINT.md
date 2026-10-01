@@ -125,21 +125,21 @@ Administrators can manage connectors in Settings → Integrations → Directory 
 
 The next enterprise identity slice is SCIM Groups and an explicit group-to-Workspace-role mapping policy. Owner/admin provisioning remains deliberately outside SCIM connector authority in the current slice.
 
-## Active hardening slice: SCIM Groups and explicit role mapping
+## Verified hardening slice: SCIM Groups and explicit role mapping
 
-Draft PR #18 (`hardening/scim-groups-role-mapping`) extends the verified SCIM Users lifecycle with SCIM 2.0 Groups, same-tenant SCIM User membership synchronization and an explicit Workspace-admin mapping layer. Directory Groups do not grant access merely by existing. Owners/admins may map a synchronized Group only to `member` or `guest`; SCIM still cannot create `owner` or `admin` authority, and manual Workspace memberships cannot be inserted into SCIM Groups.
+PR #18 extends the verified SCIM Users lifecycle with SCIM 2.0 Groups, same-tenant SCIM User membership synchronization and an explicit Workspace-admin mapping layer. Directory Groups do not grant access merely by existing. Owners/admins may map a synchronized Group only to `member` or `guest`; SCIM still cannot create `owner` or `admin` authority, and manual Workspace memberships cannot be inserted into SCIM Groups.
 
 Role resolution is deterministic: any mapped `member` Group wins over mapped `guest`; otherwise a mapped `guest` applies; with no mapped Group the User returns to the connector-provisioned base role. Group membership changes never activate/deactivate the membership. User `active:false` / DELETE remains the separate offboarding control.
 
 During review, two defects in the interrupted branch were corrected before acceptance: Group list filters/pagination were missing PostgreSQL parameter markers, and the first role reconciler could not let an explicit guest mapping override a member base role. Regression coverage now exercises Group discovery/CRUD/filtering, rejection of manual users as Group members, guest/member precedence, restoration of the provisioned base role, preserved active state, logical backup/recovery of Groups/members/mappings, and the Settings role-mapping control through deployed Chromium.
 
-The slice is intentionally still marked **in progress** until the final PR head passes native PostgreSQL tests, TypeScript/production build, Docker startup/health and deployed Chromium. Do not record it as verified in ACCEPTANCE.md or merge it solely from implementation review.
+PR #18 passed final-head GitHub Actions run 36807221040 and was squash-merged to `main` at `ab5abd5be176a4658bc40cc7fce561cc689cc637`. The backend passed 37/37 native PostgreSQL tests under restricted `workspace_runtime`/`NOBYPASSRLS`, TypeScript and the production build. The deployment job passed configuration/image build, startup/health and deployed Chromium, including the Settings-driven Group role-mapping workflow.
 
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-SCIM Groups/group-role mapping is the active PR #18 identity slice and remains pending its final CI gate. The next host-level operations acceptance remains a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; provider compatibility, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
+SCIM Groups/group-role mapping is closed and verified. The next host-level operations acceptance remains a customer-like trusted-TLS deployment plus validation against the selected production S3/object-store provider. Independent WSL deployment, restart persistence, migration execution, logical backup/recovery, real Keycloak login and real-provider back-channel logout have been exercised successfully. Follow the explicit remaining-work table in ACCEPTANCE.md; provider compatibility, operational tenant-provisioning, external metrics/alerts, trusted-TLS validation, broader adversarial security coverage, and wider browser/accessibility coverage remain.
 
 ## Continuity and execution notes
 

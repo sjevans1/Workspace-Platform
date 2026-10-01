@@ -4,7 +4,7 @@ A self-hosted, white-label workspace for shared knowledge, collaborative pages a
 
 **Status: working alpha, not the completed production MVP.** The backend, collaboration protocol, tenant isolation and backup round trip have automated coverage. See [acceptance status and remaining work](docs/ACCEPTANCE.md) for the exact verification boundary.
 
-[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36801538725): 37 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and three deployed Chromium workflows including SCIM connector administration. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff. Real Keycloak 26.7.4 login/provisioning and no-workaround back-channel logout have also passed on the disposable WSL2 host. SCIM Users provisioning/offboarding is verified; SCIM Groups, membership synchronization and explicit member/guest role mapping are implemented in draft PR #18 and remain subject to its final CI/deployment gate.
+[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36807221040): 37 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and deployed Chromium workflows. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff. Real Keycloak 26.7.4 login/provisioning and no-workaround back-channel logout have also passed on the disposable WSL2 host. SCIM Users/Groups provisioning, offboarding, membership synchronization and explicit member/guest group-role mapping are now implemented and verified.
 
 ## Start locally
 
