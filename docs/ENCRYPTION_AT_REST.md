@@ -50,7 +50,7 @@ docker compose stop api collab worker
 
 docker compose --profile ops run --rm \
   -e WORKSPACE_MAINTENANCE=true \
-  ops npm run migrate:storage-encryption
+  ops node --import tsx scripts/migrate-storage-encryption.ts
 ```
 
 The migration does not overwrite immutable objects. For each plaintext file it:
