@@ -13,15 +13,17 @@ export function Modal({
   wide?: boolean;
 }) {
   const panel = useRef<HTMLElement>(null),
-    closeRef = useRef(close);
+    closeRef = useRef(close),
+    restoreFocus = useRef<HTMLElement | null>(
+      typeof document !== "undefined" &&
+        document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null,
+    );
   closeRef.current = close;
 
   useEffect(() => {
-    const previous =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null,
-      focusable = () =>
+    const focusable = () =>
         panel.current
           ? Array.from(
               panel.current.querySelectorAll<HTMLElement>(
@@ -73,7 +75,7 @@ export function Modal({
     document.addEventListener("keydown", fn);
     return () => {
       document.removeEventListener("keydown", fn);
-      if (previous?.isConnected) previous.focus();
+      if (restoreFocus.current?.isConnected) restoreFocus.current.focus();
     };
   }, []);
 
