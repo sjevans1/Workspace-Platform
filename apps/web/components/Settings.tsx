@@ -14,6 +14,7 @@ export default function Settings({
     [members, setMembers] = useState<any[]>([]),
     [branding, setBranding] = useState(me.branding),
     [integrations, setIntegrations] = useState<any[]>([]),
+    [scimConnectors, setScimConnectors] = useState<any[]>([]),
     [hooks, setHooks] = useState<any>({ subscriptions: [], deliveries: [] }),
     [audit, setAudit] = useState<any[]>([]),
     [modal, setModal] = useState(""),
@@ -26,6 +27,7 @@ export default function Settings({
     if (!admin) return;
     setMembers(await api("/members"));
     setIntegrations(await api("/integrations"));
+    setScimConnectors(await api("/scim/connectors"));
     setHooks(await api("/webhooks"));
     setAudit(await api("/audit"));
   }
@@ -296,6 +298,56 @@ export default function Settings({
           >
             Explore the API <ArrowUpRight size={15} />
           </a>
+          <hr className="section-divider" />
+          <div className="section-title">
+            <div>
+              <h2>Directory provisioning (SCIM 2.0)</h2>
+              <p className="muted">
+                Provision and deactivate member or guest access from an
+                enterprise identity directory. Deactivation immediately revokes
+                this organisation’s Workspace sessions.
+              </p>
+            </div>
+            <button
+              className="button primary"
+              onClick={() => setModal("scim")}
+            >
+              <Plus size={15} />
+              Create SCIM connector
+            </button>
+          </div>
+          {scimConnectors.length === 0 && (
+            <p className="muted">No SCIM connectors configured.</p>
+          )}
+          {scimConnectors.map((connector: any) => (
+            <div className="integration-row" key={connector.id}>
+              <div>
+                <strong>{connector.label}</strong>
+                <small>
+                  Default role: {connector.default_role} · Last used{" "}
+                  {connector.last_used_at ? date(connector.last_used_at) : "never"}
+                </small>
+                <p className="small-text muted">
+                  {connector.revoked_at
+                    ? `Revoked ${date(connector.revoked_at)}`
+                    : "Active"}
+                </p>
+              </div>
+              {!connector.revoked_at && (
+                <button
+                  className="button"
+                  onClick={() =>
+                    run(async () => {
+                      await api(`/scim/connectors/${connector.id}`, "DELETE");
+                      await load();
+                    })
+                  }
+                >
+                  Revoke
+                </button>
+              )}
+            </div>
+          ))}
         </section>
       )}
       {tab === "webhooks" && (
@@ -404,7 +456,9 @@ export default function Settings({
               ? "Invite a teammate"
               : modal === "integration"
                 ? "Create service credential"
-                : modal === "webhook"
+                : modal === "scim"
+                  ? "Create SCIM connector"
+                  : modal === "webhook"
                   ? "Add event subscription"
                   : `New ${modal}`
           }
@@ -442,6 +496,14 @@ export default function Settings({
                 });
                 setSecret(
                   `Token: ${r.token}\nPrincipal: ${r.principal_id}\nSave this token now. It will not be shown again.`,
+                );
+              } else if (modal === "scim") {
+                const r = await api("/scim/connectors", "POST", {
+                  label: v.name,
+                  default_role: v.default_role,
+                });
+                setSecret(
+                  `SCIM base URL: ${r.base_url}\nBearer token: ${r.token}\nDefault role: ${r.default_role}\n\nSave this token now. It will not be shown again.`,
                 );
               } else if (modal === "webhook") {
                 const r = await api("/webhooks", "POST", {
@@ -497,6 +559,20 @@ export default function Settings({
                 <input type="checkbox" name="write" />
                 Allow write API scopes
               </label>
+            )}
+            {modal === "scim" && (
+              <>
+                <Field label="Default provisioned role">
+                  <select name="default_role" defaultValue="member">
+                    <option value="member">member</option>
+                    <option value="guest">guest</option>
+                  </select>
+                </Field>
+                <p className="muted small-text">
+                  SCIM cannot provision owner or administrator roles. Existing
+                  manual memberships are never silently adopted into SCIM.
+                </p>
+              </>
             )}
             {modal === "webhook" && (
               <>

@@ -269,6 +269,223 @@ test("native integration uses the restricted production runtime database role", 
   assert.equal(role.bypass, false);
 });
 
+test("SCIM provisions tenant users and active=false immediately revokes only that tenant sessions", async () => {
+  const connector = await ok("POST", "/scim/connectors", {
+    label: "Identity directory",
+    default_role: "member",
+  });
+  assert.match(connector.token, /^scim_[A-Za-z0-9_-]+$/);
+  assert.match(connector.base_url, /\/scim\/v2$/);
+
+  const scim = async (
+    method: string,
+    path: string,
+    data?: any,
+    tokenValue = connector.token,
+  ) =>
+    app.inject({
+      method,
+      url: `/scim/v2${path}`,
+      headers: {
+        authorization: `Bearer ${tokenValue}`,
+        ...(data !== undefined
+          ? { "content-type": "application/scim+json" }
+          : {}),
+      },
+      ...(data !== undefined ? { payload: data } : {}),
+    });
+
+  const unauthenticated = await app.inject({
+    method: "GET",
+    url: "/scim/v2/ServiceProviderConfig",
+  });
+  assert.equal(unauthenticated.statusCode, 401);
+  assert.match(
+    unauthenticated.headers["content-type"],
+    /application\/scim\+json/,
+  );
+
+  const config = await scim("GET", "/ServiceProviderConfig");
+  assert.equal(config.statusCode, 200, config.body);
+  assert.equal(config.json().patch.supported, true);
+  assert.equal(config.json().filter.supported, true);
+
+  const createdResponse = await scim("POST", "/Users", {
+    schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+    externalId: "directory-123",
+    userName: "directory.user@example.test",
+    displayName: "Directory User",
+    emails: [
+      {
+        value: "directory.user@example.test",
+        primary: true,
+        type: "work",
+      },
+    ],
+    active: true,
+  });
+  assert.equal(createdResponse.statusCode, 201, createdResponse.body);
+  const created = createdResponse.json();
+  assert.equal(created.userName, "directory.user@example.test");
+  assert.equal(created.active, true);
+  assert.equal(created.externalId, "directory-123");
+
+  const filtered = await scim(
+    "GET",
+    '/Users?filter=userName%20eq%20%22directory.user%40example.test%22',
+  );
+  assert.equal(filtered.statusCode, 200, filtered.body);
+  assert.equal(filtered.json().totalResults, 1);
+  assert.equal(filtered.json().Resources[0].id, created.id);
+
+  const managed = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      `SELECT s.user_id,m.role,m.active
+       FROM scim_users s
+       JOIN memberships m ON m.tenant_id=s.tenant_id AND m.user_id=s.user_id
+       WHERE s.id=$1`,
+      [created.id],
+    ),
+  );
+  assert.equal(managed.role, "member");
+  assert.equal(managed.active, true);
+
+  const tenantToken = await db.tenant(owner.tenant, (q) =>
+      createSession(q, owner.tenant, managed.user_id),
+    ),
+    tenantActor = {
+      cookie: `workspace_session=${tenantToken}`,
+      csrf: csrf(tenantToken),
+    };
+  assert.equal((await req("GET", "/me", undefined, tenantActor)).statusCode, 200);
+
+  await db.tenant(other.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
+      [other.tenant, managed.user_id],
+    );
+  });
+  const otherToken = await db.tenant(other.tenant, (q) =>
+      createSession(q, other.tenant, managed.user_id),
+    ),
+    otherActor = {
+      cookie: `workspace_session=${otherToken}`,
+      csrf: csrf(otherToken),
+    };
+  assert.equal((await req("GET", "/me", undefined, otherActor)).statusCode, 200);
+
+  const deactivated = await scim("PATCH", `/Users/${created.id}`, {
+    schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    Operations: [{ op: "replace", path: "active", value: false }],
+  });
+  assert.equal(deactivated.statusCode, 200, deactivated.body);
+  assert.equal(deactivated.json().active, false);
+
+  const primaryState = await db.tenant(owner.tenant, async (q) => ({
+    membership: await one(
+      q,
+      "SELECT active FROM memberships WHERE user_id=$1",
+      [managed.user_id],
+    ),
+    sessions: Number(
+      (
+        await one(
+          q,
+          "SELECT count(*) n FROM sessions WHERE tenant_id=$1 AND user_id=$2",
+          [owner.tenant, managed.user_id],
+        )
+      ).n,
+    ),
+  }));
+  assert.equal(primaryState.membership.active, false);
+  assert.equal(primaryState.sessions, 0);
+  assert.equal(
+    await db.system((q) =>
+      one(q, "SELECT * FROM session_actor($1)", [hash(tenantToken)]),
+    ),
+    undefined,
+  );
+
+  const otherState = await db.tenant(other.tenant, async (q) => ({
+    membership: await one(
+      q,
+      "SELECT active FROM memberships WHERE user_id=$1",
+      [managed.user_id],
+    ),
+    sessions: Number(
+      (
+        await one(
+          q,
+          "SELECT count(*) n FROM sessions WHERE tenant_id=$1 AND user_id=$2",
+          [other.tenant, managed.user_id],
+        )
+      ).n,
+    ),
+  }));
+  assert.equal(otherState.membership.active, true);
+  assert.equal(otherState.sessions, 1);
+
+  assert.equal((await req("GET", "/me", undefined, tenantActor)).statusCode, 401);
+  assert.equal((await req("GET", "/me", undefined, otherActor)).statusCode, 200);
+
+  const deactivationAudit = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT action FROM audit_events WHERE action='scim.user.deactivated' ORDER BY created_at DESC LIMIT 1",
+    ),
+  );
+  assert.equal(deactivationAudit.action, "scim.user.deactivated");
+
+  const reactivated = await scim("PATCH", `/Users/${created.id}`, {
+    schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    Operations: [{ op: "replace", value: { active: true } }],
+  });
+  assert.equal(reactivated.statusCode, 200, reactivated.body);
+  assert.equal(reactivated.json().active, true);
+
+  const freshToken = await db.tenant(owner.tenant, (q) =>
+      createSession(q, owner.tenant, managed.user_id),
+    ),
+    freshActor = {
+      cookie: `workspace_session=${freshToken}`,
+      csrf: csrf(freshToken),
+    };
+  assert.equal((await req("GET", "/me", undefined, freshActor)).statusCode, 200);
+
+  const immutable = await scim("PATCH", `/Users/${created.id}`, {
+    schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    Operations: [
+      { op: "replace", path: "userName", value: "changed@example.test" },
+    ],
+  });
+  assert.equal(immutable.statusCode, 400);
+  assert.equal(immutable.json().scimType, "mutability");
+
+  const adoptExisting = await scim("POST", "/Users", {
+    schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+    userName: "member@example.test",
+    emails: [{ value: "member@example.test", primary: true }],
+    active: true,
+  });
+  assert.equal(adoptExisting.statusCode, 409);
+  assert.equal(adoptExisting.json().scimType, "uniqueness");
+
+  const deleted = await scim("DELETE", `/Users/${created.id}`);
+  assert.equal(deleted.statusCode, 204, deleted.body);
+  assert.equal((await req("GET", "/me", undefined, freshActor)).statusCode, 401);
+  assert.equal((await req("GET", "/me", undefined, otherActor)).statusCode, 200);
+  assert.equal((await scim("GET", `/Users/${created.id}`)).statusCode, 404);
+
+  const connectorList = await ok("GET", "/scim/connectors");
+  assert.ok(connectorList.some((item: any) => item.id === connector.id));
+  assert.ok(connectorList.every((item: any) => !("token" in item)));
+
+  await ok("DELETE", `/scim/connectors/${connector.id}`);
+  const revoked = await scim("GET", "/ServiceProviderConfig");
+  assert.equal(revoked.statusCode, 401);
+});
+
 test("OIDC links an existing verified account with browser-bound one-time state", async () => {
   const methods = await ok("GET", "/auth/methods", undefined, null);
   assert.equal(methods.local, true);
