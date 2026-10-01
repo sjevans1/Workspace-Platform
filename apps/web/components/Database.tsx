@@ -483,7 +483,7 @@ export default function Database({
         </button>
         <button
           disabled={rows.length < (config.type === "calendar" ? 200 : 100)}
-          onClick={() => setOffset((v) => v + (config.type === "calendar" ? 200 : 100))
+          onClick={() => setOffset((v) => v + (config.type === "calendar" ? 200 : 100))}
         >
           Next
         </button>
