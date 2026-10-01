@@ -169,6 +169,14 @@ Telemetry is intentionally low-cardinality and content-free: dependency/service 
 
 Regression coverage exercises metrics rendering and live bearer authentication. CI deployment acceptance now scrapes through Caddy, confirms healthy dependency/service gauges and rejects identifier leakage. PR #26 passed final-head GitHub Actions run 36812647394 and was squash-merged to `main` at `121a37703bf265b94949b310158a97419a46e814`. The backend passed 41/41 native PostgreSQL tests, including metrics authentication and low-cardinality output regressions, plus TypeScript/build and the S3 harness. The deployment job passed authenticated `/metrics` scraping through Caddy, the normal Chromium workflow and trusted HTTPS/secure-cookie/WSS acceptance.
 
+## Active hardening slice: adversarial security coverage
+
+The current security slice targets residual cross-boundary attack paths rather than reworking controls already proven by RLS/SSO/SCIM/TLS acceptance. Invitation URLs are captured into in-memory UI state and immediately scrubbed from the address bar; the edge now uses `Referrer-Policy: no-referrer` plus same-origin opener/resource policies and `form-action 'self'` in CSP. Invitation tokens are deliberately not persisted in browser storage.
+
+Attachment adversarial tests now reject active/unsupported extensions, invalid image/PDF signatures and MIME confusion, while private download tests verify nosniff, sandbox CSP and attachment disposition. The webhook regression now proves an allowlisted endpoint returning HTTP 302 cannot redirect delivery to an unallowlisted second target.
+
+This slice remains **in progress** until final-head native PostgreSQL, browser invitation-flow and trusted-TLS/header gates pass. Malware scanning/CDR, nonce/hash CSP, release-image vulnerability scanning and customer-specific penetration testing remain separate production-hardening work.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
