@@ -1486,6 +1486,93 @@ function dataRoutes(
     "databases.read",
   );
   route(
+    "GET",
+    "/databases/:id/relation-targets",
+    "Discover accessible relation target databases",
+    async (q, a, r) => {
+      const source = await requireAccess(q, a, id(r));
+      assert(source.kind === "database", 404, "Database not found");
+      const params = query(r),
+        search = String(params.search || "").slice(0, 120)
+          .replace(/[\\%_]/g, "\\  route(
+    "PATCH",
+    "/databases/:id",
+    "Update validated property schema","),
+        limit = Math.min(50, Math.max(1, Number(params.limit) || 20)),
+        offset = Math.max(0, Math.min(10000, Number(params.offset) || 0));
+      const rows = (await q.query(
+        "SELECT id,title FROM resources WHERE kind='database'" +
+        " AND deleted_at IS NULL AND id<>$1" +
+        " AND lower(title) LIKE lower($2) ESCAPE '\\\\'" +
+        " ORDER BY lower(title),id LIMIT $3 OFFSET $4",
+        [source.id, "%" + search + "%", limit + 1, offset],
+      )).rows;
+      return {
+        items: (await visible(q, a, rows.slice(0, limit))).map((v) => ({
+          id: v.id, title: v.title,
+        })),
+        next_offset: offset + limit,
+        has_more: rows.length > limit,
+      };
+    },
+    "databases.read",
+  );
+  route(
+    "GET",
+    "/databases/:id/relation-candidates",
+    "Search or resolve authorized related records",
+    async (q, a, r) => {
+      const source = await requireAccess(q, a, id(r));
+      assert(source.kind === "database", 404, "Database not found");
+      const props = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1",
+        [source.id]);
+      const params = query(r),
+        field = props?.properties.find((p: any) =>
+          p.id === params.property && p.type === "relation");
+      assert(field && field.target_database_id, 404,
+        "Relation property unavailable");
+      const target = await requireAccess(q, a, field.target_database_id);
+      assert(target.kind === "database", 404, "Target database unavailable");
+      const limit = Math.min(40, Math.max(1, Number(params.limit) || 20)),
+        offset = Math.max(0, Math.min(10000, Number(params.offset) || 0));
+      if (params.selected) {
+        const values = String(params.selected).split(",");
+        assert(values.length <= 20, 400, "Too many selected records");
+        const ids = values.map((value) => uuid.parse(value));
+        const rows = (await q.query(
+          "SELECT id,title FROM resources WHERE id=ANY($1::uuid[])" +
+          " AND parent_id=$2 AND kind='record' AND deleted_at IS NULL",
+          [ids, target.id],
+        )).rows;
+        return {
+          items: (await visible(q, a, rows)).map((v) =>
+            ({ id: v.id, title: v.title })),
+          next_offset: 0, has_more: false,
+        };
+      }
+      const search = String(params.search || "").slice(0, 120)
+        .replace(/[\\%_]/g, "\\  route(
+    "PATCH",
+    "/databases/:id",
+    "Update validated property schema",");
+      const rows = (await q.query(
+        "SELECT id,title FROM resources WHERE kind='record'" +
+        " AND parent_id=$1 AND deleted_at IS NULL" +
+        " AND lower(title) LIKE lower($2) ESCAPE '\\\\'" +
+        " ORDER BY lower(title),id LIMIT $3 OFFSET $4",
+        [target.id, "%" + search + "%", limit + 1, offset],
+      )).rows;
+      return {
+        items: (await visible(q, a, rows.slice(0, limit))).map((v) =>
+          ({ id: v.id, title: v.title })),
+        next_offset: offset + limit,
+        has_more: rows.length > limit,
+      };
+    },
+    "databases.read",
+  );
+  route(
     "PATCH",
     "/databases/:id",
     "Update validated property schema",
