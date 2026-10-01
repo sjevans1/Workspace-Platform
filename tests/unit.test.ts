@@ -19,7 +19,12 @@ import {
   project,
   validateBlocks,
 } from "../packages/editor/server.ts";
-import { inspectFile } from "../packages/storage/index.ts";
+import {
+  inspectFile,
+  encryptStoredObject,
+  decryptStoredObject,
+  isEncryptedStoredObject,
+} from "../packages/storage/index.ts";
 import * as Y from "yjs";
 import {
   HttpMetrics,
@@ -103,6 +108,31 @@ test("scrypt passwords, tamper-proof tickets, encrypted secrets", async () => {
   assert.throws(() => decrypt(parts.join(".")));
   assert.equal(signature("key", "1", "body").length, 64);
 });
+test("storage object encryption is authenticated and bound to its object key", () => {
+  const key = "11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222/33333333-3333-3333-3333-333333333333",
+    plain = Buffer.from("sensitive attachment bytes"),
+    encoded = encryptStoredObject(key, plain);
+
+  assert(isEncryptedStoredObject(encoded));
+  assert(!encoded.includes(plain));
+  assert.deepEqual(decryptStoredObject(key, encoded), plain);
+  assert.throws(
+    () =>
+      decryptStoredObject(
+        key.replace("33333333", "44444444"),
+        encoded,
+      ),
+    /authenticate|Unsupported state|unable/i,
+  );
+
+  const tampered = Buffer.from(encoded);
+  tampered[tampered.length - 1] ^= 1;
+  assert.throws(
+    () => decryptStoredObject(key, tampered),
+    /authenticate|Unsupported state|unable/i,
+  );
+});
+
 test("canonical document survives Yjs round trip and unsafe links fail", () => {
   const d = new Y.Doc();
   Y.applyUpdate(
