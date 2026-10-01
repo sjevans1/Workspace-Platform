@@ -49,6 +49,7 @@ The API verifies that both the service and the active end-user membership can ac
 | `GET /api/v1/files/:id/content` | Current-authorized bytes |
 | `GET /api/v1/resources/:id/permissions` | Effective level and source ACL chain |
 | `GET /api/v1/events?since=<ISO timestamp>` | Accessible event references |
+| `GET /api/v1/events/cursor?limit=100&cursor=<opaque>` | Resumable, signed keyset page of currently accessible event references; first page may use `since=<ISO>` |
 
 Available scopes: workspace.read/write, pages.read/write, databases.read/write, files.read/write, users.read, permissions.read and events.read. Administrative settings require a human administrator session even if an integration has write scopes. Service credentials cannot open collaboration sockets.
 
@@ -73,4 +74,22 @@ Headers are `X-Workspace-Event`, `X-Workspace-Timestamp` (Unix seconds) and `X-W
 
 Expect at-least-once delivery and tolerate duplicate/out-of-order references. Fetch current state through a scoped credential after verifying the event. Deletion and permission events must remove or reauthorize evidence. Never infer a user's access from the fact that an administrator configured a webhook.
 
-The current event polling endpoint is a bounded timestamp-based feed without a durable cursor. Production ingestion should use webhooks plus a scheduled reconciliation scan; durable cursor pagination, dead-letter replay UI and bulk reconciliation endpoints are remaining work. State-changing events are written atomically with domain updates. All external writes by a future Intelligence agent should be explicit, scoped and independently audited; the default integration created here is read-only.
+### Resumable event polling for OpenJM Intelligence
+
+`GET /api/v1/events/cursor` complements (and does not change) the original array-returning `GET /api/v1/events`. The new endpoint requires `events.read` scope on service tokens and still applies **current resource permissions to each event**. It returns up to `limit` (1–200; default 100) scanned event references ordered by `(created_at, id)`, using PostgreSQL microsecond precision to prevent lost position on timestamp ties:
+
+```json
+{
+  "events": [{ "id": "event-uuid", "tenant_id": "tenant-uuid", "type": "page.updated", "resource_id": "page-uuid", "version": 1, "created_at": "2026-10-01T12:00:00.000Z" }],
+  "next_cursor": "event-v1.<signed-payload>.<signature>",
+  "has_more": true
+}
+```
+
+Begin with `?since=2026-10-01T00:00:00Z&limit=100` (or omit `since` for a full historical scan). Pass the returned `next_cursor` on subsequent calls. Even when `has_more=false`, **retain that cursor** and poll it later for new committed events. On some pages `events` may be empty while `has_more=true`: inaccessible references consume scan positions but are never returned. Keep following `next_cursor` until `has_more=false`. `cursor` and `since` cannot be combined.
+
+Cursors are HMAC-authenticated and tenant/principal-bound. Treat them as opaque continuation values; do not parse or forge them. A cursor carried by another tenant or principal, or a tampered cursor, is rejected. Returned event IDs must still be deduplicated by the consumer, and content must always be fetched under the current permissions. A successful page is *not* proof of ongoing access.
+
+**Consistency boundary:** this is a keyset read over already committed rows, **not** an exactly-once change-data-capture stream or a global commit-order log. A transaction that commits late with an older `created_at` can fall before a previously issued cursor. Continue using signed webhooks for prompt notification **plus a periodic overlapping `since` rescan (with event-ID deduplication) and a current-state reconciliation pass** for recovery. This also handles eventual permission changes. Avoid claiming complete ingestion solely from `has_more=false`.
+
+The original timestamp-based feed is unchanged. Dead-letter replay UI and bulk reconciliation remain future work. State-changing events are written atomically with domain updates. All external writes by a future Intelligence agent should be explicit, scoped and independently audited; the default integration created here is read-only.
