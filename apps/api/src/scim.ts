@@ -82,7 +82,10 @@ const email = z.email().transform((value) => value.trim().toLowerCase()),
         .array(
           z
             .object({
-              op: z.enum(["add", "replace", "remove"]),
+              op: z
+                .string()
+                .transform((value) => value.toLowerCase())
+                .pipe(z.enum(["add", "replace", "remove"])),
               path: z.string().trim().max(500).optional(),
               value: z.unknown().optional(),
             })
@@ -95,6 +98,8 @@ const email = z.email().transform((value) => value.trim().toLowerCase()),
 
 function scimError(error: any) {
   if (error instanceof ScimError) return error;
+  if (error instanceof SyntaxError)
+    return new ScimError(400, "Invalid JSON request body", "invalidSyntax");
   if (error instanceof z.ZodError)
     return new ScimError(
       400,
@@ -695,12 +700,6 @@ export async function registerScim(app: FastifyInstance, db: Database) {
           const id = uuid.parse((request.params as any).id),
             row = await loadUser(q, id);
           if (!row) throw new ScimError(404, "User not found");
-          if (["owner", "admin"].includes(row.role))
-            throw new ScimError(
-              403,
-              "SCIM cannot manage owner or administrator memberships",
-              "mutability",
-            );
           const patch = patchInput.parse(request.body),
             next = applyPatch(
               {
@@ -739,12 +738,6 @@ export async function registerScim(app: FastifyInstance, db: Database) {
           const id = uuid.parse((request.params as any).id),
             row = await loadUser(q, id);
           if (!row) throw new ScimError(404, "User not found");
-          if (["owner", "admin"].includes(row.role))
-            throw new ScimError(
-              403,
-              "SCIM cannot manage owner or administrator memberships",
-              "mutability",
-            );
           const input = scimUserInput.parse(request.body);
           assertSchema(input);
           if (input.userName.toLowerCase() !== row.user_name.toLowerCase())
@@ -788,12 +781,6 @@ export async function registerScim(app: FastifyInstance, db: Database) {
           const id = uuid.parse((request.params as any).id),
             row = await loadUser(q, id);
           if (!row) throw new ScimError(404, "User not found");
-          if (["owner", "admin"].includes(row.role))
-            throw new ScimError(
-              403,
-              "SCIM cannot manage owner or administrator memberships",
-              "mutability",
-            );
           await setActive(q, context.tenant_id, row.user_id, false);
           await q.query(
             "UPDATE scim_users SET deleted_at=now(),updated_at=now() WHERE id=$1",
