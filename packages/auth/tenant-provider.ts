@@ -84,7 +84,7 @@ export function validateTenantOidcRegistration(
   try {
     issuer = new URL(value.issuer);
   } catch {
-    throw new Error("Invalid OIDC issuer URL");
+    assert(false, 400, "Invalid OIDC issuer URL");
   }
   assert(
     issuer.protocol === "https:" &&
