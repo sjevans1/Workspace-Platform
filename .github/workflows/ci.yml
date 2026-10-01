@@ -127,9 +127,9 @@ jobs:
       - name: Start deployment
         run: |
           docker compose up -d
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             all_healthy=1
-            for service in api collab worker; do
+            for service in api collab worker clamav; do
               id="$(docker compose ps -q "$service")"
               if [ -z "$id" ]; then
                 all_healthy=0
@@ -155,10 +155,30 @@ jobs:
           curl --fail -H "Authorization: Bearer $token" http://localhost:8080/metrics > /tmp/workspace-metrics.txt
           grep -F 'workspace_dependency_ready{dependency="database"} 1' /tmp/workspace-metrics.txt
           grep -F 'workspace_dependency_ready{dependency="storage"} 1' /tmp/workspace-metrics.txt
+          grep -F 'workspace_dependency_ready{dependency="antivirus"} 1' /tmp/workspace-metrics.txt
           grep -F 'workspace_service_healthy{service="collaboration"} 1' /tmp/workspace-metrics.txt
           grep -F 'workspace_service_healthy{service="worker"} 1' /tmp/workspace-metrics.txt
           grep -F 'workspace_http_requests_total' /tmp/workspace-metrics.txt
           ! grep -E 'tenant_id|user_id|resource_id|document_id' /tmp/workspace-metrics.txt
+      - name: Verify live malware scanner detects EICAR
+        run: |
+          docker compose exec -T api node --import tsx --input-type=module <<'NODE'
+          import { createAntivirus } from "./packages/security/antivirus.ts";
+          const antivirus = createAntivirus(process.env);
+          await antivirus.health();
+          const clean = await antivirus.scan(Buffer.from("OpenJM Workspace clean antivirus acceptance payload"));
+          if (clean.status !== "clean")
+            throw new Error("Clean antivirus acceptance payload was not clean");
+          const eicar = Buffer.from(
+            "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*",
+          );
+          const infected = await antivirus.scan(eicar);
+          if (infected.status !== "infected")
+            throw new Error("EICAR was not detected by the deployed malware scanner");
+          if (!/Eicar/i.test(infected.signature))
+            throw new Error("Unexpected EICAR signature: " + infected.signature);
+          console.log("Malware scanner acceptance passed:", infected.signature);
+          NODE
       - name: Verify deployed browser workflow
         run: node scripts/test-deployment.mjs
       - name: Verify deployed local attachment ciphertext
