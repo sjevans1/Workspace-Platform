@@ -100,6 +100,12 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
       );
 
       await q.query(
+        "INSERT INTO sessions" +
+          " (token_hash,tenant_id,user_id,expires_at,oidc_issuer,oidc_subject,oidc_provider_id)" +
+          " VALUES('backup-oidc-session',$1,$2,now()+interval '12 hours',$3,'backup-oidc-subject',$4)",
+        [tenant, user, "https://idp.example.test/", providerId],
+      );
+      await q.query(
         "INSERT INTO scim_connectors(id,tenant_id,label,token_hash,default_role,created_by) VALUES($1,$2,'Directory','backup-token-hash','guest',$3)",
         [connector, tenant, user],
       );
@@ -187,6 +193,15 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     );
     assert.equal(providers.rows.length, 1);
     assert.equal(providers.rows[0].enabled, false);
+    const bound = await db.tenant(tenant, (q) =>
+      q.query(
+        "SELECT oidc_provider_id,oidc_issuer FROM sessions WHERE token_hash='backup-oidc-session'",
+      ),
+    );
+    assert.equal(bound.rows.length, 1);
+    assert.equal(bound.rows[0].oidc_provider_id, providers.rows[0].id);
+    assert.equal(bound.rows[0].oidc_issuer, "https://idp.example.test/");
+
     assert.equal(
       openTenantOidcSecret(
         providers.rows[0].client_secret_encrypted,
