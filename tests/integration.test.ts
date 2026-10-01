@@ -1158,7 +1158,8 @@ test("malware scanning blocks infected uploads before storage and fails closed w
   antivirusUnavailable = true;
   const unavailable = await upload("scanner unavailable payload");
   assert.equal(unavailable.statusCode, 503, unavailable.body);
-  assert.match(unavailable.body, /Malware scanner unavailable/);
+  assert.match(unavailable.body, /Internal error/);
+  assert.doesNotMatch(unavailable.body, /scanner/i);
   after = await db.tenant(owner.tenant, (q) =>
     q.query("SELECT count(*)::int AS count FROM files WHERE resource_id=$1", [
       page.id,
