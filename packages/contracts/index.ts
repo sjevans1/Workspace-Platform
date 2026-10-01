@@ -42,6 +42,7 @@ export const propertyTypes = [
   "email",
   "relation",
   "formula",
+  "rollup",
 ] as const;
 export const property = z
   .object({
@@ -51,6 +52,9 @@ export const property = z
     options: z.array(z.string().min(1).max(120)).max(100).optional(),
     target_database_id: uuid.optional(),
     formula: z.string().trim().min(1).max(240).optional(),
+    rollup_relation_id: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/).optional(),
+    rollup_value_property_id: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/).optional(),
+    rollup_operation: z.enum(["count", "sum", "avg", "min", "max"]).optional(),
   })
   .strict()
   .superRefine((p, ctx) => {
@@ -66,6 +70,20 @@ export const property = z
     if (p.type !== "formula" && p.formula)
       ctx.addIssue({ code: "custom", path: ["formula"],
         message: "Only formula properties can define an expression" });
+    if (p.type === "rollup") {
+      if (!p.rollup_relation_id || !p.rollup_operation)
+        ctx.addIssue({ code: "custom", path: ["rollup_relation_id"],
+          message: "Rollup needs Relation and operation" });
+      if (p.rollup_operation !== "count" && !p.rollup_value_property_id)
+        ctx.addIssue({ code: "custom", path: ["rollup_value_property_id"],
+          message: "Numeric aggregation requires target field" });
+      if (p.rollup_operation === "count" && p.rollup_value_property_id)
+        ctx.addIssue({ code: "custom", path: ["rollup_value_property_id"],
+          message: "Record count does not take a numeric property" });
+    } else if (p.rollup_relation_id || p.rollup_operation ||
+      p.rollup_value_property_id)
+      ctx.addIssue({ code: "custom", path: ["rollup_operation"],
+        message: "Only Rollup properties may define aggregates" });
   });
 export const properties = z
   .array(property)
@@ -83,7 +101,8 @@ export function validateValues(props: Property[], values: Record<string, any>) {
   for (const [k, v] of Object.entries(values)) {
     const p = props.find((p) => p.id === k);
     assert(p, 400, `Unknown property ${k}`);
-    assert(p.type !== "formula", 400, "Formula properties are read-only");
+    assert(p.type !== "formula" && p.type !== "rollup", 400,
+      "Computed properties are read-only");
     if (v === null || v === "") {
       result[k] = null;
       continue;
