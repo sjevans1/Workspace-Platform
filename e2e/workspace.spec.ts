@@ -948,3 +948,28 @@ test("standalone appearance: dark/light/system persists and editor remains mount
   await expect(page.getByRole("combobox", { name: "Colour theme" }))
     .toHaveValue("system");
 });
+
+
+test("Recent shows pages the signed-in user opened, not just modified pages", async ({ page }) => {
+  await login(page);
+  const name = "Personal recent browser " + Date.now();
+  await page.getByRole("button", { name: "New page", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create something new" });
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(name);
+  // The open page records its own visit only after a successful resource load.
+  await expect.poll(async () => {
+    const response = await page.request.get("/api/v1/resources?recent=true");
+    if (!response.ok()) return false;
+    return (await response.json()).some((item: any) =>
+      item.title === name && Boolean(item.viewed_at));
+  }).toBe(true);
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Recently viewed" })).toBeVisible();
+  await expect(page.locator(".page-card").filter({ hasText: name })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Recent", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await expect(page.locator(".page-card").filter({ hasText: name })).toBeVisible();
+});
