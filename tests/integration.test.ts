@@ -1002,6 +1002,11 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
     ].schema.type,
     "array",
   );
+  const cursorSpec = spec.paths["/api/v1/events/cursor"].get;
+  assert.deepEqual(
+    cursorSpec.responses["200"].content["application/json"].schema.required,
+    ["events", "next_cursor", "has_more"],
+  );
 });
 
 test("native row-level policies and known IDs isolate tenants", async () => {
@@ -1879,4 +1884,115 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
     if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
     else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
   }
+});
+
+
+test("scoped cursor feed retains microsecond keyset order and filters inaccessible events", async () => {
+  const timestamp = "2026-09-01T01:02:03.123456Z";
+  const since = "2026-09-01T01:02:03.123000Z";
+  const rows = Array.from({ length: 5 }, (_, i) => ({
+    id: randomUUID(),
+    resource_id: i % 2 === 0 ? root.id : randomUUID(),
+  }));
+  await db.tenant(owner.tenant, async (q) => {
+    for (const row of rows)
+      await q.query(
+        "INSERT INTO event_outbox(id,tenant_id,type,resource_id,created_at)" +
+        " VALUES($1,$2,'page.updated',$3,$4::timestamptz)",
+        [row.id, owner.tenant, row.resource_id, timestamp],
+      );
+  });
+  const foreign = randomUUID();
+  await db.tenant(other.tenant, (q) =>
+    q.query(
+      "INSERT INTO event_outbox(id,tenant_id,type,resource_id,created_at)" +
+      " VALUES($1,$2,'page.updated',$3,$4::timestamptz)",
+      [foreign, other.tenant, root.id, timestamp],
+    ),
+  );
+
+  const sorted = [...rows].sort((a, b) => a.id.localeCompare(b.id));
+  const expected = sorted.filter((item) => item.resource_id === root.id)
+    .map((item) => item.id);
+  const actual: string[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < rows.length; i++) {
+    const endpoint: string = cursor
+      ? "/events/cursor?limit=1&cursor=" + encodeURIComponent(cursor)
+      : "/events/cursor?limit=1&since=" + encodeURIComponent(since);
+    const page = await ok("GET", endpoint);
+    assert.equal(page.events.length <= 1, true);
+    assert.match(page.next_cursor, /^event-v1\./);
+    assert.equal(page.has_more, true);
+    assert.ok(!page.events.some((e: any) => e.id === foreign));
+    for (const e of page.events) {
+      assert.equal(e.resource_id, root.id);
+      assert.ok(!actual.includes(e.id), "each accessible event is returned once");
+      actual.push(e.id);
+    }
+    cursor = page.next_cursor;
+  }
+  assert.deepEqual(actual, expected);
+
+  // A validly signed cursor must not transfer to another principal or tenant.
+  const forged = cursor!.slice(0, -2) + "xx";
+  assert.equal(
+    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(forged))).statusCode,
+    400,
+  );
+  assert.equal(
+    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(cursor!) +
+      "&since=" + encodeURIComponent(since))).statusCode,
+    400,
+  );
+  const switchedTenantToken = await db.tenant(other.tenant, (q) =>
+    createSession(q, other.tenant, owner.id),
+  );
+  const otherOwner = {
+    cookie: "workspace_session=" + switchedTenantToken,
+    csrf: csrf(switchedTenantToken),
+  };
+  assert.equal(
+    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(cursor!),
+      undefined, otherOwner)).statusCode,
+    400,
+  );
+
+  const guestId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,'Events Reader',true)",
+      [guestId, guestId + "@service.internal"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'guest')",
+      [owner.tenant, guestId],
+    );
+  });
+  const service = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, guestId, ["events.read"], "Events Reader"),
+  );
+  const read = await req(
+    "GET",
+    "/events/cursor?limit=5&since=" + encodeURIComponent(since),
+    undefined,
+    null,
+    { authorization: "Bearer " + service },
+  );
+  assert.equal(read.statusCode, 200, read.body);
+  assert.deepEqual(read.json().events, []);
+  assert.equal(
+    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(cursor!),
+      undefined, null,
+      { authorization: "Bearer " + service })).statusCode,
+    400,
+  );
+  const deniedScope = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, guestId, ["pages.read"], "No events scope"),
+  );
+  assert.equal(
+    (await req("GET", "/events/cursor", undefined, null,
+      { authorization: "Bearer " + deniedScope })).statusCode,
+    403,
+  );
 });
