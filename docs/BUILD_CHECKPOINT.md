@@ -141,6 +141,12 @@ The next production-hardening slice is running the existing Docker/Caddy deploym
 
 CI now re-runs the deployed stack on `https://workspace.test` with Caddy's internal CA, installs that CA into the runner/browser trust stores without disabling certificate verification, and verifies HTTPS readiness, HTTP→HTTPS redirect, HSTS, a Secure/HttpOnly SameSite=Lax Workspace session cookie, no browser HTTP requests and WSS collaboration. PR #19 passed final-head GitHub Actions run 36809176797 and was squash-merged to `main` at `b3a258164a516c1a2cbc849002300a4b95da2431`. Native PostgreSQL, TypeScript/build, ordinary Docker/Chromium acceptance and the trusted-HTTPS browser gate all passed.
 
+## Active hardening slice: production S3 provider acceptance
+
+A guarded `verify:s3-provider` command now exercises exactly the object-store semantics Workspace depends on: bucket health/authentication, unique conditional PUT, byte-for-byte GET, rejection of an existing-key overwrite with preservation of the original bytes, DELETE and object-not-found after cleanup. The command refuses to write unless the operator supplies `--write-test`, and CI exercises it against the existing authenticated SeaweedFS service.
+
+The real-provider gate remains an environment acceptance item rather than a CI claim. `docs/HERMES_S3_ACCEPTANCE.md` defines the bounded source-validation and separate recovery-bucket procedure, including deployment browser/file use, logical backup, isolated restore and negative checks. Do not mark the selected provider accepted until that host exercise passes with authorized validation credentials.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
