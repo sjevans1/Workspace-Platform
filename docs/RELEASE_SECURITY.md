@@ -54,7 +54,7 @@ Current accepted tool releases:
 
 The corresponding commit pins are recorded directly in `.github/workflows/ci.yml`.
 
-The active file-security slice builds a hardened ClamAV runtime from the official 1.5.4 Debian-slim base, applies current Debian security upgrades, then generates a CycloneDX SBOM and applies the same fixable HIGH/CRITICAL Trivy policy to that exact derived image. Malware signatures are intentionally refreshed operational data in the persistent scanner database volume. Final-head CI evidence is required before that scanner-image gate is considered closed.
+PR #35 final-head run `36823852010` verified the hardened ClamAV runtime built from the official 1.5.4 Debian-slim base with Debian security updates: that exact derived image received a CycloneDX SBOM and passed the fixable HIGH/CRITICAL Trivy gate before deployed EICAR acceptance. Malware signatures remain operational data refreshed in the persistent scanner database volume.
 
 ## Current boundaries
 
