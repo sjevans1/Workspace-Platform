@@ -28,7 +28,7 @@ The default Docker deployment uses the official ClamAV image:
 clamav/clamav:1.5.4-debian13-slim
 ```
 
-The image is also pinned to an immutable multi-platform digest in `compose.yaml`.
+The scanner binary/runtime is pinned to the explicit `1.5.4-debian13-slim` image tag. Signature data is intentionally mutable operational data and is refreshed into the persistent `clamav_db` volume.
 
 The scanner:
 
