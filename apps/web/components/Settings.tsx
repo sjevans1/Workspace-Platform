@@ -137,13 +137,15 @@ export default function Settings({
                   <Plus size={15} />
                   New workspace
                 </button>
-                <button
-                  className="button"
-                  onClick={() => setModal("organisation")}
-                >
-                  <Plus size={15} />
-                  New organisation
-                </button>
+                {me.capabilities?.self_service_organisation_creation && (
+                  <button
+                    className="button"
+                    onClick={() => setModal("organisation")}
+                  >
+                    <Plus size={15} />
+                    New organisation
+                  </button>
+                )}
               </div>
             )}
           </section>
