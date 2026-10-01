@@ -21,13 +21,18 @@ export function PropertyInput({
   members = [],
   disabled = false,
   save,
+  databaseId,
 }: {
   p: any;
   value: any;
   members?: any[];
   disabled?: boolean;
+  databaseId?: string;
   save: (v: any) => void;
 }) {
+  if (p.type === "relation")
+    return <RelationInput p={p} value={value} disabled={disabled}
+      save={save} databaseId={databaseId} />;
   if (p.type === "checkbox")
     return (
       <input
@@ -116,6 +121,92 @@ export function PropertyInput({
     />
   );
 }
+function RelationInput({
+  p, value, disabled, save, databaseId,
+}: {
+  p: any; value: any; disabled: boolean; save: (value: any) => void;
+  databaseId?: string;
+}) {
+  const ids: string[] = Array.isArray(value) ? value : [];
+  const [labels, setLabels] = useState<Record<string, string>>({}),
+    [open, setOpen] = useState(false),
+    [search, setSearch] = useState(""),
+    [offset, setOffset] = useState(0),
+    [choices, setChoices] = useState<any[]>([]),
+    [more, setMore] = useState(false),
+    [error, setError] = useState("");
+  const idsKey = ids.join(",");
+  useEffect(() => {
+    if (!databaseId || !p.target_database_id || !idsKey) {
+      setLabels({});
+      return;
+    }
+    let canceled = false;
+    void api(`/databases/${databaseId}/relation-candidates?property=${encodeURIComponent(p.id)}&selected=${encodeURIComponent(idsKey)}`)
+      .then((result) => {
+        if (!canceled) setLabels(Object.fromEntries(
+          result.items.map((record: any) => [record.id, record.title])));
+      })
+      .catch(() => { if (!canceled) setLabels({}); });
+    return () => { canceled = true; };
+  }, [databaseId, p.target_database_id, p.id, idsKey]);
+  useEffect(() => {
+    if (!open || !databaseId || !p.target_database_id) return;
+    let canceled = false;
+    void api(`/databases/${databaseId}/relation-candidates?property=${encodeURIComponent(p.id)}&search=${encodeURIComponent(search)}&offset=${offset}`)
+      .then((result) => {
+        if (!canceled) {
+          setChoices(result.items);
+          setMore(result.has_more);
+          setError("");
+        }
+      })
+      .catch(() => {
+        if (!canceled) { setError("Unable to load permitted records"); setChoices([]); }
+      });
+    return () => { canceled = true; };
+  }, [open, databaseId, p.target_database_id, p.id, search, offset]);
+  if (!p.target_database_id)
+    return <span className="muted">Related database unavailable</span>;
+  return (
+    <div className="relation-input" role="group" aria-label={p.name}>
+      {ids.map((recordId) => (
+        <span className="relation-chip" key={recordId}>
+          <button type="button" disabled={!labels[recordId]}
+            aria-label={`Open related record ${labels[recordId] || ""}`}
+            onClick={() => go(recordId)}>
+            {labels[recordId] || "Related record"}
+          </button>
+          {!disabled && <button type="button"
+            aria-label={`Remove related record ${labels[recordId] || ""}`}
+            onClick={() => save(ids.filter((id) => id !== recordId))}>×</button>}
+        </span>
+      ))}
+      {!disabled && ids.length < 20 && <>
+        <button type="button" aria-label={`Add related record for ${p.name}`}
+          onClick={() => { setOpen(!open); setOffset(0); }}>
+          {open ? "Close picker" : "Add relation"}
+        </button>
+        {open && <div className="relation-picker">
+          <input aria-label={`Search related records for ${p.name}`}
+            value={search} placeholder="Find an accessible record"
+            onChange={(e) => { setSearch(e.target.value); setOffset(0); }} />
+          {error && <span role="alert">{error}</span>}
+          {choices.filter((choice) => !ids.includes(choice.id)).map((choice) =>
+            <button key={choice.id} type="button"
+              aria-label={`Link record ${choice.title}`}
+              onClick={() => { save([...ids, choice.id]); setOpen(false); }}>
+              {choice.title}
+            </button>)}
+          {more && <button type="button"
+            aria-label="More permitted related records"
+            onClick={() => setOffset(offset + 20)}>More</button>}
+        </div>}
+      </>}
+    </div>
+  );
+}
+
 export default function Database({
   id,
   editable,
@@ -396,6 +487,7 @@ export default function Database({
                             p={p}
                             value={row.values[p.id]}
                             members={members}
+                            databaseId={id}
                             disabled={!editable}
                             save={(value) => save(row, p.id, value)}
                           />
@@ -445,6 +537,7 @@ export default function Database({
                           p={p}
                           value={row.values[p.id]}
                           members={members}
+                          databaseId={id}
                           disabled={!editable}
                           save={(value) => save(row, p.id, value)}
                         />
@@ -802,7 +895,23 @@ function PropertiesDialog({
     [visible, setVisible] = useState<string[]>(
       view.config.visible || data.properties.map((p: any) => p.id),
     ),
-    [widths, setWidths] = useState(view.config.widths || {});
+    [widths, setWidths] = useState(view.config.widths || {}),
+    [targetSearch, setTargetSearch] = useState(""),
+    [targetOffset, setTargetOffset] = useState(0),
+    [targetOptions, setTargetOptions] = useState<any[]>([]),
+    [moreTargets, setMoreTargets] = useState(false);
+  useEffect(() => {
+    let canceled = false;
+    void api(`/databases/${data.id}/relation-targets?search=${encodeURIComponent(targetSearch)}&offset=${targetOffset}&limit=30`)
+      .then((result) => {
+        if (!canceled) {
+          setTargetOptions(result.items);
+          setMoreTargets(result.has_more);
+        }
+      })
+      .catch(() => { if (!canceled) { setTargetOptions([]); setMoreTargets(false); } });
+    return () => { canceled = true; };
+  }, [data.id, targetSearch, targetOffset]);
   const update = (i: number, v: any) =>
     setProps((p) => p.map((x, j) => (i === j ? { ...x, ...v } : x)));
   return (
@@ -812,7 +921,9 @@ function PropertiesDialog({
         onSubmit={(e) => {
           e.preventDefault();
           run(async () => {
-            await api(`/databases/${data.id}`, "PATCH", { properties: props });
+            await api(`/databases/${data.id}`, "PATCH", {
+              properties: props.map(({ target_unavailable: _hidden, ...rest }) => rest),
+            });
             await api(`/databases/${data.id}/views/${view.id}`, "PATCH", {
               name: view.name,
               config: {
@@ -856,6 +967,8 @@ function PropertiesDialog({
               onChange={(e) =>
                 update(i, {
                   type: e.target.value,
+                  target_database_id: e.target.value === "relation"
+                    ? p.target_database_id : undefined,
                   ...(["select", "status", "multi_select"].includes(
                     e.target.value,
                   )
@@ -876,6 +989,7 @@ function PropertiesDialog({
                 "person",
                 "url",
                 "email",
+                "relation",
               ].map((t) => (
                 <option key={t}>{t}</option>
               ))}
@@ -906,6 +1020,40 @@ function PropertiesDialog({
             >
               <ArrowUp size={15} />
             </button>
+            {p.type === "relation" && (
+              <div className="relation-target-selector">
+                <label htmlFor={`relation-target-${p.id}`}>Related database</label>
+                <input
+                  aria-label="Search target databases"
+                  placeholder="Find target database"
+                  value={targetSearch}
+                  onChange={(event) => {
+                    setTargetSearch(event.target.value); setTargetOffset(0);
+                  }}
+                />
+                <select id={`relation-target-${p.id}`}
+                  aria-label={`Related database for ${p.name}`}
+                  value={p.target_database_id || ""}
+                  disabled={!editable || p.target_unavailable}
+                  onChange={(event) =>
+                    update(i, { target_database_id: event.target.value || undefined })
+                  }
+                >
+                  <option value="">Choose a permitted database</option>
+                  {p.target_database_id &&
+                    !targetOptions.some((db) => db.id === p.target_database_id) &&
+                    <option value={p.target_database_id}>Current permitted target</option>}
+                  {targetOptions.map((database) =>
+                    <option key={database.id} value={database.id}>{database.title}</option>)}
+                </select>
+                {moreTargets && <button type="button" className="button quiet"
+                  onClick={() => setTargetOffset(targetOffset + 30)}>
+                  More databases
+                </button>}
+                {p.target_unavailable &&
+                  <span className="muted">Target inaccessible; contact an administrator.</span>}
+              </div>
+            )}
             {["select", "status", "multi_select"].includes(p.type) && (
               <input
                 className="options-input"

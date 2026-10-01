@@ -22,6 +22,7 @@ import {
   validateBlocks,
 } from "../../../packages/editor/server.ts";
 import { emit } from "../../../packages/events/index.ts";
+import { indexedRecordText, redactRelationValues, validateRelationWrites } from "./relations.ts";
 export const treeLock = (q: Query, t: string) =>
   q.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`tree:${t}`]);
 export async function createResource(
@@ -198,6 +199,7 @@ export async function createRecord(
   assert(d, 404, "Database not found");
   const v = validateValues(d.properties, values);
   await validatePeople(q, d.properties, v);
+  await validateRelationWrites(q, a, d.properties, v);
   const node = await createResource(q, a, {
     kind: "record",
     parent_id: id,
@@ -209,7 +211,7 @@ export async function createRecord(
   );
   await q.query("UPDATE resources SET search_text=$2 WHERE id=$1", [
     node.id,
-    Object.values(v).join(" "),
+    indexedRecordText(d.properties, v),
   ]);
   return { ...node, values: v, revision: 1 };
 }
@@ -231,6 +233,11 @@ export async function records(
   const p: any[] = [id],
     where = ["r.parent_id=$1", "r.deleted_at IS NULL"];
   for (const f of config.filters) {
+    // Querying raw relation UUIDs creates an ACL side channel, even when
+    // response values are redacted. Defer relation filter semantics to W08.
+    assert(d.properties.find((field: Property) =>
+      field.id === f.property)?.type !== "relation", 400,
+      "Relation filters require permission-aware indexing");
     p.push(f.property);
     let key = `v.values->>$${p.length}`;
     if (f.op === "empty") {
@@ -259,6 +266,9 @@ export async function records(
     );
   }
   const sort = config.sort.map((s: any) => {
+    assert(d.properties.find((field: Property) =>
+      field.id === s.property)?.type !== "relation", 400,
+      "Relation sorting requires permission-aware indexing");
     p.push(s.property);
     let key = `v.values->>$${p.length}`;
     if (d.properties.find((x: any) => x.id === s.property)?.type === "number")
@@ -266,7 +276,7 @@ export async function records(
     return `${key} ${s.direction === "desc" ? "DESC" : "ASC"} NULLS LAST`;
   });
   p.push(limit, offset);
-  return visible(
+  const allowedRows = await visible(
     q,
     a,
     (
@@ -276,6 +286,10 @@ export async function records(
       )
     ).rows,
   );
+  return Promise.all(allowedRows.map(async (row) => ({
+    ...row,
+    values: await redactRelationValues(q, a, d.properties, row.values),
+  })));
 }
 export async function replaceDocument(
   q: Query,

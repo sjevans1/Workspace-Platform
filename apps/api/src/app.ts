@@ -89,6 +89,10 @@ import {
   seedDemo,
   purgeDeletedResource,
 } from "./domain.ts";
+import {
+  indexedRecordText, redactRelationSchema, redactRelationValues,
+  validateRelationSchema, validateRelationWrites,
+} from "./relations.ts";
 type Request = FastifyRequest & {
   actor: Actor;
   sessionToken: string;
@@ -1526,12 +1530,94 @@ function dataRoutes(
       return {
         ...n,
         ...d,
+        properties: await redactRelationSchema(q, a, d.properties),
         views: (
           await q.query(
             "SELECT * FROM database_views WHERE database_id=$1 ORDER BY name",
             [n.id],
           )
         ).rows,
+      };
+    },
+    "databases.read",
+  );
+  route(
+    "GET",
+    "/databases/:id/relation-targets",
+    "Discover readable relation target databases",
+    async (q, a, r) => {
+      const source = await requireAccess(q, a, id(r));
+      assert(source.kind === "database", 404, "Database not found");
+      const params = query(r),
+        search = String(params.search || "").slice(0, 120).toLowerCase(),
+        limit = Math.min(50, Math.max(1, Number(params.limit) || 20)),
+        offset = Math.max(0, Math.min(10000, Number(params.offset) || 0));
+      const rows = (await q.query(
+        "SELECT id,title FROM resources WHERE kind='database'" +
+        " AND deleted_at IS NULL AND id<>$1" +
+        " AND position($2 in lower(title))>0" +
+        " ORDER BY lower(title),id",
+        [source.id, search],
+      )).rows;
+      // Pagination is over accessible matches only: never reveal the count
+      // or location of filtered-out target databases through has_more/offset.
+      const readable = await visible(q, a, rows);
+      return {
+        items: readable.slice(offset, offset + limit).map((item) =>
+          ({ id: item.id, title: item.title })),
+        next_offset: offset + limit,
+        has_more: readable.length > offset + limit,
+      };
+    },
+    "databases.read",
+  );
+  route(
+    "GET",
+    "/databases/:id/relation-candidates",
+    "Find or resolve accessible related records",
+    async (q, a, r) => {
+      const source = await requireAccess(q, a, id(r));
+      assert(source.kind === "database", 404, "Database not found");
+      const definition = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1",
+        [source.id]);
+      const params = query(r),
+        field = definition?.properties.find((p: any) =>
+          p.id === params.property && p.type === "relation");
+      assert(field?.target_database_id, 404, "Relation unavailable");
+      const target = await requireAccess(q, a, field.target_database_id);
+      assert(target.kind === "database", 404, "Target unavailable");
+      const limit = Math.min(40, Math.max(1, Number(params.limit) || 20)),
+        offset = Math.max(0, Math.min(10000, Number(params.offset) || 0));
+      if (params.selected) {
+        const chosen = String(params.selected).split(",");
+        assert(chosen.length <= 20, 400, "Too many selected records");
+        const ids = chosen.map((value) => uuid.parse(value));
+        const rows = (await q.query(
+          "SELECT id,title FROM resources WHERE id=ANY($1::uuid[])" +
+          " AND parent_id=$2 AND kind='record' AND deleted_at IS NULL",
+          [ids, target.id],
+        )).rows;
+        return {
+          items: (await visible(q, a, rows)).map((item) =>
+            ({ id: item.id, title: item.title })),
+          next_offset: 0, has_more: false,
+        };
+      }
+      const search = String(params.search || "").slice(0, 120).toLowerCase();
+      const rows = (await q.query(
+        "SELECT id,title FROM resources WHERE kind='record'" +
+        " AND parent_id=$1 AND deleted_at IS NULL" +
+        " AND position($2 in lower(title))>0" +
+        " ORDER BY lower(title),id",
+        [target.id, search],
+      )).rows;
+      const readable = await visible(q, a, rows);
+      return {
+        items: readable.slice(offset, offset + limit).map((item) =>
+          ({ id: item.id, title: item.title })),
+        next_offset: offset + limit,
+        has_more: readable.length > offset + limit,
       };
     },
     "databases.read",
@@ -1546,13 +1632,16 @@ function dataRoutes(
       await q.query("SELECT 1 FROM databases WHERE resource_id=$1 FOR UPDATE", [
         id(r),
       ]);
+      await validateRelationSchema(q, a, id(r), v.properties);
       for (const row of (
         await q.query(
           "SELECT values FROM database_records WHERE database_id=$1",
           [id(r)],
         )
-      ).rows)
-        validateValues(v.properties, row.values);
+      ).rows) {
+        const existing = validateValues(v.properties, row.values);
+        await validateRelationWrites(q, a, v.properties, existing);
+      }
       await q.query("UPDATE databases SET properties=$2 WHERE resource_id=$1", [
         id(r),
         json(v.properties),
@@ -1657,7 +1746,11 @@ function dataRoutes(
           [n.id],
         );
       assert(v, 404, "Record not found");
-      return { ...n, ...v };
+      return {
+        ...n, ...v,
+        properties: await redactRelationSchema(q, a, v.properties),
+        values: await redactRelationValues(q, a, v.properties, v.values),
+      };
     },
     "databases.read",
   );
@@ -1689,6 +1782,7 @@ function dataRoutes(
       );
       const values = validateValues(d.properties, { ...d.values, ...v.values });
       await validatePeople(q, d.properties, values);
+      await validateRelationWrites(q, a, d.properties, v.values);
       await q.query(
         "UPDATE database_records SET values=$2,revision=revision+1 WHERE resource_id=$1",
         [n.id, json(values)],
@@ -1698,12 +1792,14 @@ function dataRoutes(
         [
           n.id,
           values[d.properties.find((p: any) => p.type === "title").id],
-          Object.values(values).join(" "),
+          indexedRecordText(d.properties, values),
           a.user_id,
         ],
       );
       await emit(q, a, "record.updated", n.id, d.revision + 1);
-      return { ...n, values, revision: d.revision + 1 };
+      return { ...n,
+        values: await redactRelationValues(q, a, d.properties, values),
+        revision: d.revision + 1 };
     },
     "databases.write",
   );
@@ -1722,6 +1818,9 @@ function dataRoutes(
           );
         assert(d, 404, "Database not found");
         const keys = d.properties.map((p: any) => p.id);
+        for (const field of [...v.config.filters, ...v.config.sort])
+          assert(d.properties.find((p: any) => p.id === field.property)?.type !== "relation",
+            400, "Relation sorting/filtering requires permission-aware indexing");
         for (const k of [
           ...v.config.filters.map((f) => f.property),
           ...v.config.sort.map((s) => s.property),
@@ -3018,7 +3117,9 @@ function dataRoutes(
             10000,
           );
         if (format === "json")
-          return { resource: n, schema: d.properties, records: rows };
+          return { resource: n,
+            schema: await redactRelationSchema(q, a, d.properties),
+            records: rows };
         assert(format === "csv", 400, "Database export requires CSV or JSON");
         reply
           .type("text/csv")

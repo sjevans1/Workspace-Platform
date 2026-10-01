@@ -40,6 +40,7 @@ export const propertyTypes = [
   "person",
   "url",
   "email",
+  "relation",
 ] as const;
 export const property = z
   .object({
@@ -47,8 +48,17 @@ export const property = z
     name: z.string().min(1).max(120),
     type: z.enum(propertyTypes),
     options: z.array(z.string().min(1).max(120)).max(100).optional(),
+    target_database_id: uuid.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((p, ctx) => {
+    if (p.type === "relation" && !p.target_database_id)
+      ctx.addIssue({ code: "custom", path: ["target_database_id"],
+        message: "Relation requires a target database" });
+    if (p.type !== "relation" && p.target_database_id)
+      ctx.addIssue({ code: "custom", path: ["target_database_id"],
+        message: "Only relation properties can target another database" });
+  });
 export const properties = z
   .array(property)
   .min(1)
@@ -107,6 +117,10 @@ export function validateValues(props: Property[], values: Record<string, any>) {
         s = z
           .array(z.string())
           .refine((v) => v.every((x) => p.options?.includes(x)));
+        break;
+      case "relation":
+        s = z.array(uuid).max(20).refine((ids) =>
+          new Set(ids).size === ids.length, "Duplicate related record");
         break;
     }
     result[k] = s.parse(v);
