@@ -305,11 +305,15 @@ export async function buildApp(
           for (const row of deleted)
             if (!tenants.has(row.tenant_id))
               tenants.set(row.tenant_id, row.user_id);
-          for (const [tenantId, userId] of tenants)
+          for (const [tenantId] of tenants) {
+            await q.query("SELECT set_config('app.tenant_id',$1,true)", [
+              tenantId,
+            ]);
             await q.query(
               "INSERT INTO audit_events(id,tenant_id,actor_id,action,request_id) VALUES($1,$2,NULL,'auth.oidc_backchannel_logout',$3)",
               [randomUUID(), tenantId, r.id],
             );
+          }
           return { revoked: deleted.length, replayed: false };
         });
 
