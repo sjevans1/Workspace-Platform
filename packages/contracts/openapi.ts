@@ -78,7 +78,41 @@ const event = {
   additionalProperties: true,
 };
 
+const rotation = (prepared: boolean): JsonSchema => ({
+  params: idParams,
+  body: {
+    type: "object",
+    required: ["expected_revision"],
+    properties: { expected_revision: { type: "integer", minimum: 1 } },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: "object",
+      required: [
+        "id",
+        "signing_revision",
+        "rotation_pending",
+        prepared ? "secret" : "ok",
+      ],
+      properties: {
+        id: uuid,
+        signing_revision: { type: "integer", minimum: 1 },
+        rotation_pending: { const: prepared },
+        ...(prepared
+          ? { secret: { type: "string" } }
+          : { ok: { const: true } }),
+      },
+      additionalProperties: false,
+    },
+    ...errors,
+  },
+});
+
 export const integrationOpenApi: Record<string, JsonSchema> = {
+  "POST /webhooks/:id/secret-rotation": rotation(true),
+  "POST /webhooks/:id/secret-rotation/activate": rotation(false),
+  "DELETE /webhooks/:id/secret-rotation": rotation(false),
   "GET /resources": {
     querystring: {
       type: "object",

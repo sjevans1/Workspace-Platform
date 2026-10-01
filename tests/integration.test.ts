@@ -18,7 +18,7 @@ import type {
   OidcProfile,
   OidcProvider,
 } from "../packages/auth/oidc.ts";
-import { signature } from "../packages/events/index.ts";
+import { decrypt, signature } from "../packages/events/index.ts";
 import {
   AntivirusUnavailableError,
   type Antivirus,
@@ -1085,6 +1085,11 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
     cursorSpec.responses["200"].content["application/json"].schema.required,
     ["events", "next_cursor", "has_more"],
   );
+  const prepared = spec.paths["/api/v1/webhooks/{id}/secret-rotation"].post;
+  assert.deepEqual(prepared.requestBody.content["application/json"].schema.required, ["expected_revision"]);
+  assert.ok(prepared.responses["200"].content["application/json"].schema.properties.secret);
+  const activated = spec.paths["/api/v1/webhooks/{id}/secret-rotation/activate"].post;
+  assert.equal(activated.responses["200"].content["application/json"].schema.properties.secret, undefined);
 });
 
 test("native row-level policies and known IDs isolate tenants", async () => {
@@ -1695,6 +1700,210 @@ test("dead webhook deliveries can be replayed only by same-tenant administrators
     q.query("UPDATE webhook_deliveries SET status='dead' WHERE id=$1", [deliveryId]),
   );
   assert.equal((await req("POST", endpoint, {})).statusCode, 404);
+});
+
+test("webhook signing rotation is staged, tenant-scoped, revision-checked and used by delivery/replay", async () => {
+  const received: { body: string; headers: any }[] = [];
+  let holdResponse = false,
+    releaseResponse = () => {},
+    requestArrived = () => {};
+  const receiver = createServer(async (r, res) => {
+    let body = "";
+    for await (const chunk of r) body += chunk;
+    received.push({ body, headers: r.headers });
+    requestArrived();
+    if (holdResponse)
+      await new Promise<void>((resolve) => {
+        releaseResponse = resolve;
+      });
+    res.end("ok");
+  });
+  await new Promise<void>((resolve) =>
+    receiver.listen(49711, "127.0.0.1", resolve),
+  );
+  process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49711";
+  try {
+    const subscription = await ok("POST", "/webhooks", {
+      url: "http://127.0.0.1:49711/rotation",
+      events: ["page.rotation_test"],
+    });
+    const endpoint = `/webhooks/${subscription.id}/secret-rotation`;
+    const precondition = { expected_revision: 1 };
+    assert.equal(
+      (await req("POST", endpoint, precondition, member)).statusCode,
+      403,
+    );
+    assert.equal(
+      (await req("POST", endpoint, precondition, other)).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await req("POST", endpoint, precondition, owner, {
+          "x-csrf-token": "wrong",
+        })
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (await req("POST", endpoint, { expected_revision: 0 })).statusCode,
+      400,
+    );
+    const serviceToken = await ok("POST", "/integrations", {
+      name: "Rotation reader",
+      scopes: ["events.read"],
+    });
+    assert.equal(
+      (
+        await req("POST", endpoint, precondition, null, {
+          authorization: `Bearer ${serviceToken.token}`,
+        })
+      ).statusCode,
+      403,
+    );
+    const attempts = await Promise.all([
+      req("POST", endpoint, precondition),
+      req("POST", endpoint, precondition),
+    ]);
+    assert.deepEqual(attempts.map((r) => r.statusCode).sort(), [200, 409]);
+    const prepared = attempts.find((r) => r.statusCode === 200)!.json();
+    assert.equal(prepared.signing_revision, 2);
+    assert.notEqual(prepared.secret, subscription.secret);
+    const listing = await ok("GET", "/webhooks");
+    assert.equal(
+      listing.subscriptions.find((s: any) => s.id === subscription.id)
+        .rotation_pending,
+      true,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(listing),
+      new RegExp(`${prepared.secret}|${subscription.secret}|secret_encrypted`),
+    );
+    const stored = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT secret_encrypted,pending_secret_encrypted FROM webhook_subscriptions WHERE id=$1",
+        [subscription.id],
+      ),
+    );
+    assert.equal(decrypt(stored.secret_encrypted), subscription.secret);
+    assert.equal(decrypt(stored.pending_secret_encrypted), prepared.secret);
+
+    const eventId = randomUUID(),
+      deliveryId = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO event_outbox(id,tenant_id,actor_id,type,resource_id,version,dispatched_at) VALUES($1,$2,$3,'page.rotation_test',$4,1,now())",
+        [eventId, owner.tenant, owner.id, page.id],
+      );
+      await q.query(
+        "INSERT INTO webhook_deliveries(id,tenant_id,subscription_id,event_id) VALUES($1,$2,$3,$4)",
+        [deliveryId, owner.tenant, subscription.id, eventId],
+      );
+    });
+    const verify = (secret: string) => {
+      const message = received.findLast(
+        (r) => r.headers["x-workspace-event"] === eventId,
+      )!;
+      assert.ok(message);
+      assert.equal(message.headers["x-workspace-event"], eventId);
+      assert.equal(
+        message.headers["x-workspace-signature"],
+        `sha256=${signature(secret, message.headers["x-workspace-timestamp"], message.body)}`,
+      );
+    };
+    // Preparing must not change the signature of subsequent delivery.
+    await tick(db);
+    assert.ok(received.length > 0);
+    verify(subscription.secret);
+    const activate = endpoint + "/activate";
+    assert.equal((await req("POST", activate, precondition)).statusCode, 409);
+    assert.equal(
+      (await req("POST", activate, { expected_revision: 2 }, other)).statusCode,
+      404,
+    );
+
+    if (!pg.emulated) {
+      // Native CI also proves activation cannot race a delivery using the old
+      // secret: the worker's read lock lasts until its HTTP send commits.
+      await db.tenant(owner.tenant, (q) =>
+        q.query(
+          "UPDATE webhook_deliveries SET status='pending',next_at=now() WHERE id=$1",
+          [deliveryId],
+        ),
+      );
+      holdResponse = true;
+      const arrived = new Promise<void>((resolve) => {
+        requestArrived = resolve;
+      });
+      const dispatch = tick(db);
+      await arrived;
+      let activationFinished = false;
+      const activationRequest = req("POST", activate, {
+        expected_revision: 2,
+      }).then((r) => {
+        activationFinished = true;
+        return r;
+      });
+      await pause(100);
+      assert.equal(activationFinished, false);
+      holdResponse = false;
+      releaseResponse();
+      await dispatch;
+      verify(subscription.secret);
+      const activated = await activationRequest;
+      assert.equal(activated.statusCode, 200, activated.body);
+    } else {
+      await ok("POST", activate, { expected_revision: 2 });
+    }
+    assert.equal(
+      (await req("POST", activate, { expected_revision: 2 })).statusCode,
+      409,
+    );
+    await db.tenant(owner.tenant, (q) =>
+      q.query("UPDATE webhook_deliveries SET status='dead' WHERE id=$1", [
+        deliveryId,
+      ]),
+    );
+    await ok("POST", `/webhooks/deliveries/${deliveryId}/replay`, {});
+    await tick(db);
+    verify(prepared.secret);
+    const discarded = await ok("POST", endpoint, { expected_revision: 3 });
+    await ok("DELETE", endpoint, {
+      expected_revision: discarded.signing_revision,
+    });
+    const final = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT secret_encrypted,pending_secret_encrypted,signing_revision FROM webhook_subscriptions WHERE id=$1",
+        [subscription.id],
+      ),
+    );
+    assert.equal(decrypt(final.secret_encrypted), prepared.secret);
+    assert.equal(final.pending_secret_encrypted, null);
+    assert.equal(final.signing_revision, 5);
+    const audit = await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "SELECT action FROM audit_events WHERE resource_id=$1 AND action LIKE 'integration.secret_%' ORDER BY created_at,id",
+        [subscription.id],
+      ),
+    );
+    assert.deepEqual(
+      audit.rows.map((r) => r.action),
+      [
+        "integration.secret_prepared",
+        "integration.secret_activated",
+        "integration.secret_prepared",
+        "integration.secret_discarded",
+      ],
+    );
+  } finally {
+    holdResponse = false;
+    releaseResponse();
+    await new Promise<void>((resolve, reject) =>
+      receiver.close((e) => (e ? reject(e) : resolve())),
+    );
+  }
 });
 
 test("imports run asynchronously and recheck current permissions", async () => {

@@ -105,3 +105,17 @@ curl -X POST -H "Cookie: workspace_session=$SESSION" \
 This action is available only to the owning tenant's active **owner or admin** session. It requires an existing dead delivery on an **active** subscription. Requests for in-flight, delivered, missing, foreign-tenant or inactive-subscription deliveries return the same 404; other roles receive 403. A successful response requeues the **same event ID and original subscription** as `pending` with cleared retry counters/error. The normal worker performs the outbound HTTP call; the administrator request never sends one directly. The operation emits an audit event `integration.delivery_replayed`. It intentionally does not replay completed deliveries or resurrect disabled subscriptions. Replay is *at-least-once* and receivers must deduplicate event IDs and perform current-permission checks before reading source content.
 
 The administrator API and a per-delivery **Replay** button in Settings → Webhooks → Recent deliveries are implemented. The button is shown only for dead deliveries on active subscriptions; requests remain subject to the same server-side authorization and state checks. Bulk replay and bulk reconciliation remain future work. The original timestamp-based feed is unchanged. State-changing events are written atomically with domain updates. All external writes by a future Intelligence agent should be explicit, scoped and independently audited; the default integration created here is read-only.
+
+### Staged signing-secret rotation
+
+Settings → Webhooks provides **Prepare rotation**, **Activate secret**, and **Discard** controls. Prepare returns a new secret once, stores it encrypted, and keeps the current secret signing deliveries. Configure the receiver to accept both secrets, then activate. Activation replaces the current encrypted secret; later deliveries and dead-delivery replays use the new secret. Discard removes only a prepared secret. If the one-time prepared secret is lost, discard it and prepare another.
+
+| Action | Administrator API | Body |
+|---|---|---|
+| Prepare | `POST /api/v1/webhooks/:id/secret-rotation` | `{"expected_revision":1}` |
+| Activate | `POST /api/v1/webhooks/:id/secret-rotation/activate` | `{"expected_revision":2}` |
+| Discard prepared secret | `DELETE /api/v1/webhooks/:id/secret-rotation` | `{"expected_revision":2}` |
+
+Read `signing_revision` and `rotation_pending` from `GET /api/v1/webhooks` before each action. Every successful transition increments the revision; stale requests or an incompatible state return 409. Owner/admin sessions with CSRF are required; service tokens and other roles cannot rotate, and foreign-tenant IDs return 404. Neither subscription listings nor activation/discard responses return secrets. Each transition creates an `integration.secret_prepared`, `integration.secret_activated`, or `integration.secret_discarded` audit event. Backup/recovery retains the encrypted current/prepared secrets and revision, under the same deployment key and schema-version rules as other backups.
+
+The worker retains a subscription read lock through its HTTP send and transaction commit, so activation waits for delivery transactions already signing with the current secret. This does not control a receiver's internal processing delay or requests already in transit. Keep the receiver accepting the previous secret for a short overlap period before retiring it. Rotation does not pause or revive subscriptions, change delivery IDs, or reset retry counters.

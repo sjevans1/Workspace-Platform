@@ -55,6 +55,10 @@ From a fresh clone, explicitly isolate the source Compose project for **every** 
 export COMPOSE_PROJECT_NAME=openjm_workspace_source
 npm ci
 node scripts/init-env.mjs
+# Synthetic metadata origins for the disposable IdP/secret-rotation browser tests.
+# Registration and rotation do not discover or contact these destinations.
+sed -i 's|^OIDC_TENANT_ISSUER_ORIGINS=.*|OIDC_TENANT_ISSUER_ORIGINS=https://login.example.test|' .env
+sed -i 's|^WEBHOOK_ALLOWED_ORIGINS=.*|WEBHOOK_ALLOWED_ORIGINS=https://events.example.test|' .env
 docker compose config --quiet
 docker compose up --build -d
 docker compose ps
@@ -86,7 +90,7 @@ node scripts/test-deployment.mjs
 ```
 
 Acceptance:
-- both Playwright workflows pass;
+- all deployed Playwright workflows pass;
 - two distinct users can collaborate;
 - live permission downgrade/revocation/recovery passes;
 - page content survives reload;

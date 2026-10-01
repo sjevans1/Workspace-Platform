@@ -477,6 +477,84 @@ test("admin can requeue only a dead delivery on an active webhook in Settings", 
   expect(csrfPresent).toBe(true);
 });
 
+test("owner prepares, activates and discards webhook signing secrets through deployed Settings", async ({
+  page,
+}) => {
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const url = "https://events.example.test/rotation-" + randomUUID();
+  const created = await page.request.post("/api/v1/webhooks", {
+    headers,
+    data: { url, events: ["integration.rotation_probe"] },
+  });
+  expect(created.status()).toBe(200);
+  const subscription = await created.json();
+  await page
+    .getByRole("button", { name: "Settings & members", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Webhooks", exact: true }).click();
+  const row = page.locator(".integration-row").filter({ hasText: url });
+  const prepare = row.getByRole("button", {
+    name: "Prepare signing secret for " + url,
+  });
+  await prepare.click();
+  const secretModal = page.getByRole("dialog", {
+    name: "Keep this somewhere safe",
+  });
+  const credential = await secretModal
+    .getByRole("textbox", { name: "Created credential or invitation" })
+    .inputValue();
+  const secret = credential.match(/Prepared signing secret: (\S+)/)?.[1];
+  expect(secret).toBeTruthy();
+  expect(secret).not.toBe(subscription.secret);
+  await secretModal.getByRole("button", { name: "Close dialog" }).click();
+  await expect(row).toContainText("New signing secret prepared");
+  expect(await page.locator("body").innerText()).not.toContain(secret!);
+  const list = await page.request.get("/api/v1/webhooks");
+  const listing = await list.text();
+  expect(listing).not.toContain(secret!);
+  expect(listing).not.toContain(subscription.secret);
+  expect(listing).not.toContain("secret_encrypted");
+  expect(
+    JSON.parse(listing).subscriptions.find((h: any) => h.id === subscription.id)
+      .signing_revision,
+  ).toBe(2);
+  await row
+    .getByRole("button", { name: "Activate signing secret for " + url })
+    .click();
+  const activation = page.getByRole("dialog", {
+    name: "Activate webhook signing secret",
+  });
+  await expect(activation).toContainText("after configuring your receiver");
+  await activation
+    .getByRole("button", { name: "Receiver ready — activate secret" })
+    .click();
+  await expect(activation).toBeHidden();
+  await expect(row).toContainText("Current signing secret active");
+  let state = await (await page.request.get("/api/v1/webhooks")).json();
+  expect(
+    state.subscriptions.find((h: any) => h.id === subscription.id)
+      .signing_revision,
+  ).toBe(3);
+  await prepare.click();
+  await expect(secretModal).toBeVisible();
+  await secretModal.getByRole("button", { name: "Close dialog" }).click();
+  await row
+    .getByRole("button", { name: "Discard prepared secret for " + url })
+    .click();
+  await expect(row).toContainText("Current signing secret active");
+  state = await (await page.request.get("/api/v1/webhooks")).json();
+  expect(
+    state.subscriptions.find((h: any) => h.id === subscription.id)
+      .signing_revision,
+  ).toBe(5);
+  await row.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(
+    row.getByRole("button", { name: "Enable", exact: true }),
+  ).toBeVisible();
+});
+
 test("distinct users: invitation, live view-only access, revocation and recovery", async ({
   page,
   browser,
