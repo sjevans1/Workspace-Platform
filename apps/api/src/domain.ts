@@ -23,6 +23,7 @@ import {
 } from "../../../packages/editor/server.ts";
 import { emit } from "../../../packages/events/index.ts";
 import { indexedRecordText, redactRelationValues, validateRelationWrites } from "./relations.ts";
+import { computedFormulaValues } from "../../../packages/formulas/index.ts";
 export const treeLock = (q: Query, t: string) =>
   q.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`tree:${t}`]);
 export async function createResource(
@@ -213,7 +214,8 @@ export async function createRecord(
     node.id,
     indexedRecordText(d.properties, v),
   ]);
-  return { ...node, values: v, revision: 1 };
+  return { ...node, values: computedFormulaValues(d.properties,
+    await redactRelationValues(q, a, d.properties, v)), revision: 1 };
 }
 export async function records(
   q: Query,
@@ -236,7 +238,9 @@ export async function records(
     // Querying raw relation UUIDs creates an ACL side channel, even when
     // response values are redacted. Defer relation filter semantics to W08.
     assert(d.properties.find((field: Property) =>
-      field.id === f.property)?.type !== "relation", 400,
+      field.id === f.property)?.type !== "relation" &&
+      d.properties.find((field: Property) =>
+        field.id === f.property)?.type !== "formula", 400,
       "Relation filters require permission-aware indexing");
     p.push(f.property);
     let key = `v.values->>$${p.length}`;
@@ -267,7 +271,9 @@ export async function records(
   }
   const sort = config.sort.map((s: any) => {
     assert(d.properties.find((field: Property) =>
-      field.id === s.property)?.type !== "relation", 400,
+      field.id === s.property)?.type !== "relation" &&
+      d.properties.find((field: Property) =>
+        field.id === s.property)?.type !== "formula", 400,
       "Relation sorting requires permission-aware indexing");
     p.push(s.property);
     let key = `v.values->>$${p.length}`;
@@ -288,7 +294,8 @@ export async function records(
   );
   return Promise.all(allowedRows.map(async (row) => ({
     ...row,
-    values: await redactRelationValues(q, a, d.properties, row.values),
+    values: computedFormulaValues(d.properties,
+      await redactRelationValues(q, a, d.properties, row.values)),
   })));
 }
 export async function replaceDocument(
