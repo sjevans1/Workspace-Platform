@@ -127,7 +127,7 @@ jobs:
       - name: Generate ClamAV runtime SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          image: clamav/clamav:1.5.4-debian13-slim@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
+          image: clamav/clamav:1.5.4-debian13-slim
           format: cyclonedx-json
           output-file: openjm-workspace-clamav-sbom.cdx.json
           artifact-name: openjm-workspace-clamav-sbom
@@ -135,7 +135,7 @@ jobs:
       - name: Scan ClamAV runtime image for fixable high/critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: clamav/clamav:1.5.4-debian13-slim@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
+          image-ref: clamav/clamav:1.5.4-debian13-slim
           format: table
           exit-code: "1"
           ignore-unfixed: true
