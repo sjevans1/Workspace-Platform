@@ -1,9 +1,13 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 
 const email = "browser@example.test",
   password = "browser-password-123";
+// Each browser project signs in once, then reuses a real session across its
+// sequential accessibility tests; logout/revocation tests do not use this cache.
+let verifiedCookies: Awaited<ReturnType<BrowserContext["cookies"]>> = [];
 
 async function login(page: Page) {
+  if (verifiedCookies.length) await page.context().addCookies(verifiedCookies);
   await page.goto("/");
   await expect(page.locator("h1")).toBeVisible();
   if (
@@ -53,6 +57,8 @@ async function login(page: Page) {
   await expect(
     page.getByRole("heading", { name: "Welcome back, Shane." }),
   ).toBeVisible();
+  verifiedCookies = (await page.context().cookies())
+    .filter((cookie) => cookie.name === "workspace_session");
 }
 
 async function semanticProblems(page: Page) {
