@@ -1092,6 +1092,294 @@ export async function registerScim(app: FastifyInstance, db: Database) {
           return send(reply, null, 204);
         }),
       );
+
+      scim.get("/Groups", async (request, reply) =>
+        tenant(request, async (q) => {
+          const params = request.query as Record<string, unknown>,
+            filter = parseGroupFilter(params.filter),
+            startIndex = Math.max(1, Number(params.startIndex) || 1),
+            count = Math.min(100, Math.max(0, Number(params.count) || 100)),
+            where: string[] = ["g.deleted_at IS NULL"],
+            values: unknown[] = [];
+
+          if (filter?.field === "displayname") {
+            values.push(filter.value);
+            where.push(`lower(g.display_name)=lower(${values.length})`);
+          } else if (filter?.field === "externalid") {
+            values.push(filter.value);
+            where.push(`g.external_id=${values.length}`);
+          }
+
+          const total = Number(
+              (
+                await one(
+                  q,
+                  `SELECT count(*) n FROM scim_groups g
+                   WHERE ${where.join(" AND ")}`,
+                  values,
+                )
+              ).n,
+            ),
+            queryValues = [...values, count, startIndex - 1],
+            rows = (
+              await q.query(
+                `SELECT g.id
+                 FROM scim_groups g
+                 WHERE ${where.join(" AND ")}
+                 ORDER BY lower(g.display_name),g.id
+                 LIMIT ${values.length + 1} OFFSET ${values.length + 2}`,
+                queryValues,
+              )
+            ).rows,
+            resources = [];
+          for (const row of rows)
+            resources.push(groupResource(await loadGroup(q, row.id), base));
+
+          return send(reply, {
+            schemas: [LIST_SCHEMA],
+            totalResults: total,
+            startIndex,
+            itemsPerPage: resources.length,
+            Resources: resources,
+          });
+        }),
+      );
+
+      scim.get("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q) => {
+          const id = uuid.parse((request.params as any).id),
+            row = await loadGroup(q, id);
+          if (!row) throw new ScimError(404, "Group not found");
+          return send(reply, groupResource(row, base));
+        }),
+      );
+
+      scim.post("/Groups", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const input = scimGroupInput.parse(request.body);
+          assertGroupSchema(input);
+          const id = randomUUID();
+          await q.query(
+            `INSERT INTO scim_groups(
+              id,tenant_id,external_id,display_name
+            ) VALUES($1,$2,$3,$4)`,
+            [
+              id,
+              context.tenant_id,
+              input.externalId || null,
+              input.displayName,
+            ],
+          );
+          await replaceGroupMembers(
+            q,
+            context.tenant_id,
+            id,
+            (input.members || []).map((member) => member.value),
+          );
+          await audit(q, context.tenant_id, request.id, "scim.group.created");
+          reply.header("Location", `${base}/Groups/${id}`);
+          return send(reply, groupResource(await loadGroup(q, id), base), 201);
+        }),
+      );
+
+      scim.put("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const id = uuid.parse((request.params as any).id),
+            current = await loadGroup(q, id);
+          if (!current) throw new ScimError(404, "Group not found");
+          const input = scimGroupInput.parse(request.body);
+          assertGroupSchema(input);
+          await q.query(
+            `UPDATE scim_groups
+             SET display_name=$2,external_id=$3,updated_at=now()
+             WHERE id=$1`,
+            [id, input.displayName, input.externalId || null],
+          );
+          await replaceGroupMembers(
+            q,
+            context.tenant_id,
+            id,
+            (input.members || []).map((member) => member.value),
+          );
+          await audit(q, context.tenant_id, request.id, "scim.group.updated");
+          return send(reply, groupResource(await loadGroup(q, id), base));
+        }),
+      );
+
+      scim.patch("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const id = uuid.parse((request.params as any).id),
+            current = await loadGroup(q, id);
+          if (!current) throw new ScimError(404, "Group not found");
+          const patch = patchInput.parse(request.body);
+          if (!patch.schemas.includes(PATCH_SCHEMA))
+            throw new ScimError(
+              400,
+              "PatchOp schema is required",
+              "invalidSyntax",
+            );
+
+          let nextName = current.display_name as string,
+            nextExternal = current.external_id as string | null,
+            attributesChanged = false;
+
+          const assignAttribute = (
+            key: string,
+            value: unknown,
+            remove: boolean,
+          ) => {
+            const normalized = key.toLowerCase();
+            if (normalized === "displayname") {
+              if (remove)
+                throw new ScimError(
+                  400,
+                  "displayName cannot be removed",
+                  "mutability",
+                );
+              if (
+                typeof value !== "string" ||
+                !value.trim() ||
+                value.trim().length > 500
+              )
+                throw new ScimError(
+                  400,
+                  "displayName must be a nonempty string",
+                  "invalidValue",
+                );
+              nextName = value.trim();
+              attributesChanged = true;
+              return true;
+            }
+            if (normalized === "externalid") {
+              if (remove || value === null) nextExternal = null;
+              else if (typeof value === "string" && value.length <= 500)
+                nextExternal = value.trim() || null;
+              else
+                throw new ScimError(
+                  400,
+                  "externalId must be a string",
+                  "invalidValue",
+                );
+              attributesChanged = true;
+              return true;
+            }
+            return false;
+          };
+
+          for (const operation of patch.Operations) {
+            const remove = operation.op === "remove",
+              path = operation.path?.trim();
+
+            if (path) {
+              if (assignAttribute(path, operation.value, remove)) continue;
+              if (path.toLowerCase() === "members") {
+                if (operation.op === "add")
+                  await addGroupMembers(
+                    q,
+                    context.tenant_id,
+                    id,
+                    groupMemberValues(operation.value),
+                  );
+                else if (operation.op === "replace")
+                  await replaceGroupMembers(
+                    q,
+                    context.tenant_id,
+                    id,
+                    groupMemberValues(operation.value),
+                  );
+                else await removeGroupMembers(q, id);
+                continue;
+              }
+              const memberMatch = path.match(
+                /^members\s*\[\s*value\s+eq\s+"([0-9a-f-]{36})"\s*\]$/i,
+              );
+              if (memberMatch && operation.op === "remove") {
+                await removeGroupMembers(q, id, [uuid.parse(memberMatch[1])]);
+                continue;
+              }
+              throw new ScimError(
+                400,
+                `Unsupported Group PATCH path ${path}`,
+                "invalidPath",
+              );
+            }
+
+            if (
+              operation.op !== "remove" &&
+              operation.value &&
+              typeof operation.value === "object" &&
+              !Array.isArray(operation.value)
+            ) {
+              for (const [key, value] of Object.entries(
+                operation.value as Record<string, unknown>,
+              )) {
+                if (assignAttribute(key, value, false)) continue;
+                if (key.toLowerCase() === "members") {
+                  if (operation.op === "add")
+                    await addGroupMembers(
+                      q,
+                      context.tenant_id,
+                      id,
+                      groupMemberValues(value),
+                    );
+                  else
+                    await replaceGroupMembers(
+                      q,
+                      context.tenant_id,
+                      id,
+                      groupMemberValues(value),
+                    );
+                  continue;
+                }
+                throw new ScimError(
+                  400,
+                  `Unsupported Group attribute ${key}`,
+                  "invalidPath",
+                );
+              }
+              continue;
+            }
+            throw new ScimError(
+              400,
+              "Group PATCH operation requires a supported path or object value",
+              "invalidSyntax",
+            );
+          }
+
+          if (attributesChanged)
+            await q.query(
+              `UPDATE scim_groups
+               SET display_name=$2,external_id=$3,updated_at=now()
+               WHERE id=$1`,
+              [id, nextName, nextExternal],
+            );
+          await audit(q, context.tenant_id, request.id, "scim.group.updated");
+          return send(reply, groupResource(await loadGroup(q, id), base));
+        }),
+      );
+
+      scim.delete("/Groups/:id", async (request, reply) =>
+        tenant(request, async (q, context) => {
+          const id = uuid.parse((request.params as any).id),
+            current = await loadGroup(q, id);
+          if (!current) throw new ScimError(404, "Group not found");
+          const affected = (current.members || []).map(
+            (member: any) => member.value as string,
+          );
+          await q.query("DELETE FROM scim_group_role_mappings WHERE group_id=$1", [
+            id,
+          ]);
+          await q.query("DELETE FROM scim_group_members WHERE group_id=$1", [id]);
+          await q.query(
+            "UPDATE scim_groups SET deleted_at=now(),updated_at=now() WHERE id=$1",
+            [id],
+          );
+          for (const scimUserId of affected)
+            await reconcileScimRole(q, scimUserId);
+          await audit(q, context.tenant_id, request.id, "scim.group.deleted");
+          return send(reply, null, 204);
+        }),
+      );
     },
     { prefix: "/scim/v2" },
   );
