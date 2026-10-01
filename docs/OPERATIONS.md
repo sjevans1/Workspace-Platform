@@ -145,6 +145,14 @@ S3_FORCE_PATH_STYLE=true
 
 Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. Object writes use the S3 If-None-Match condition so an existing key cannot be overwritten, matching local storage. The automated CI recovery drill passes against authenticated SeaweedFS 4.47. For the selected production provider, use [Production S3/object-store acceptance](PRODUCTION_S3_ACCEPTANCE.md), which exercises the same immutable-write and backup/recovery contract without requiring bucket-creation privileges. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
 
+## File malware scanning
+
+Production Docker deployments run a private ClamAV service and set `ANTIVIRUS_MODE=required`. The API does not publish an attachment until the scanner returns CLEAN. Infected uploads return HTTP 422 and are not written to Workspace object storage; scanner outages/timeouts return HTTP 503 and also write nothing. Scanner health participates in `/ready` and the Prometheus dependency gauge.
+
+The ClamAV TCP socket is intentionally private to the Compose network and must not be published or routed through Caddy. Signature data persists in the `clamav_db` volume and the official image runs FreshClam updates. Disconnected deployments require an approved internal/offline signature-update process.
+
+Local `npm run dev` defaults antivirus to disabled; the production image refuses `ANTIVIRUS_MODE=disabled`. Full architecture, configuration and current boundaries are in [File malware scanning and upload security](FILE_SECURITY.md).
+
 ## Webhooks
 
 Set `WEBHOOK_ALLOWED_ORIGINS` to a comma-separated list of exact HTTP(S) origins. It is empty by default. An administrator can then register endpoint paths on those origins in Settings → Webhooks. Use HTTPS outside isolated local testing. Receiver verification and event format are in [the integration guide](INTEGRATION.md).
@@ -198,7 +206,7 @@ Back up before each upgrade. Review release notes, build the new image, stop wri
 
 The collaboration and worker health listeners bind only inside their own containers and are not routed through Caddy. `WORKER_HEALTH_MAX_TICK_MS` defaults to 60 seconds and `WORKER_HEALTH_GRACE_MS` to 10 seconds; raise the maximum only after measuring a legitimate long-running tick. Repeated tick failures or a stuck tick make the worker unhealthy and allow Docker/monitoring to surface the condition.
 
-Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Workspace now encrypts object bytes and backup artifacts at the application layer, but PostgreSQL/WAL still require encrypted host/provider storage. Secret-manager integration, disaster recovery automation and antivirus remain deployment work described in the acceptance checklist. See [Encryption at rest](ENCRYPTION_AT_REST.md). OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance is now CI-verified. Production object-store validation, broader provider compatibility and the other release-hardening items remain.
+Keep PostgreSQL and the object volume on reliable storage, monitor capacity and backup success, and terminate TLS at Caddy. Workspace now encrypts object bytes and backup artifacts at the application layer, but PostgreSQL/WAL still require encrypted host/provider storage. Secret-manager integration and disaster recovery automation remain deployment work described in the acceptance checklist. Malware scanning is implemented on the active file-security branch and requires final-head acceptance; retained quarantine/CDR remain separate future controls. See [Encryption at rest](ENCRYPTION_AT_REST.md). OIDC/Keycloak SSO, real-provider back-channel logout and SCIM Users/Groups lifecycle are implemented. Trusted-TLS acceptance is now CI-verified. Production object-store validation, broader provider compatibility and the other release-hardening items remain.
 
 ## Real-host acceptance
 
