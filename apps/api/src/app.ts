@@ -66,6 +66,11 @@ import {
   type MetricsSnapshot,
 } from "../../../packages/operations/metrics.ts";
 import {
+  AntivirusUnavailableError,
+  createAntivirus,
+  type Antivirus,
+} from "../../../packages/security/antivirus.ts";
+import {
   registerScim,
   setScimGroupRoleMapping,
 } from "./scim.ts";
@@ -126,6 +131,7 @@ export async function buildApp(
   storage: Storage = createStorage(),
   logging = true,
   oidc: OidcProvider | null = oidcFromEnv(),
+  antivirus: Antivirus = createAntivirus(),
 ) {
   assert(
     /^[a-f0-9]{64}$/i.test(process.env.ENCRYPTION_KEY || ""),
@@ -291,6 +297,7 @@ export async function buildApp(
       storage: false,
     };
     if (redis) dependencies.redis = false;
+    if (antivirus.enabled) dependencies.antivirus = false;
     try {
       await db.system((q) => q.query("SELECT 1"));
       dependencies.database = true;
@@ -310,6 +317,13 @@ export async function buildApp(
     } catch {
       /* Report through readiness/metrics without leaking the storage error. */
     }
+    if (antivirus.enabled)
+      try {
+        await antivirus.health();
+        dependencies.antivirus = true;
+      } catch {
+        /* Required malware scanning is part of production readiness. */
+      }
     return dependencies;
   };
   const serviceMetrics = async (
@@ -1737,6 +1751,19 @@ function dataRoutes(route: Route, storage: Storage) {
         mime = inspectFile(part.filename, part.mimetype, bytes);
       } catch (e) {
         throw new HttpError(400, (e as Error).message);
+      }
+      let scan;
+      try {
+        scan = await antivirus.scan(bytes);
+      } catch (error) {
+        if (error instanceof AntivirusUnavailableError)
+          throw new HttpError(503, "Malware scanner unavailable");
+        throw error;
+      }
+      if (scan.status === "infected") {
+        await emit(q, a, "file.malware_blocked", id(r));
+        reply.code(422);
+        return { error: "File rejected by malware scanner" };
       }
       const fid = randomUUID(),
         key = `${a.tenant_id}/${id(r)}/${fid}`;
