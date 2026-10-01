@@ -1131,8 +1131,15 @@ test("W06 browser: configure numeric formula, render computed result and recompu
   const me = await (await page.request.get("/api/v1/me")).json();
   const headers = { "X-CSRF-Token": me.csrf };
   const roots = await (await page.request.get("/api/v1/resources")).json();
+  // Workspace resources permit databases inside spaces, not at the root.
+  const folderResponse = await page.request.post("/api/v1/resources", {
+    headers, data: { kind: "space", parent_id: roots[0].id,
+      title: "W06 Formulas container " + Date.now() },
+  });
+  expect(folderResponse.ok(), await folderResponse.text()).toBeTruthy();
+  const folder = await folderResponse.json();
   const create = await page.request.post("/api/v1/resources", {
-    headers, data: { kind: "database", parent_id: roots[0].id,
+    headers, data: { kind: "database", parent_id: folder.id,
       title: "W06 Formula " + Date.now() },
   });
   expect(create.ok(), await create.text()).toBeTruthy();
