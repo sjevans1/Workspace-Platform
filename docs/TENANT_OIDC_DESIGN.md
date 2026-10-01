@@ -30,6 +30,8 @@ Invitation-backed provisioning must verify that the invitation belongs to the st
 
 ### Gate T4: session transition and logout
 
+**Early isolation hardening (separate PR):** issuer-bound deployment OIDC sessions are refused by `/auth/switch` instead of being silently reissued as local sessions. A separate, independently authenticated local session may still switch among memberships. This addresses the existing downgrade path but **does not** complete provider-ID provenance, provider-scoped logout, or T4 acceptance.
+
 Persist provider-ID and tenant provenance on the OIDC-created session. Existing `/auth/switch` currently issues a fresh session without that OIDC provenance; restrict it so provider-bound identities cannot cross into another tenant without authenticating under the destination tenant's approved provider, or an independently verified qualifying local session. Do not silently drop the binding.
 
 For back-channel logout, validate signed logout JWTs with the original provider keys, issuer and audience; restrict revocation by provider ID + tenant (including replay-JTI scope). Stable per-provider back-channel routing must not trust user-supplied issuer/header to choose verification keys. Document disabling a provider and revoking relevant sessions. Preserve unrelated tenants and independent local break-glass sessions.
