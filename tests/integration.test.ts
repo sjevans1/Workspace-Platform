@@ -2969,3 +2969,122 @@ test("W06 numeric formulas: read-only recomputation, revisions and exports", asy
     "[units] * [price] + 2.5",
     "invalid schema change must not mutate the accepted expression");
 });
+
+
+test("W07 Rollup native: hide revoked links in all aggregates and exports", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "database", title: "W07 Targets", parent_id: space.id,
+  });
+  const source = await ok("POST", "/resources", {
+    kind: "database", title: "W07 Source", parent_id: space.id,
+  });
+  const targetPath = "/databases/" + target.id;
+  const sourcePath = "/databases/" + source.id;
+  await ok("PATCH", targetPath, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "amount", name: "Amount", type: "number" },
+  ] });
+  const first = await ok("POST", targetPath + "/records", {
+    values: { name: "W07 Visible", amount: 10 },
+  });
+  const second = await ok("POST", targetPath + "/records", {
+    values: { name: "W07 Confidential", amount: 900 },
+  });
+  const props = [
+    { id: "name", name: "Name", type: "title" },
+    { id: "links", name: "Clients", type: "relation",
+      target_database_id: target.id },
+    { id: "count", name: "Linked count", type: "rollup",
+      rollup_relation_id: "links", rollup_operation: "count" },
+    { id: "total", name: "Linked total", type: "rollup",
+      rollup_relation_id: "links", rollup_operation: "sum",
+      rollup_value_property_id: "amount" },
+    { id: "average", name: "Linked average", type: "rollup",
+      rollup_relation_id: "links", rollup_operation: "avg",
+      rollup_value_property_id: "amount" },
+  ];
+  await ok("PATCH", sourcePath, { properties: props });
+  const item = await ok("POST", sourcePath + "/records", {
+    values: { name: "W07 Project", links: [first.id, second.id] },
+  });
+  assert.deepEqual([item.values.count, item.values.total, item.values.average],
+    [2, 910, 455]);
+  const recordPath = "/records/" + item.id;
+  const freshRead = await ok("GET", recordPath);
+  assert.equal(freshRead.values.total, 910);
+
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W07 Peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, peerId]);
+  });
+  const peerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken) };
+  assert.equal((await ok("GET", recordPath, undefined, peer)).values.count, 2);
+
+  // Revoke just the expensive target record without removing source access.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,0)" +
+    " ON CONFLICT(tenant_id,resource_id,principal_id)" +
+    " DO UPDATE SET level=0",
+    [owner.tenant, second.id, peerId]));
+  const redacted = await ok("GET", recordPath, undefined, peer);
+  assert.deepEqual(redacted.values.links, [first.id]);
+  assert.deepEqual(
+    [redacted.values.count, redacted.values.total, redacted.values.average],
+    [1, 10, 10],
+    "no aggregate may include revoked numeric contributions");
+  const listing = await ok("GET", sourcePath + "/records", undefined, peer);
+  const peerRow = listing.find((r: any) => r.id === item.id);
+  assert.equal(peerRow.values.count, 1);
+  assert.equal(peerRow.values.total, 10);
+  assert.equal(JSON.stringify(peerRow).includes(second.id), false);
+  const exported = await ok("GET",
+    "/resources/" + source.id + "/export?format=json", undefined, peer);
+  assert.ok(!JSON.stringify(exported).includes(second.id));
+  assert.ok(!JSON.stringify(exported).includes("910"));
+  const exportedCsv = await req("GET",
+    "/resources/" + source.id + "/export?format=csv", undefined, peer);
+  assert.equal(exportedCsv.statusCode, 200);
+  assert.ok(!exportedCsv.body.includes(second.id));
+  assert.ok(!exportedCsv.body.includes("910"));
+
+  // Updates to a currently readable target update the computed value.
+  const edited = await ok("PATCH", "/records/" + first.id, {
+    values: { amount: 15 }, expected_revision: first.revision,
+  });
+  assert.equal(edited.values.amount, 15);
+  assert.equal((await ok("GET", recordPath, undefined, peer)).values.total, 15);
+
+  const rejectedComputed = await req("PATCH", recordPath, {
+    expected_revision: item.revision, values: { total: 999 },
+  });
+  assert.equal(rejectedComputed.statusCode, 400);
+  const badSchema = await req("PATCH", sourcePath, {
+    properties: props.map((p) => p.id === "total"
+      ? { ...p, rollup_value_property_id: "hidden_column" } : p),
+  });
+  assert.equal(badSchema.statusCode, 400);
+  const noSort = await req("POST", sourcePath + "/views", {
+    name: "Unsafe rollup sort",
+    config: { type: "table", filters: [],
+      sort: [{ property: "count", direction: "desc" }] },
+  });
+  assert.equal(noSort.statusCode, 400);
+  const unchanged = await ok("GET", sourcePath);
+  assert.equal(unchanged.properties.find((p: any) =>
+    p.id === "total").rollup_value_property_id, "amount");
+  // Deleting the remaining linked record must not expose a stale count.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "UPDATE resources SET deleted_at=now() WHERE id=$1", [first.id]));
+  const deleted = await ok("GET", recordPath, undefined, peer);
+  assert.equal(deleted.values.count, 0);
+  assert.equal(deleted.values.total, 0);
+  assert.equal(deleted.values.average, null);
+});
