@@ -190,7 +190,7 @@ Create a new backup directory/file and stop writers:
 mkdir -p backups
 docker compose stop api collab worker
 docker compose --profile ops run --rm ops \
-  node --import tsx scripts/backup.ts backup /backups/host-acceptance.json
+  node --import tsx scripts/backup.ts backup /backups/host-acceptance.owb
 docker compose start api collab worker
 docker compose ps
 ```
@@ -199,17 +199,18 @@ Acceptance:
 - backup command exits successfully;
 - source deployment returns healthy after writers restart;
 - backup file exists and is non-empty;
+- parse only the nonsecret outer JSON metadata and confirm `format === "openjm-backup-envelope-v1"` and `cipher === "aes-256-gcm"`; do not print ciphertext;
 - source content remains accessible.
 
-Do not paste backup contents into chat. The archive contains sensitive application data and is not encrypted by the application.
+Do not paste backup contents or encryption keys into chat. The archive contains sensitive application data but must now be an application-encrypted `openjm-backup-envelope-v1` AES-256-GCM envelope.
 
 ## Phase 7 — separate recovery target
 
 Create a second directory, for example `Workspace-Platform-Recovery`. **Before running any recovery Compose command**, set `export COMPOSE_PROJECT_NAME=openjm_workspace_recovery` in the recovery terminal and verify it differs from `openjm_workspace_source`. Explicitly use a unique Compose project name because `compose.yaml` otherwise has a fixed top-level name. The recovery instance must have separate Docker volumes, a separate S3 bucket if applicable, and unused host ports. Never use `down -v` against the source project.
 
-Copy the backup file into the recovery checkout's `backups/` directory. Prefer running `node scripts/init-env.mjs` in the fresh recovery checkout to generate **new** recovery database passwords and setup token; then securely replace only its `ENCRYPTION_KEY` with the original source encryption key required by the backup (and separately configure any isolated S3 recovery bucket). Do not indiscriminately reuse the source `.env` and do not share any values in evidence.
+Copy the backup file into the recovery checkout's `backups/` directory. Prefer running `node scripts/init-env.mjs` in the fresh recovery checkout to generate **new** recovery database passwords, setup token and metrics credential; then securely replace its `ENCRYPTION_KEY` with the original source application key and its `BACKUP_ENCRYPTION_KEY` with the key that encrypted the selected backup (and separately configure any isolated S3 recovery bucket). Do not indiscriminately reuse the source `.env` and do not share any values in evidence.
 
-In the recovery directory, configure fresh PostgreSQL/file volumes and **different host ports and APP_URL**. Copy the original ENCRYPTION_KEY privately and preserve the same application/migration version. Do not copy the source `.env` without adjusting the recovery configuration. Set these shell overrides in the **recovery terminal**, which take precedence over `.env`; use different ports if 8081/8444 are already occupied:
+In the recovery directory, configure fresh PostgreSQL/file volumes and **different host ports and APP_URL**. Copy the original `ENCRYPTION_KEY` and required `BACKUP_ENCRYPTION_KEY` privately and preserve the same application/migration version. Do not copy the source `.env` without adjusting the recovery configuration. Set these shell overrides in the **recovery terminal**, which take precedence over `.env`; use different ports if 8081/8444 are already occupied:
 
 ```bash
 export COMPOSE_PROJECT_NAME=openjm_workspace_recovery
@@ -222,7 +223,7 @@ docker compose config --quiet
 docker compose ps
 ```
 
-Confirm independently that the source and recovery Compose projects have separate volumes and that the chosen host ports are free. Check that `backups/host-acceptance.json` is actually present in the recovery checkout and readable by the nonroot ops container user (UID 1000), without printing its contents.
+Confirm independently that the source and recovery Compose projects have separate volumes and that the chosen host ports are free. Check that `backups/host-acceptance.owb` is actually present in the recovery checkout and readable by the nonroot ops container user (UID 1000), without printing its contents.
 
 **Required restore order:** start only PostgreSQL and Valkey, run migrations, restore the archive **before** starting API/collaboration/worker/web/Caddy, and only then start the whole application. Do not run `docker compose up -d` before the restore command. Merely starting the full recovery stack is not a completed recovery test.
 
@@ -233,7 +234,7 @@ docker compose run --rm migrate
 # whether the recovery database and object destination remain EMPTY.
 # The restore deliberately refuses to overwrite any existing application data.
 docker compose --profile ops run --rm ops \
-  node --import tsx scripts/backup.ts restore /backups/host-acceptance.json
+  node --import tsx scripts/backup.ts restore /backups/host-acceptance.owb
 docker compose up -d
 docker compose ps
 curl --fail http://localhost:8081/ready
