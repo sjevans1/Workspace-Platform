@@ -104,7 +104,7 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 6. Confirm no confidential credentials, browser labels/private screenshots, datasets or raw backups are committed to this **public** repository. Review dependencies and third-party licensing.
 7. Re-check `mergeable`, branch diff and base ancestry after latest main. Merge **only after** accepted exact-head results. Check post-merge main; clean merged branch; update [Issue #62](https://github.com/sjevans1/Workspace-Platform/issues/62), [ACCEPTANCE](ACCEPTANCE.md) and [BUILD_CHECKPOINT](BUILD_CHECKPOINT.md) as applicable.
 
-**No green CI ≠ no merge.** If a workflow fails, investigate root cause, repair and re-run; do not lower or skip release/security gates just to pass.
+**No green CI = no merge.** If a workflow fails, investigate root cause, repair and re-run; do not lower or skip release/security gates just to pass.
 
 ## 7. Review cadence and progress accounting
 
