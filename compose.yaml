@@ -49,7 +49,7 @@ services:
       retries: 20
     restart: unless-stopped
   clamav:
-    image: clamav/clamav:1.5.4-debian13-slim
+    image: clamav/clamav:1.5.4-debian13-slim@sha256:df80497be841a8ad57f95e04f978216241457f8f8ad608f1f682e3cd0fe63c45
     environment:
       CLAMD_CONF_StreamMaxLength: 30M
       CLAMAV_NO_MILTERD: "true"
