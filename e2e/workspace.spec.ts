@@ -70,6 +70,7 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
       return (await response.json()).plain_text;
     })
     .toContain("Shared context survives a reload.");
+
   const second = await browser.newContext();
   const other = await second.newPage();
   await login(other);
@@ -401,6 +402,39 @@ test("distinct users: invitation, live view-only access, revocation and recovery
     );
     expect(upload.ok()).toBeTruthy();
     const file = await upload.json();
+
+    const beforeMalware = await (
+      await page.request.get(`/api/v1/resources/${document.id}/files`)
+    ).json();
+    const eicar = [
+      "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EI",
+      "CAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*",
+    ].join("");
+    const blockedUpload = await page.request.post(
+      `/api/v1/resources/${document.id}/files`,
+      {
+        headers,
+        multipart: {
+          file: {
+            name: "eicar.txt",
+            mimeType: "text/plain",
+            buffer: Buffer.from(eicar),
+          },
+        },
+      },
+    );
+    expect(blockedUpload.status()).toBe(422);
+    expect(await blockedUpload.json()).toMatchObject({
+      error: "File rejected by malware scanner",
+    });
+    const afterMalware = await (
+      await page.request.get(`/api/v1/resources/${document.id}/files`)
+    ).json();
+    expect(afterMalware).toHaveLength(beforeMalware.length);
+    expect(afterMalware.some((item: any) => item.name === "eicar.txt")).toBe(
+      false,
+    );
+
     const readable = await teammate.request.get(file.url);
     expect(readable.ok()).toBeTruthy();
     expect(await readable.text()).toBe("Private attachment evidence");

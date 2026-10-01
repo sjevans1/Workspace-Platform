@@ -48,6 +48,17 @@ services:
       interval: 5s
       retries: 20
     restart: unless-stopped
+  clamav:
+    build:
+      context: .
+      dockerfile: Dockerfile.clamav
+    image: openjm-workspace-clamav:local
+    environment:
+      CLAMD_CONF_StreamMaxLength: 30M
+      CLAMAV_NO_MILTERD: "true"
+    volumes: [clamav_db:/var/lib/clamav]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
   valkey:
     image: ghcr.io/valkey-io/valkey:8.1.10-alpine
     command: [valkey-server, --save, "", --appendonly, "no"]
@@ -84,9 +95,14 @@ services:
       METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-}
       METRICS_COLLAB_HEALTH_URL: http://collab:1235/health
       METRICS_WORKER_HEALTH_URL: http://worker:4001/health
+      ANTIVIRUS_MODE: ${ANTIVIRUS_MODE:-required}
+      ANTIVIRUS_HOST: ${ANTIVIRUS_HOST:-clamav}
+      ANTIVIRUS_PORT: ${ANTIVIRUS_PORT:-3310}
+      ANTIVIRUS_TIMEOUT_MS: ${ANTIVIRUS_TIMEOUT_MS:-30000}
     depends_on:
       migrate: { condition: service_completed_successfully }
       valkey: { condition: service_healthy }
+      clamav: { condition: service_healthy }
     healthcheck:
       test:
         [
@@ -182,5 +198,6 @@ services:
 volumes:
   postgres:
   files:
+  clamav_db:
   caddy_data:
   caddy_config:

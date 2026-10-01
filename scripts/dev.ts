@@ -23,6 +23,7 @@ try {
 for (const [k, v] of Object.entries(secrets)) process.env[k] ??= String(v);
 process.env.COOKIE_SECURE = "false";
 process.env.APP_URL ||= "http://localhost:3000";
+process.env.ANTIVIRUS_MODE ||= "disabled";
 const pg = await testPostgres(Number(process.env.DEV_DB_PORT || 55432), true);
 await migrate(pg.url);
 const db = new Database(pg.url, { serialize: pg.emulated }),

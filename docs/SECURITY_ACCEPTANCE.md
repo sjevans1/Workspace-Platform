@@ -63,7 +63,7 @@ Private download acceptance also verifies:
 - sandboxed `Content-Security-Policy`;
 - non-image files are served as attachments.
 
-This is not antivirus, sandbox detonation or content disarm/reconstruction. Those remain rollout requirements for customers that require malware inspection.
+The active file-security slice adds required ClamAV malware inspection before encrypted storage/publication, with fail-closed scanner outages and blocked-upload audit evidence. It does not add sandbox detonation, retained forensic quarantine or content disarm/reconstruction; those remain separate controls.
 
 ## Webhook redirects and SSRF boundary
 
@@ -77,7 +77,7 @@ Allowlisting a private/internal origin is still an explicit deployment-administr
 
 This slice does not close every production-security item. Remaining work includes:
 
-- antivirus/quarantine/CDR for uploaded files where required;
+- final-head acceptance of required malware scanning; retained quarantine/CDR remain separate future controls;
 - nonce/hash-based CSP and removal of `unsafe-inline` where compatible;
 - release container/base-OS vulnerability scanning and signed release artifacts;
 - broader browser-engine/accessibility coverage;

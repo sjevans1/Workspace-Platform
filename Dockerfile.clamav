@@ -1,0 +1,6 @@
+FROM clamav/clamav:1.5.4-debian13-slim
+
+USER root
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*

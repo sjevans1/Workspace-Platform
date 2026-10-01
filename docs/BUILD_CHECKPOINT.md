@@ -209,11 +209,19 @@ PR #33 passed final-head GitHub Actions run `36820782634` and was squash-merged 
 
 Acceptance/checkpoint documentation now reflects the verified encryption-at-rest baseline. Routine Dependabot version updates are monthly and grouped by ecosystem for minor/patch releases; major upgrades remain deliberate engineering slices, while security updates remain independent. Repository workflow is one active engineering branch/PR at a time: merge after final-head acceptance, update the checkpoint, delete the merged branch, then create the next branch.
 
+## Active hardening slice: file malware scanning and reject-before-publish
+
+The file upload path now performs structural/MIME validation and then streams bytes to a required ClamAV daemon before encrypted storage or database publication. The custom client uses bounded NUL-framed `PING`/`INSTREAM` commands. CLEAN files continue normally. Infected files return HTTP 422, create no object/file row, and commit a `file.malware_blocked` audit/outbox event. Scanner unavailability, timeout or malformed responses fail closed with HTTP 503 and no stored object.
+
+Docker adds the official ClamAV 1.5.4 Debian slim image pinned to its explicit version tag, a persistent and refreshable signature database volume, no host-published scanner port, and API startup/readiness dependency on scanner health. Local development explicitly disables antivirus; the production runtime refuses disabled mode. CI adds protocol regressions, infected/unavailable upload regressions, live clean/EICAR scanning, antivirus readiness metrics, the existing real browser clean-upload path, and scanner-image CycloneDX SBOM plus Trivy HIGH/CRITICAL gating.
+
+This slice deliberately implements reject-before-publish rather than a retained quarantine vault. Sandbox detonation, CDR, retroactive rescanning and false-positive release workflows remain separate future controls. Final-head CI acceptance is required before this slice is closed.
+
 ## First-pass completion and future work
 
 This first-pass build and verification are complete. The runtime is an alpha, not the full production MVP. No customer host or production Intelligence deployment has been configured. Use README.md and OPERATIONS.md to run it locally or deploy it on a selected host.
 
-SCIM Groups/group-role mapping, trusted TLS, operational tenant provisioning, external monitoring, adversarial security coverage, Chromium + Firefox accessibility, release-image security and encryption at rest are closed and verified. For deployments selecting S3-compatible storage, provider acceptance remains a deployment-specific host gate; local-filesystem deployments do not depend on it. The next cross-deployment engineering gate is file antivirus/quarantine. Follow ACCEPTANCE.md for the remaining identity/provider, offline/scale, product-depth, integration and release-candidate work.
+SCIM Groups/group-role mapping, trusted TLS, operational tenant provisioning, external monitoring, adversarial security coverage, Chromium + Firefox accessibility, release-image security and encryption at rest are closed and verified. For deployments selecting S3-compatible storage, provider acceptance remains a deployment-specific host gate; local-filesystem deployments do not depend on it. The active cross-deployment engineering gate is file malware scanning/reject-before-publish. Follow ACCEPTANCE.md for the remaining identity/provider, offline/scale, product-depth, integration and release-candidate work.
 
 ## Continuity and execution notes
 

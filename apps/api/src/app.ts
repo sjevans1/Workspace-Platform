@@ -66,6 +66,11 @@ import {
   type MetricsSnapshot,
 } from "../../../packages/operations/metrics.ts";
 import {
+  AntivirusUnavailableError,
+  createAntivirus,
+  type Antivirus,
+} from "../../../packages/security/antivirus.ts";
+import {
   registerScim,
   setScimGroupRoleMapping,
 } from "./scim.ts";
@@ -126,6 +131,7 @@ export async function buildApp(
   storage: Storage = createStorage(),
   logging = true,
   oidc: OidcProvider | null = oidcFromEnv(),
+  antivirus: Antivirus = createAntivirus(),
 ) {
   assert(
     /^[a-f0-9]{64}$/i.test(process.env.ENCRYPTION_KEY || ""),
@@ -141,6 +147,7 @@ export async function buildApp(
     oidcRedirectUri = new URL("/api/v1/auth/oidc/callback", appUrl).href,
     metricsStartedAt = Date.now(),
     httpMetrics = new HttpMetrics(),
+    antivirusMetrics = { clean: 0, infected: 0, error: 0 },
     requestStarted = new WeakMap<FastifyRequest, bigint>();
   assert(
     !metricsToken || metricsToken.length >= 32,
@@ -291,6 +298,7 @@ export async function buildApp(
       storage: false,
     };
     if (redis) dependencies.redis = false;
+    if (antivirus.enabled) dependencies.antivirus = false;
     try {
       await db.system((q) => q.query("SELECT 1"));
       dependencies.database = true;
@@ -310,6 +318,13 @@ export async function buildApp(
     } catch {
       /* Report through readiness/metrics without leaking the storage error. */
     }
+    if (antivirus.enabled)
+      try {
+        await antivirus.health();
+        dependencies.antivirus = true;
+      } catch {
+        /* Required malware scanning is part of production readiness. */
+      }
     return dependencies;
   };
   const serviceMetrics = async (
@@ -392,6 +407,7 @@ export async function buildApp(
           worker,
         },
         http: httpMetrics.snapshot(),
+        antivirus: antivirusMetrics,
       });
     },
   );
@@ -1360,7 +1376,7 @@ export async function buildApp(
       Object.entries(templates).map(([id, t]) => ({ id, title: t.title })),
     "workspace.read",
   );
-  dataRoutes(route, storage);
+  dataRoutes(route, storage, antivirus, antivirusMetrics);
   await registerScim(app, db);
   app.addHook("onClose", async () => {
     try {
@@ -1371,7 +1387,12 @@ export async function buildApp(
   });
   return app;
 }
-function dataRoutes(route: Route, storage: Storage) {
+function dataRoutes(
+  route: Route,
+  storage: Storage,
+  antivirus: Antivirus,
+  antivirusMetrics: { clean: number; infected: number; error: number },
+) {
   route(
     "GET",
     "/databases/:id",
@@ -1726,7 +1747,7 @@ function dataRoutes(route: Route, storage: Storage) {
     "POST",
     "/resources/:id/files",
     "Upload a private attachment",
-    async (q, a, r) => {
+    async (q, a, r, reply) => {
       await requireAccess(q, a, id(r), 3);
       const part = await r.file();
       assert(part, 400, "Choose a file");
@@ -1737,6 +1758,21 @@ function dataRoutes(route: Route, storage: Storage) {
         mime = inspectFile(part.filename, part.mimetype, bytes);
       } catch (e) {
         throw new HttpError(400, (e as Error).message);
+      }
+      let scan;
+      try {
+        scan = await antivirus.scan(bytes);
+      } catch (error) {
+        antivirusMetrics.error += 1;
+        if (error instanceof AntivirusUnavailableError)
+          throw new HttpError(503, "Malware scanner unavailable");
+        throw error;
+      }
+      antivirusMetrics[scan.status] += 1;
+      if (scan.status === "infected") {
+        await emit(q, a, "file.malware_blocked", id(r));
+        reply.code(422);
+        return { error: "File rejected by malware scanner" };
       }
       const fid = randomUUID(),
         key = `${a.tenant_id}/${id(r)}/${fid}`;

@@ -54,6 +54,8 @@ Current accepted tool releases:
 
 The corresponding commit pins are recorded directly in `.github/workflows/ci.yml`.
 
+The active file-security slice builds a hardened ClamAV runtime from the official 1.5.4 Debian-slim base, applies current Debian security upgrades, then generates a CycloneDX SBOM and applies the same fixable HIGH/CRITICAL Trivy policy to that exact derived image. Malware signatures are intentionally refreshed operational data in the persistent scanner database volume. Final-head CI evidence is required before that scanner-image gate is considered closed.
+
 ## Current boundaries
 
 This gate does not yet provide:
@@ -61,7 +63,7 @@ This gate does not yet provide:
 - cryptographic image signing/attestation;
 - provenance/SLSA attestations;
 - registry admission policy;
-- malware scanning of uploaded customer files;
+- retained quarantine/CDR or sandbox detonation for uploaded customer files;
 - automatic patch deployment;
 - a substitute for customer-specific vulnerability management.
 

@@ -8,7 +8,7 @@ Only BlockNote Core, React, Mantine and server utilities are used. No @blocknote
 
 ## Infrastructure
 
-PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and SeaweedFS use Apache-2.0. Container images carry additional base-system notices. Preserve those notices and generate a container SBOM for each customer release. Node.js includes MIT and third-party notices in its official image.
+PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and SeaweedFS use Apache-2.0. Container images carry additional base-system notices. Preserve those notices and generate a container SBOM for each customer release. Node.js includes MIT and third-party notices in its official image. ClamAV 1.5.4 is distributed under GNU GPL v2 in the official Cisco-Talos source tree and is shipped here as a separate, unmodified scanner service. Customer release packaging must preserve the image's license/notices and retain or provide access to the exact corresponding ClamAV source for the distributed image version/digest, including applicable bundled-component notices. The npm license generator does not cover this container dependency.
 
 ## npm inventory
 
