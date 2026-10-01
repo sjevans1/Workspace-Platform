@@ -2,16 +2,16 @@
 
 This is an executable alpha built from the OpenJM Workspace Astra handoff, not a claim that the complete MVP definition of done has been met.
 
-## Verified through 30 September 2026
+## Verified through 1 October 2026
 
-The latest production-hardening gate passed in [GitHub Actions run 36811758844](https://github.com/sjevans1/Workspace-Platform/actions/runs/36811758844), testing operator-controlled tenant provisioning branch head `7620c4df45eedddc83fdf1685a49adbb7715ba83`, which was squash-merged as `4a6aa6fc2623561029a21e910d9d2895dc224c52`. The native application integration suite still runs as the same restricted `workspace_runtime` role used by Docker, with `NOBYPASSRLS`.
+The latest production-hardening gate passed in [GitHub Actions run 36819278521](https://github.com/sjevans1/Workspace-Platform/actions/runs/36819278521), testing the encryption-at-rest final head that was squash-merged in PR #32 as `ab9d9fd8cdfded1c558aadc5360bb97ce9081063`. The native application integration suite runs as the same restricted `workspace_runtime` role used by Docker, with `NOBYPASSRLS`.
 
 | Check | Result |
 |---|---|
 | Dependency install from lockfile | Pass |
 | Backend and frontend TypeScript | Pass |
 | Next.js production build | Pass |
-| Unit, API, collaboration, identity and backup tests | 39 passed, 0 failed in latest native PostgreSQL gate |
+| Unit, API, collaboration, identity, backup and storage-encryption tests | 45 passed, 0 failed in latest native PostgreSQL gate |
 | Two live Yjs clients and reconnect | Pass in backend integration test |
 | Tenant policy, known-ID isolation, ancestor ACL revocation | Pass |
 | Concurrent ACL replacement and stale-write rejection | Pass; simultaneous conflicting saves resolve as one success and one 409 |
@@ -24,7 +24,7 @@ The latest production-hardening gate passed in [GitHub Actions run 36811758844](
 | Trash cascade and restore | Pass |
 | Permanent purge, retention and object cleanup | Pass; explicit purge and automatic expiry regression covered |
 | Backup metadata, Yjs bytes and attachment round trip | Pass; corrupt/nonempty restore rejected |
-| Native PostgreSQL 17 test suite | 39 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
+| Native PostgreSQL 17 test suite | 45 passed under `workspace_runtime` with `rolbypassrls=false`; clean process shutdown |
 | Migration rollback/retry and historical checksum integrity | Pass; failed partial DDL rolls back, corrected retry succeeds, reruns are idempotent, applied-file drift is rejected |
 | Docker image, migrations and full Compose startup | Pass; API, collaboration and worker all report healthy before browser acceptance |
 | Deployed Chromium workflow through Caddy | Pass; setup, shared editing, server persistence, reload, comments, history, Markdown export, table and board |
@@ -64,7 +64,7 @@ The repository contains a connected interface, API, collaboration server, import
 | Databases | No formulas, relations, rollups, advanced cross-database queries or import mapping wizard. Property schema changes validate existing data; destructive schema transformations need explicit migration support. Board keyboard updates use selectors. |
 | Permissions and tenancy | API/WS/job/file/search policy checks and forced tenant RLS exist. ACL writes use optimistic revisions plus tenant tree locking; duplicate, cross-tenant and inactive-principal grants are rejected, and concurrent stale writes are covered in CI. Administrator CSV audit export is implemented. Operator-controlled tenant provisioning is implemented and verified: atomic organisation/owner/root creation, provisioning audit, conservative existing-user reuse, passwordless SSO owner mode, and self-service organisation creation default-off. PR #25 passed final-head run 36811758844 with 39/39 native PostgreSQL tests plus the full deployment/browser/TLS gates. Adversarial security coverage is verified: invitation/referrer leakage, edge isolation headers, malicious attachment validation and webhook redirect behavior passed PR #27 final-head run 36813254755 with 42/42 native PostgreSQL tests plus deployed browser and TLS/header acceptance. |
 | Retention | Permanent administrator purge, configurable 1–3650 day trash retention (or disabled), automatic expired resource/file cleanup, durable retry/dead object deletion, and backup coverage are implemented and passed CI run 36660728414. Search and trash listings remain bounded; customer-specific legal/retention policy validation remains deployment work. |
-| Files | Local filesystem storage and S3-compatible object storage are both supported deployment modes. Attachment/object bytes are encrypted by the application on the active hardening branch for both local and S3-compatible storage, with a bounded legacy-read migration path for existing plaintext objects; final CI acceptance is still required. Local storage has no external-provider gate. If S3-compatible storage is selected, that provider must pass the production S3 acceptance harness before rollout. No antivirus, quarantine, content disarm or resumable upload. Maximum upload 25 MiB. |
+| Files | Local filesystem storage and S3-compatible object storage are both supported deployment modes. Attachment/object bytes are application-encrypted for both local and S3-compatible storage; PR #32 final-head CI verified raw provider ciphertext, raw deployed local-volume ciphertext, encrypted recovery and the bounded legacy-read migration path for existing plaintext objects. Local storage has no external-provider gate. If S3-compatible storage is selected, that provider must pass the production S3 acceptance harness before rollout. No antivirus, quarantine, content disarm or resumable upload. Maximum upload 25 MiB. |
 | Import/export | Markdown/CSV imports capped at 2 MiB; CSV at 2,000 rows/100 columns. Synchronous exports cap at 10,000 records. No bulk zipped workspace export or large streamed job output. |
 | Integrations | No actual OpenJM Intelligence deployment connected. Stable event cursor, reconciliation API, receiver secret rotation and dead-letter replay UI remain. The example documents mandatory permission recheck. |
 | API contracts | Versioned routes and interactive OpenAPI inventory exist. Core external integration routes now publish tested machine-readable request/query/path/response schemas. Complete SDK-grade schemas for the remaining human/admin routes and a generated client SDK are not finished. |
