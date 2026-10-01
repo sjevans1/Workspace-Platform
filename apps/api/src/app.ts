@@ -1818,6 +1818,9 @@ function dataRoutes(
           );
         assert(d, 404, "Database not found");
         const keys = d.properties.map((p: any) => p.id);
+        for (const field of [...v.config.filters, ...v.config.sort])
+          assert(d.properties.find((p: any) => p.id === field.property)?.type !== "relation",
+            400, "Relation sorting/filtering requires permission-aware indexing");
         for (const k of [
           ...v.config.filters.map((f) => f.property),
           ...v.config.sort.map((s) => s.property),
