@@ -410,6 +410,36 @@ function parseFilter(raw: unknown) {
   return { field: match[1].toLowerCase(), value };
 }
 
+function parseGroupFilter(raw: unknown) {
+  if (raw == null || raw === "") return null;
+  const text = String(raw),
+    match = text.match(
+      /^\s*(displayName|externalId)\s+eq\s+("(?:[^"\\]|\\.)*")\s*$/i,
+    );
+  if (!match)
+    throw new ScimError(
+      400,
+      "Only displayName eq and externalId eq filters are supported for Groups",
+      "invalidFilter",
+    );
+  let value = "";
+  try {
+    value = JSON.parse(match[2]);
+  } catch {
+    throw new ScimError(400, "Invalid SCIM filter string", "invalidFilter");
+  }
+  return { field: match[1].toLowerCase(), value };
+}
+
+function assertGroupSchema(input: { schemas?: string[] }) {
+  if (
+    input.schemas &&
+    input.schemas.length &&
+    !input.schemas.includes(GROUP_SCHEMA)
+  )
+    throw new ScimError(400, "Group schema is required", "invalidValue");
+}
+
 function assertSchema(input: { schemas?: string[] }) {
   if (
     input.schemas &&
@@ -602,127 +632,209 @@ export async function registerScim(app: FastifyInstance, db: Database) {
         ),
       );
 
-      const resourceType = {
-        schemas: [RESOURCE_TYPE_SCHEMA],
-        id: "User",
-        name: "User",
-        endpoint: "/Users",
-        description: "Workspace tenant membership managed through SCIM",
-        schema: USER_SCHEMA,
-        meta: {
-          resourceType: "ResourceType",
-          location: `${base}/ResourceTypes/User`,
+      const userResourceType = {
+          schemas: [RESOURCE_TYPE_SCHEMA],
+          id: "User",
+          name: "User",
+          endpoint: "/Users",
+          description: "Workspace tenant membership managed through SCIM",
+          schema: USER_SCHEMA,
+          meta: {
+            resourceType: "ResourceType",
+            location: `${base}/ResourceTypes/User`,
+          },
         },
-      };
+        groupResourceType = {
+          schemas: [RESOURCE_TYPE_SCHEMA],
+          id: "Group",
+          name: "Group",
+          endpoint: "/Groups",
+          description: "Workspace tenant directory group",
+          schema: GROUP_SCHEMA,
+          meta: {
+            resourceType: "ResourceType",
+            location: `${base}/ResourceTypes/Group`,
+          },
+        };
       scim.get("/ResourceTypes", async (request, reply) =>
         tenant(request, async () =>
           send(reply, {
             schemas: [LIST_SCHEMA],
-            totalResults: 1,
+            totalResults: 2,
             startIndex: 1,
-            itemsPerPage: 1,
-            Resources: [resourceType],
+            itemsPerPage: 2,
+            Resources: [userResourceType, groupResourceType],
           }),
         ),
       );
       scim.get("/ResourceTypes/User", async (request, reply) =>
-        tenant(request, async () => send(reply, resourceType)),
+        tenant(request, async () => send(reply, userResourceType)),
+      );
+      scim.get("/ResourceTypes/Group", async (request, reply) =>
+        tenant(request, async () => send(reply, groupResourceType)),
       );
 
       const userSchema = {
-        schemas: [SCHEMA_SCHEMA],
-        id: USER_SCHEMA,
-        name: "User",
-        description: "OpenJM Workspace SCIM User",
-        attributes: [
-          {
-            name: "userName",
-            type: "string",
-            multiValued: false,
-            required: true,
-            caseExact: false,
-            mutability: "immutable",
-            returned: "default",
-            uniqueness: "server",
+          schemas: [SCHEMA_SCHEMA],
+          id: USER_SCHEMA,
+          name: "User",
+          description: "OpenJM Workspace SCIM User",
+          attributes: [
+            {
+              name: "userName",
+              type: "string",
+              multiValued: false,
+              required: true,
+              caseExact: false,
+              mutability: "immutable",
+              returned: "default",
+              uniqueness: "server",
+            },
+            {
+              name: "externalId",
+              type: "string",
+              multiValued: false,
+              required: false,
+              caseExact: true,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "displayName",
+              type: "string",
+              multiValued: false,
+              required: false,
+              caseExact: false,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "active",
+              type: "boolean",
+              multiValued: false,
+              required: false,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "emails",
+              type: "complex",
+              multiValued: true,
+              required: false,
+              mutability: "immutable",
+              returned: "default",
+              subAttributes: [
+                {
+                  name: "value",
+                  type: "string",
+                  multiValued: false,
+                  required: true,
+                  mutability: "immutable",
+                  returned: "default",
+                },
+                {
+                  name: "primary",
+                  type: "boolean",
+                  multiValued: false,
+                  required: false,
+                  mutability: "immutable",
+                  returned: "default",
+                },
+              ],
+            },
+          ],
+          meta: {
+            resourceType: "Schema",
+            location: `${base}/Schemas/${encodeURIComponent(USER_SCHEMA)}`,
           },
-          {
-            name: "externalId",
-            type: "string",
-            multiValued: false,
-            required: false,
-            caseExact: true,
-            mutability: "readWrite",
-            returned: "default",
-            uniqueness: "none",
-          },
-          {
-            name: "displayName",
-            type: "string",
-            multiValued: false,
-            required: false,
-            caseExact: false,
-            mutability: "readWrite",
-            returned: "default",
-            uniqueness: "none",
-          },
-          {
-            name: "active",
-            type: "boolean",
-            multiValued: false,
-            required: false,
-            mutability: "readWrite",
-            returned: "default",
-            uniqueness: "none",
-          },
-          {
-            name: "emails",
-            type: "complex",
-            multiValued: true,
-            required: false,
-            mutability: "immutable",
-            returned: "default",
-            subAttributes: [
-              {
-                name: "value",
-                type: "string",
-                multiValued: false,
-                required: true,
-                mutability: "immutable",
-                returned: "default",
-              },
-              {
-                name: "primary",
-                type: "boolean",
-                multiValued: false,
-                required: false,
-                mutability: "immutable",
-                returned: "default",
-              },
-            ],
-          },
-        ],
-        meta: {
-          resourceType: "Schema",
-          location: `${base}/Schemas/${encodeURIComponent(USER_SCHEMA)}`,
         },
-      };
+        groupSchema = {
+          schemas: [SCHEMA_SCHEMA],
+          id: GROUP_SCHEMA,
+          name: "Group",
+          description: "OpenJM Workspace SCIM Group",
+          attributes: [
+            {
+              name: "displayName",
+              type: "string",
+              multiValued: false,
+              required: true,
+              caseExact: false,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "server",
+            },
+            {
+              name: "externalId",
+              type: "string",
+              multiValued: false,
+              required: false,
+              caseExact: true,
+              mutability: "readWrite",
+              returned: "default",
+              uniqueness: "none",
+            },
+            {
+              name: "members",
+              type: "complex",
+              multiValued: true,
+              required: false,
+              mutability: "readWrite",
+              returned: "default",
+              subAttributes: [
+                {
+                  name: "value",
+                  type: "string",
+                  multiValued: false,
+                  required: true,
+                  mutability: "immutable",
+                  returned: "default",
+                },
+                {
+                  name: "display",
+                  type: "string",
+                  multiValued: false,
+                  required: false,
+                  mutability: "readOnly",
+                  returned: "default",
+                },
+                {
+                  name: "$ref",
+                  type: "reference",
+                  referenceTypes: ["User"],
+                  multiValued: false,
+                  required: false,
+                  mutability: "readOnly",
+                  returned: "default",
+                },
+              ],
+            },
+          ],
+          meta: {
+            resourceType: "Schema",
+            location: `${base}/Schemas/${encodeURIComponent(GROUP_SCHEMA)}`,
+          },
+        };
       scim.get("/Schemas", async (request, reply) =>
         tenant(request, async () =>
           send(reply, {
             schemas: [LIST_SCHEMA],
-            totalResults: 1,
+            totalResults: 2,
             startIndex: 1,
-            itemsPerPage: 1,
-            Resources: [userSchema],
+            itemsPerPage: 2,
+            Resources: [userSchema, groupSchema],
           }),
         ),
       );
       scim.get("/Schemas/:id", async (request, reply) =>
         tenant(request, async () => {
           const id = String((request.params as any).id || "");
-          if (id !== USER_SCHEMA)
-            throw new ScimError(404, "Schema not found");
-          return send(reply, userSchema);
+          if (id === USER_SCHEMA) return send(reply, userSchema);
+          if (id === GROUP_SCHEMA) return send(reply, groupSchema);
+          throw new ScimError(404, "Schema not found");
         }),
       );
 
@@ -866,8 +978,8 @@ export async function registerScim(app: FastifyInstance, db: Database) {
           const scimId = randomUUID();
           await q.query(
             `INSERT INTO scim_users(
-              id,tenant_id,user_id,external_id,user_name,display_name
-            ) VALUES($1,$2,$3,$4,$5,$6)`,
+              id,tenant_id,user_id,external_id,user_name,display_name,base_role
+            ) VALUES($1,$2,$3,$4,$5,$6,$7)`,
             [
               scimId,
               context.tenant_id,
@@ -875,6 +987,7 @@ export async function registerScim(app: FastifyInstance, db: Database) {
               input.externalId || null,
               userName,
               input.displayName || name || null,
+              context.default_role,
             ],
           );
           await audit(q, context.tenant_id, request.id, "scim.user.provisioned");
