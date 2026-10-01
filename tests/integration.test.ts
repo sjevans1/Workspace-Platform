@@ -3088,3 +3088,54 @@ test("W07 Rollup native: hide revoked links in all aggregates and exports", asyn
   assert.equal(deleted.values.total, 0);
   assert.equal(deleted.values.average, null);
 });
+
+
+test("W08 permission-first pages: accessible records are not lost behind hidden rows", async () => {
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 ACL pagination",
+  });
+  const resourceIds: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const row = await ok("POST", "/databases/" + dataset.id + "/records", {
+      values: { name: "W08 Row " + String(i).padStart(2, "0") },
+    });
+    resourceIds.push(row.id);
+  }
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, peerId]);
+    for (const hiddenId of resourceIds.slice(0, 3))
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)",
+        [owner.tenant, hiddenId, peerId]);
+  });
+  const peerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken) };
+  const path = "/databases/" + dataset.id + "/records?limit=2";
+  const page1 = await ok("GET", path + "&offset=0", undefined, peer);
+  assert.deepEqual(page1.map((row: any) => row.id), resourceIds.slice(3, 5),
+    "first page must contain two readable records, not two raw SQL rows");
+  const page2 = await ok("GET", path + "&offset=2", undefined, peer);
+  assert.deepEqual(page2.map((row: any) => row.id), resourceIds.slice(5, 7),
+    "offset counts accessible rows, not hidden source rows");
+  assert.equal((await ok("GET", path + "&offset=4", undefined, peer)).length, 0);
+  for (const row of [...page1, ...page2])
+    assert.ok(!resourceIds.slice(0, 3).includes(row.id));
+  const ownerPage = await ok("GET", path + "&offset=0");
+  assert.deepEqual(ownerPage.map((row: any) => row.id), resourceIds.slice(0, 2));
+
+  // ACL changes must take effect immediately; do not use a stale cache.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
+    [owner.tenant, resourceIds[0], peerId]));
+  const afterGrant = await ok("GET", path + "&offset=0", undefined, peer);
+  assert.deepEqual(afterGrant.map((row: any) => row.id),
+    [resourceIds[0], resourceIds[3]]);
+});
