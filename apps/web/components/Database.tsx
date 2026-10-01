@@ -9,6 +9,9 @@ import {
   ArrowUpRight,
   ArrowUp,
   ArrowDown,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { api, run, notify, go, changed } from "../lib/api";
 import { Modal, Field, Empty } from "./common";
@@ -114,6 +117,10 @@ export default function Database({
     [members, setMembers] = useState<any[]>([]),
     [selected, setSelected] = useState(""),
     [offset, setOffset] = useState(0),
+    [month, setMonth] = useState(() => {
+      const today = new Date();
+      return today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0");
+    }),
     [panel, setPanel] = useState(""),
     [name, setName] = useState("");
   const current =
@@ -125,7 +132,7 @@ export default function Database({
     setSelected(v?.id || "");
     setRows(
       await api(
-        `/databases/${id}/records?limit=100&offset=${offset}${v ? `&view=${v.id}` : ""}`,
+        `/databases/${id}/records?limit=${v?.config.type === "calendar" ? 200 : 100}&offset=${offset}${v ? `&view=${v.id}` : ""}${v?.config.type === "calendar" ? `&month=${month}` : ""}`,
       ),
     );
   }
@@ -134,7 +141,7 @@ export default function Database({
       await load();
       setMembers(await api("/members"));
     });
-  }, [id, selected, offset]);
+  }, [id, selected, offset, month]);
   if (!data) return <div className="loading">Opening database…</div>;
   const config = current?.config || { type: "table", filters: [], sort: [] };
   const props = (config.order || data.properties.map((p: any) => p.id))
@@ -159,20 +166,52 @@ export default function Database({
       setOffset(0);
       return;
     }
-    if (!editable) return notify("No saved board view is available");
+    if (!editable) return notify("Only editors can create saved views");
     const group = data.properties.find((p: any) =>
       ["select", "status"].includes(p.type),
     );
+    const dateField = data.properties.find((p: any) => p.type === "date");
     if (type === "board" && !group)
       return notify("Add a Select or Status property before creating a board");
+    if (type === "calendar" && !dateField)
+      return notify("Add a Date property before creating a calendar");
     const created = await api(`/databases/${id}/views`, "POST", {
-      name: type === "board" ? "Board" : "Table",
-      config: { type, groupBy: group?.id, filters: [], sort: [] },
+      name: type === "board" ? "Board" : type === "calendar" ? "Calendar" : "Table",
+      config: {
+        type,
+        ...(type === "board" ? { groupBy: group.id } : {}),
+        ...(type === "calendar" ? { dateBy: dateField.id } : {}),
+        filters: [],
+        sort: [],
+      },
     });
+    setOffset(0);
     await load(created.id);
   }
   const group = data.properties.find((p: any) => p.id === config.groupBy),
-    groups = [...(group?.options || []), ""];
+    groups = [...(group?.options || []), ""],
+    [year, monthNumber] = month.split("-").map(Number),
+    firstDay = new Date(Date.UTC(year, monthNumber - 1, 1)),
+    dayOffset = firstDay.getUTCDay(),
+    totalDays = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate(),
+    calendarDays = Array.from(
+      { length: Math.ceil((dayOffset + totalDays) / 7) * 7 },
+      (_, i) => i - dayOffset + 1,
+    ),
+    monthLabel = firstDay.toLocaleDateString(undefined, {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  function changeMonth(delta: number) {
+    const shifted = new Date(Date.UTC(year, monthNumber - 1 + delta, 1));
+    setMonth(
+      shifted.getUTCFullYear() +
+        "-" +
+        String(shifted.getUTCMonth() + 1).padStart(2, "0"),
+    );
+    setOffset(0);
+  }
   return (
     <div className="database">
       <div className="database-toolbar">
@@ -190,6 +229,13 @@ export default function Database({
           >
             <Columns3 size={16} />
             Board
+          </button>
+          <button
+            className={config.type === "calendar" ? "selected" : ""}
+            onClick={() => run(() => switchType("calendar"))}
+          >
+            <CalendarDays size={16} />
+            Calendar
           </button>
         </div>
         <select
@@ -231,7 +277,57 @@ export default function Database({
           )}
         </div>
       </div>
-      {config.type === "board" ? (
+      {config.type === "calendar" ? (
+        <div className="database-calendar">
+          <div className="calendar-toolbar">
+            <h3>{monthLabel}</h3>
+            <div className="calendar-navigation">
+              <button className="button" aria-label="Previous month" onClick={() => changeMonth(-1)}>
+                <ChevronLeft size={17} />
+              </button>
+              <button className="button" onClick={() => {
+                const now = new Date();
+                setMonth(now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0"));
+                setOffset(0);
+              }}>Today</button>
+              <button className="button" aria-label="Next month" onClick={() => changeMonth(1)}>
+                <ChevronRight size={17} />
+              </button>
+            </div>
+          </div>
+          <div className="calendar-weekdays" aria-hidden="true">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+              <span key={day}>{day}</span>
+            ))}
+          </div>
+          <div className="calendar-grid" aria-label={monthLabel + " calendar"}>
+            {calendarDays.map((day, index) => {
+              if (day < 1 || day > totalDays)
+                return <div className="calendar-day outside" key={index} aria-hidden="true" />;
+              const date = month + "-" + String(day).padStart(2, "0"),
+                dayRecords = rows.filter((row) => row.values?.[config.dateBy] === date);
+              return (
+                <section className="calendar-day" key={date} aria-label={date}>
+                  <time dateTime={date}>{day}</time>
+                  {dayRecords.map((row) => (
+                    <button
+                      className="calendar-event"
+                      key={row.id}
+                      title={row.title}
+                      onClick={() => go(row.id)}
+                    >
+                      {row.title}
+                    </button>
+                  ))}
+                </section>
+              );
+            })}
+          </div>
+          {!rows.length && (
+            <p className="calendar-empty muted">No records dated in {monthLabel}.</p>
+          )}
+        </div>
+      ) : config.type === "board" ? (
         <div className="board">
           {groups.map((status: string) => (
             <section
@@ -381,13 +477,13 @@ export default function Database({
         </span>
         <button
           disabled={!offset}
-          onClick={() => setOffset((v) => Math.max(0, v - 100))}
+          onClick={() => setOffset((v) => Math.max(0, v - (config.type === "calendar" ? 200 : 100)))}
         >
           Previous
         </button>
         <button
-          disabled={rows.length < 100}
-          onClick={() => setOffset((v) => v + 100)}
+          disabled={rows.length < (config.type === "calendar" ? 200 : 100)}
+          onClick={() => setOffset((v) => v + (config.type === "calendar" ? 200 : 100))
         >
           Next
         </button>
@@ -490,6 +586,21 @@ function ViewDialog({
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
+        {config.type === "calendar" && (
+          <Field label="Calendar date property">
+            <select
+              value={config.dateBy || ""}
+              disabled={!editable}
+              onChange={(e) => setConfig({ ...config, dateBy: e.target.value })}
+            >
+              {data.properties
+                .filter((p: any) => p.type === "date")
+                .map((p: any) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+            </select>
+          </Field>
+        )}
         {config.type === "board" && (
           <Field label="Group by">
             <select
