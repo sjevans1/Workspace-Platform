@@ -1,0 +1,13 @@
+scrape_configs:
+  - job_name: openjm-workspace
+    scheme: https
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - workspace.example.com
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/openjm-workspace-metrics-token
+
+rule_files:
+  - /etc/prometheus/rules/openjm-workspace.yml
