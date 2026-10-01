@@ -429,7 +429,7 @@ test("OIDC invitation provisioning requires the verified identity email to match
   assert.equal(response.statusCode, 403);
   assert.match(response.body, /does not match the invitation/);
   assert.equal(
-    await db.system(async (q) =>
+    await db.tenant(owner.tenant, async (q) =>
       Number(
         (
           await one(
