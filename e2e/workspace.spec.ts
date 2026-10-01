@@ -23,7 +23,29 @@ test.beforeEach(async ({ request }) => {
 
 async function login(page: Page) {
   await page.goto("/");
-  await expect(page.locator("h1")).toBeVisible();
+  // Deployed browser tests intentionally retain production request limits.
+  // An exhausted shared CI-IP limit may temporarily show the new recovery
+  // notice instead of a sign-in/Workspace heading. Respect Retry-After rather
+  // than disabling security or mistaking a 429 for invalid credentials.
+  const heading = page.locator("h1");
+  const retry = page.getByRole("button", { name: "Retry loading workspace" });
+  await expect.poll(async () =>
+    (await heading.isVisible()) || (await retry.isVisible())
+  ).toBe(true);
+  for (let attempt = 0; attempt < 2 && await retry.isVisible(); attempt++) {
+    const notice = await page.getByRole("alert")
+      .filter({ hasText: "Workspace connection interrupted" }).innerText();
+    const explicit = notice.match(/retry after (\\d+) seconds?/i);
+    const delay = explicit ? Number(explicit[1]) : 60;
+    expect(delay).toBeGreaterThanOrEqual(0);
+    expect(delay).toBeLessThanOrEqual(60);
+    await page.waitForTimeout((delay + 2) * 1000);
+    await retry.click();
+    await expect.poll(async () =>
+      (await heading.isVisible()) || (await retry.isVisible())
+    ).toBe(true);
+  }
+  await expect(heading).toBeVisible();
   if (
     await page
       .getByRole("heading", { name: "Make yourself at home." })
@@ -668,7 +690,15 @@ test("distinct users: invitation, live view-only access, revocation and recovery
       "Owner-only update after revocation.",
     );
     await expect(otherEditor).toHaveAttribute("contenteditable", "true");
-    expect((await teammate.request.get(file.url)).ok()).toBeTruthy();
+    let download = await teammate.request.get(file.url);
+    if (download.status() === 429) {
+      const hint = Number(download.headers()["retry-after"] || 60);
+      expect(hint).toBeGreaterThanOrEqual(0);
+      expect(hint).toBeLessThanOrEqual(60);
+      await page.waitForTimeout((hint + 2) * 1000);
+      download = await teammate.request.get(file.url);
+    }
+    expect(download.ok(), `Attachment status: ${download.status()}`).toBeTruthy();
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -679,6 +709,7 @@ test("distinct users: invitation, live view-only access, revocation and recovery
 test("recoverable 429 and 503 bootstrap errors preserve authentication and allow manual recovery", async ({
   page,
 }) => {
+  test.setTimeout(180000);
   await login(page);
   // Capture the true /me answer independently of the temporarily blocked
   // resource list. This is not a signed-out or invalid-session scenario.
