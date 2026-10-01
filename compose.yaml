@@ -173,7 +173,7 @@ services:
     environment:
       <<: *runtime
       MIGRATION_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/workspace
-      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Generate .env}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       WORKSPACE_MAINTENANCE: "true"
     volumes: [files:/data/files, "./backups:/backups"]
     depends_on:
