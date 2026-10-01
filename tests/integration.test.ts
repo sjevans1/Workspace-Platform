@@ -321,6 +321,10 @@ test("metrics endpoint is bearer-protected and excludes tenant identifiers", asy
   );
   assert.match(
     accepted.body,
+    /workspace_dependency_ready\{dependency="antivirus"\} 1/,
+  );
+  assert.match(
+    accepted.body,
     /workspace_service_configured\{service="collaboration"\} 0/,
   );
   assert.match(
