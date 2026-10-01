@@ -4,6 +4,8 @@ import type { Actor } from "../../../packages/auth/index.ts";
 import type { Property } from "../../../packages/contracts/index.ts";
 import { assert } from "../../../packages/contracts/index.ts";
 import { access, requireAccess } from "../../../packages/permissions/index.ts";
+import { computedFormulaValues } from "../../../packages/formulas/index.ts";
+import { redactRelationSchema, redactRelationValues } from "./relations.ts";
 
 export type RollupOperation = "count" | "sum" | "avg" | "min" | "max";
 
@@ -115,4 +117,20 @@ export async function computeRollupValues(
       property.rollup_operation!, accessible.length, numeric);
   }
   return calculated;
+}
+
+export async function presentedRecordValues(
+  q: Query, actor: Actor, properties: Property[],
+  persisted: Record<string, any>,
+) {
+  const safeRelations = await redactRelationValues(q, actor, properties, persisted);
+  return computeRollupValues(q, actor, properties,
+    computedFormulaValues(properties, safeRelations));
+}
+
+export async function presentedSchema(
+  q: Query, actor: Actor, properties: Property[],
+) {
+  const safeRelations = await redactRelationSchema(q, actor, properties);
+  return redactRollupSchema(q, actor, safeRelations as Property[]);
 }
