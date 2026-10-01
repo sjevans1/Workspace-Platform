@@ -1002,6 +1002,12 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
     ].schema.type,
     "array",
   );
+  const cursorSpec = spec.paths["/api/v1/events/cursor"].get;
+  assert.equal(cursorSpec.querystring, undefined);
+  assert.deepEqual(
+    cursorSpec.responses["200"].content["application/json"].schema.required,
+    ["events", "next_cursor", "has_more"],
+  );
 });
 
 test("native row-level policies and known IDs isolate tenants", async () => {
