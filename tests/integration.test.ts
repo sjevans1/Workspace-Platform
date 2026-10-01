@@ -184,8 +184,16 @@ before(async () => {
   dir = await mkdtemp(`${tmpdir()}/workspace-test-`);
   process.env.STORAGE_LOCAL_PATH = dir;
   pg = await testPostgres(55433);
+  if (!pg.emulated) process.env.RUNTIME_DB_PASSWORD = "test-runtime-password";
   await migrate(pg.url);
-  db = new Database(pg.url, { serialize: pg.emulated });
+  let applicationUrl = pg.url;
+  if (!pg.emulated) {
+    const runtimeUrl = new URL(pg.url);
+    runtimeUrl.username = "workspace_runtime";
+    runtimeUrl.password = process.env.RUNTIME_DB_PASSWORD!;
+    applicationUrl = runtimeUrl.toString();
+  }
+  db = new Database(applicationUrl, { serialize: pg.emulated });
   oidcProfile = {
     issuer: fakeOidc.issuer,
     subject: "owner-subject",
@@ -249,6 +257,18 @@ after(async () => {
   await rm(dir, { recursive: true, force: true });
   done();
 });
+test("native integration uses the restricted production runtime database role", async () => {
+  if (pg.emulated) return;
+  const role = await db.system((q) =>
+    one(
+      q,
+      "SELECT current_user AS name,(SELECT rolbypassrls FROM pg_roles WHERE rolname=current_user) AS bypass",
+    ),
+  );
+  assert.equal(role.name, "workspace_runtime");
+  assert.equal(role.bypass, false);
+});
+
 test("OIDC links an existing verified account with browser-bound one-time state", async () => {
   const methods = await ok("GET", "/auth/methods", undefined, null);
   assert.equal(methods.local, true);
@@ -322,6 +342,13 @@ test("OIDC back-channel logout revokes OIDC sessions but preserves local break-g
   });
   assert.equal(logout.statusCode, 200, logout.body);
   assert.equal(logout.json().revoked, 1);
+  const logoutAudit = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT action FROM audit_events WHERE action='auth.oidc_backchannel_logout' ORDER BY created_at DESC LIMIT 1",
+    ),
+  );
+  assert.equal(logoutAudit.action, "auth.oidc_backchannel_logout");
   assert.equal((await req("GET", "/me", undefined, actor)).statusCode, 401);
   assert.equal((await req("GET", "/me", undefined, owner)).statusCode, 200);
 
@@ -402,7 +429,7 @@ test("OIDC invitation provisioning requires the verified identity email to match
   assert.equal(response.statusCode, 403);
   assert.match(response.body, /does not match the invitation/);
   assert.equal(
-    await db.system(async (q) =>
+    await db.tenant(owner.tenant, async (q) =>
       Number(
         (
           await one(
