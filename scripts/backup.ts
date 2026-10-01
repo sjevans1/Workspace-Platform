@@ -10,6 +10,8 @@ const tables = [
   "memberships",
   "sessions",
   "oidc_identities",
+  "scim_connectors",
+  "scim_users",
   "invitations",
   "resources",
   "acl",
