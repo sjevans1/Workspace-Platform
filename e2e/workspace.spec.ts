@@ -70,6 +70,31 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
       return (await response.json()).plain_text;
     })
     .toContain("Shared context survives a reload.");
+
+  const filesBefore = await page.request.get(`/api/v1/resources/${id}/files`);
+  expect(filesBefore.ok()).toBeTruthy();
+  const beforeCount = (await filesBefore.json()).length;
+  const eicar = [
+    "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EI",
+    "CAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*",
+  ].join("");
+  const blocked = await page.request.post(`/api/v1/resources/${id}/files`, {
+    multipart: {
+      file: {
+        name: "eicar-acceptance.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(eicar),
+      },
+    },
+  });
+  expect(blocked.status()).toBe(422);
+  expect(await blocked.json()).toEqual({
+    error: "File rejected by malware scanner",
+  });
+  const filesAfter = await page.request.get(`/api/v1/resources/${id}/files`);
+  expect(filesAfter.ok()).toBeTruthy();
+  expect((await filesAfter.json()).length).toBe(beforeCount);
+
   const second = await browser.newContext();
   const other = await second.newPage();
   await login(other);
