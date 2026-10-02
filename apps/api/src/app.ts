@@ -1769,10 +1769,12 @@ function dataRoutes(
         assert(["string", "boolean"].includes(typeof value), 400,
           "Unsupported cursor sort value");
         const scalar = String(value);
-        assert(scalar.length <= 256, 400,
+        assert(scalar.length <= 512, 400,
           "Sort value too large for encrypted cursor");
         return scalar;
       }) : [];
+      assert(JSON.stringify(sortValues).length <= 900, 400,
+        "Sort keys exceed encrypted cursor size budget");
       const nextCursor = hasMore && tail
         ? encodeDatabasePageCursor(newDatabasePageCursor(
           a.tenant_id, a.user_id, a.role, databaseId, viewId,
