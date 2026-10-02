@@ -18,7 +18,8 @@ const schema = z.object({
   after: z.uuid(),
   sort_values: z.array(z.union([
     z.string().max(1024), z.number().finite(), z.null(),
-  ])).max(5).default([]),
+  ])).max(5).refine((values) =>
+    JSON.stringify(values).length <= 900, "Sort cursor too large").default([]),
   issued: z.number().int().nonnegative(),
   expires: z.number().int().positive(),
 }).strict();
