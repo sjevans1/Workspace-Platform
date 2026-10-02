@@ -1,7 +1,8 @@
 import { ServerBlockNoteEditor } from "@blocknote/server-util";
+import { workspaceEditorSchema } from "./schema.tsx";
 import * as Y from "yjs";
 import { textOf, assert } from "../contracts/index.ts";
-const editor = ServerBlockNoteEditor.create();
+const editor = ServerBlockNoteEditor.create({ schema: workspaceEditorSchema });
 export const fragment = "document";
 export function validateBlocks(blocks: unknown): asserts blocks is any[] {
   assert(
@@ -12,7 +13,15 @@ export function validateBlocks(blocks: unknown): asserts blocks is any[] {
   const check = (v: any, d = 0) => {
     assert(d < 40, 400, "Document nesting too deep");
     if (Array.isArray(v)) return v.forEach((x) => check(x, d + 1));
-    if (v && typeof v === "object")
+    if (v && typeof v === "object") {
+      if (v.type === "callout") {
+        const variant = v.props?.variant ?? "info";
+        assert(["info", "warning", "success"].includes(variant), 400,
+          "Invalid callout variant");
+      }
+      if (v.type === "divider")
+        assert(!v.content || (Array.isArray(v.content) &&
+          v.content.length === 0), 400, "Divider cannot contain text");
       for (const [k, x] of Object.entries(v)) {
         assert(
           !["__proto__", "constructor", "prototype"].includes(k),
@@ -30,6 +39,7 @@ export function validateBlocks(blocks: unknown): asserts blocks is any[] {
           );
         check(x, d + 1);
       }
+    }
   };
   check(blocks);
 }

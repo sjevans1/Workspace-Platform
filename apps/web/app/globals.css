@@ -2269,3 +2269,37 @@ nav button:hover,
 .backlink-items button:hover {
   background: var(--sage);
 }
+
+
+/* W10b custom Core blocks. Custom props use an enumerated server-safe
+   variant, not unsanitised arbitrary inline HTML/CSS. */
+.editor-format-tools {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.workspace-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 15px;
+  margin: 10px 0;
+  border-left: 4px solid var(--accent);
+  border-radius: 7px;
+  background: var(--sage);
+  color: var(--ink);
+}
+.workspace-callout[data-workspace-callout="warning"] {
+  border-left-color: #ba8024;
+}
+.workspace-callout[data-workspace-callout="success"] {
+  border-left-color: #24875d;
+}
+.workspace-callout-icon { flex: 0 0 auto; font-weight: 700; }
+.workspace-callout-content { flex: 1; min-width: 0; }
+.workspace-divider { padding: 12px 0; }
+.workspace-divider hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
