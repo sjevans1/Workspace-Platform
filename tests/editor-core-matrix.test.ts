@@ -93,3 +93,30 @@ test("W10b shared callout and divider survive canonical Yjs reload", () => {
       /Divider cannot contain text/);
   } finally { one.destroy(); two.destroy(); }
 });
+
+
+test("W10c1 default BlockNote 0.55 documents migrate into extended shared schema without loss", () => {
+  // A v0.55 Core-only document is the actual deployed W10a/W09 predecessor.
+  // The new callout/divider schema must not change existing text, marks,
+  // heading levels, list types, IDs, links or children on server projection.
+  const oldEditor=ServerBlockNoteEditor.create();
+  const legacyDoc=oldEditor.blocksToYDoc([
+    {type:"heading",props:{level:3},content:"Preserved heading"},
+    {type:"paragraph",content:[
+      {type:"text",text:"Underlined",styles:{underline:true}},
+      {type:"text",text:" knowledge",styles:{bold:true}},
+    ]},
+    {type:"checkListItem",props:{checked:true},content:"Old task"},
+  ],"document");
+  const replay=new Y.Doc();
+  try {
+    const canonical=project(legacyDoc);
+    assert.deepEqual(canonical.blocks.map((b:any)=>b.type),
+      ["heading","paragraph","checkListItem"]);
+    assert.equal((canonical.blocks[0] as any).props.level,3);
+    assert.match(JSON.stringify(canonical.blocks),/"underline":true/);
+    assert.equal((canonical.blocks[2] as any).props.checked,true);
+    Y.applyUpdate(replay,canonical.state);
+    assert.deepEqual(project(replay).blocks,canonical.blocks);
+  } finally { legacyDoc.destroy(); replay.destroy(); }
+});

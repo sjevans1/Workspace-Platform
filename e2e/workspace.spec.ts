@@ -742,6 +742,8 @@ test("distinct users: invitation, live view-only access, revocation and recovery
       .click();
     await expect(access).toBeHidden();
     await expect(otherEditor).toHaveAttribute("contenteditable", "false");
+    await expect(teammate.getByRole("toolbar",{name:"Formatting"}))
+      .toHaveCount(0);
     await editor.click();
     await page.keyboard.press("ControlOrMeta+End");
     await page.keyboard.type(" Owner update remains visible.");
@@ -768,6 +770,8 @@ test("distinct users: invitation, live view-only access, revocation and recovery
       .click();
     await expect(access).toBeHidden();
     await expect(otherEditor).toHaveAttribute("contenteditable", "true");
+    await expect(teammate.getByRole("toolbar",{name:"Formatting"}))
+      .toBeVisible();
 
     await page.getByRole("button", { name: "Page actions" }).click();
     await page
@@ -1646,4 +1650,55 @@ test("W10b callout and divider sync across two users and survive reload", async 
   await expect(page.locator(".workspace-callout")).toContainText(
     "Add a note for your team.");
   await expect(page.locator(".workspace-divider hr")).toBeVisible();
+});
+
+
+test("W10c1 accessible formatting, local undo/redo and phone-sized editor", async ({page}) => {
+  await login(page);
+  await page.getByRole("button",{name:"New page",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Create something new"});
+  const title="W10c1 editor acceptance";
+  await dialog.getByLabel("Name",{exact:true}).fill(title);
+  await dialog.getByRole("button",{name:"Create",exact:true}).click();
+  await expect(page.getByLabel("Page title",{exact:true})).toHaveValue(title);
+  await expect.poll(() => new URL(page.url()).searchParams.get("page"))
+    .not.toBeNull();
+  const id=new URL(page.url()).searchParams.get("page");
+  const editable=page.locator(".bn-editor");
+  await expect(editable).toBeVisible();
+  const tools=page.getByRole("toolbar",{name:"Formatting"});
+  for(const name of ["Heading 1","Heading 2","Heading 3",
+    "Checklist","Underline selection","Undo last edit","Redo last edit"]){
+    await expect(tools.getByRole("button",{name})).toBeVisible();
+  }
+  await editable.click();
+  // insertText is one native input transaction, so undo cannot depend
+  // on per-keypress history grouping or wall-clock timers.
+  await page.keyboard.insertText("W10c1 undo proof");
+  await expect(editable).toContainText("W10c1 undo proof");
+  await tools.getByRole("button",{name:"Undo last edit"}).click();
+  await expect(editable).not.toContainText("W10c1 undo proof");
+  await tools.getByRole("button",{name:"Redo last edit"}).click();
+  await expect(editable).toContainText("W10c1 undo proof");
+
+  await tools.getByRole("button",{name:"Heading 1"}).click();
+  await expect(page.locator(".bn-editor h1")).toContainText("W10c1 undo proof");
+  await tools.getByRole("button",{name:"Heading 3"}).click();
+  await expect(page.locator(".bn-editor h3")).toContainText("W10c1 undo proof");
+  await tools.getByRole("button",{name:"Checklist"}).click();
+  await expect.poll(async()=>{
+    const res=await page.request.get(`/api/v1/pages/${id}/content`);
+    if(!res.ok()) return "";
+    const blocks=(await res.json()).blocks||[];
+    return blocks.find((b:any)=>b.type==="checkListItem")?.content
+      ? "checklist" : "pending";
+  },{timeout:30000}).toBe("checklist");
+  await page.setViewportSize({width:390,height:844});
+  await expect(tools.getByRole("button",{name:"Checklist"})).toBeVisible();
+  await expect(tools.getByRole("button",{name:"Undo last edit"})).toBeVisible();
+  expect(await page.evaluate(() =>
+    document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.reload();
+  await expect(page.locator(".bn-editor")).toContainText("W10c1 undo proof");
+  await expect(page.getByRole("toolbar",{name:"Formatting"})).toBeVisible();
 });
