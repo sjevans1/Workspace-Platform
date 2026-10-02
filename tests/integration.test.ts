@@ -3234,3 +3234,64 @@ test("W08 permission-first pages: accessible records are not lost behind hidden 
     .rows[0].allowed, false,
     "even owner read must exclude deleted ancestors");
 });
+
+
+test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => {
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Scale Peer')",
+    [peerId, peerId + "@example.test"]));
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO memberships(tenant_id,user_id,role)" +
+    " VALUES($1,$2,'member')", [owner.tenant, peerId]));
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + token,
+    csrf: csrf(token) };
+
+  for (const size of [1000, 10000]) {
+    const dataset = await ok("POST", "/resources", {
+      kind: "database", parent_id: space.id,
+      title: "W08 scale " + size,
+    });
+    const ids = Array.from({ length: size }, () => randomUUID());
+    const tenant = owner.tenant;
+    await db.tenant(tenant, async (q) => {
+      // A transactionally inserted deterministic fixture makes the 10k
+      // qualification practical under restricted PostgreSQL/RLS.
+      await q.query(
+        "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
+        " SELECT x.id,$2::uuid,$3::uuid,'record'," +
+        " 'W08 Scale item ' || x.n::text,x.n::float8" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+        [ids, tenant, dataset.id]);
+      await q.query(
+        "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
+        " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object('name',r.title)" +
+        " FROM resources r WHERE r.id=ANY($1::uuid[])",
+        [ids, tenant, dataset.id]);
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " SELECT $2::uuid,x.id,$3::text,0" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+        " WHERE x.n <= $4::int",
+        [ids, tenant, peerId, size / 2]);
+    });
+    const offset = size / 2 - 100;
+    const started = Date.now();
+    const page = await ok("GET",
+      "/databases/" + dataset.id + "/records?limit=100&offset=" + offset,
+      undefined, peer);
+    const ms = Date.now() - started;
+    assert.deepEqual(page.map((row: any) => row.id), ids.slice(size - 100),
+      "deep offsets must count 100 accessible rows after hidden half");
+    console.info("W08_ACL_BENCH " + JSON.stringify({
+      size, hidden: size / 2, visible: size / 2,
+      offset, page_size: page.length, elapsed_ms: ms,
+    }));
+    const budgetMs = size === 1000 ? 15000 : 60000;
+    assert.ok(ms < budgetMs,
+      "W08 " + size + "row permission-aware page exceeded " + budgetMs +
+      "ms provisional CI budget: " + ms + "ms");
+  }
+});
