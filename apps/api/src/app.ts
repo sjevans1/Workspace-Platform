@@ -55,6 +55,7 @@ import {
 import { emit, encrypt } from "../../../packages/events/index.ts";
 import { beginEventCursor, decodeEventCursor, encodeEventCursor } from "../../../packages/events/cursor.ts";
 import { beginReconcileCursor, decodeReconcileCursor, encodeReconcileCursor } from "../../../packages/events/reconcile-cursor.ts";
+import { beginDatabasePage, decodeDatabasePage } from "../../../packages/database/page-cursor.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -84,6 +85,7 @@ import {
   createResource,
   createRecord,
   records,
+  databaseKeysetPage,
   replaceDocument,
   validatePeople,
   treeLock,
@@ -1742,6 +1744,28 @@ function dataRoutes(
         requestedOffset,
         Math.min(200, Math.max(1, Number(p.limit) || 100)),
       );
+    },
+    "databases.read",
+  );
+  route(
+    "GET",
+    "/databases/:id/records-page",
+    "Read permission-filtered default table using encrypted keyset continuation",
+    async (q, a, r) => {
+      const p = query(r);
+      assert(Object.keys(p).every((k) => k === "cursor" || k === "limit"),
+        400, "Saved-view cursor pagination is not yet supported");
+      const database = id(r);
+      const supplied = p.limit === undefined ? 100 : Number(p.limit);
+      assert(Number.isSafeInteger(supplied) && supplied >= 1 &&
+        supplied <= 200, 400, "Page limit must be 1–200");
+      const cursor = p.cursor
+        ? decodeDatabasePage(String(p.cursor), a.tenant_id, a.user_id,
+          database, a.role)
+        : beginDatabasePage(a.tenant_id, a.user_id, database, a.role, supplied);
+      assert(!p.cursor || p.limit === undefined || cursor.limit === supplied,
+        400, "Cursor page limit cannot change");
+      return databaseKeysetPage(q, a, database, cursor);
     },
     "databases.read",
   );
