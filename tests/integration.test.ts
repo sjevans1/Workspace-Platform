@@ -3995,6 +3995,16 @@ test("W09a permissioned CSV preview and atomically mapped worker import", async 
   await tick(db);
   const job = await ok("GET", "/jobs/" + queued.id);
   assert.equal(job.status, "completed", JSON.stringify(job.result));
+  const persistedPayload = await db.tenant(owner.tenant, q =>
+    one(q, "SELECT payload FROM jobs WHERE id=$1", [queued.id]));
+  assert.deepEqual(persistedPayload.payload.mapping, mapping,
+    "queued mapping must be stored exactly, not silently dropped");
+  const schemaRow = await db.tenant(owner.tenant, q => one(q,
+    "SELECT properties FROM databases WHERE resource_id=$1",
+    [job.result.resource_id]));
+  assert.deepEqual(schemaRow.properties.map((p:any)=>p.id),
+    ["mapped0","mapped1","mapped2","mapped3"],
+    "worker must create the requested mapped schema");
   const recordUrl = "/databases/" + job.result.resource_id + "/records";
   const created = await ok("GET", recordUrl);
   assert.equal(created.length, 2);
@@ -4004,7 +4014,7 @@ test("W09a permissioned CSV preview and atomically mapped worker import", async 
   })), [
     {name:"First",quantity:20,due:"2026-10-01",checked:true},
     {name:"Second",quantity:0,due:"2026-10-02",checked:false},
-  ]);
+  ], "Mapped returned rows: " + JSON.stringify(created.slice(0, 2)));
   assert.ok(created.every((r:any)=>r.values.mapped4===undefined),
     "skipped columns never enter database storage");
   const copied = await ok("GET", "/databases/" + job.result.resource_id);
