@@ -4162,7 +4162,7 @@ test("W09c CSV submission retries are principal-bound, atomic and schema-aware",
     kind: "database", parent_id: space.id, title: "W09c idempotency target",
   });
   const url = "/databases/" + target.id;
-  const content = "Name\\nCreated once\\n";
+  const content = "Name\nCreated once\n";
   const preview = await ok("POST", "/imports/preview", {
     parent_id:space.id,target_database_id:target.id,content,
   });
@@ -4188,7 +4188,7 @@ test("W09c CSV submission retries are principal-bound, atomic and schema-aware",
   assert.equal(queued.rows[0].payload.idempotency_key,undefined,
     "worker payload must not persist the client replay secret");
   assert.equal((await req("POST","/imports", {
-    ...request,content:"Name\\nDifferent content\\n",
+    ...request,content:"Name\nDifferent content\n",
   })).statusCode,409,"same key cannot silently mean another request");
   assert.equal((await req("POST","/imports", {
     ...request,idempotency_key:"bad",

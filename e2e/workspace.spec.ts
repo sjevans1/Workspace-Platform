@@ -1525,7 +1525,7 @@ test("W09b deployed browser requires explicit append-only target confirmation", 
 
   // W09c: the deployed HTTP endpoint returns the same durable job when an
   // acknowledgement is lost or a completed CSV request is retried.
-  const csv = "Name\\nRetry once\\n";
+  const csv = "Name\nRetry once\n";
   const previewResponse = await page.request.post("/api/v1/imports/preview",{
     headers,data:{parent_id:space.id,target_database_id:database.id,content:csv},
   });
