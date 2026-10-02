@@ -239,7 +239,7 @@ export default function Database({
     [name, setName] = useState("");
   const current =
     data?.views.find((v: any) => v.id === selected) || data?.views[0];
-  async function load(viewId = selected) {
+  async function load(viewId = selected, cursorOverride: string | null = cursor) {
     const d = await api(`/databases/${id}`);
     setData(d);
     const v = d.views.find((v: any) => v.id === viewId) || d.views[0];
@@ -256,7 +256,7 @@ export default function Database({
       setNextCursor(null);
     } else {
       const page = await api(
-        `/databases/${id}/records/page?${argumentsPart}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+        `/databases/${id}/records/page?${argumentsPart}${cursorOverride ? `&cursor=${encodeURIComponent(cursorOverride)}` : ""}`);
       setRows(page.items);
       setPageHasMore(page.has_more);
       setNextCursor(page.next_cursor);
@@ -695,7 +695,7 @@ export default function Database({
             setCursorHistory([]);
             setNextCursor(null);
             setSelected(v);
-            await load(v);
+            await load(v, null);
             setPanel("");
           }}
         />
