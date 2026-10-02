@@ -3367,5 +3367,23 @@ test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => 
     assert.ok(ms < budgetMs,
       "W08 " + size + "row permission-aware page exceeded " + budgetMs +
       "ms provisional CI budget: " + ms + "ms");
+
+    // Export scales over the same caller-specific visible set. A hidden
+    // row must never be leaked even when thousands of rows are returned.
+    const exportStarted = Date.now();
+    const output = await ok("GET",
+      "/resources/" + dataset.id + "/export?format=json",
+      undefined, peer);
+    const exportElapsed = Date.now() - exportStarted;
+    const hidden = new Set(ids.slice(0, size / 2));
+    assert.equal(output.records.length, size / 2);
+    assert.ok(output.records.every((row: any) =>
+      !hidden.has(row.id)),
+      "Export cannot include hidden source records or their metadata");
+    console.info("W08_ACL_EXPORT_BENCH " + JSON.stringify({
+      size, visible: output.records.length, elapsed_ms: exportElapsed,
+    }));
+    assert.ok(exportElapsed < 30000,
+      "W08 large visible-only export exceeded provisional 30s budget");
   }
 });
