@@ -1956,3 +1956,114 @@ test("W10c3b quote, code and table are visible in two editors and indexed", asyn
   expect(found.ok(),await found.text()).toBeTruthy();
   expect((await found.json()).some((r:any)=>r.id===document.id)).toBe(true);
 });
+
+
+test("W10c4a live two-editor restore reissues rooms without manual reload", async ({page,browser}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W10c4a live restore "+randomUUID()},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const pageResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,
+      title:"W10c4a live recovery"},
+  });
+  expect(pageResponse.ok(),await pageResponse.text()).toBeTruthy();
+  const resource=await pageResponse.json();
+  const endpoint="/api/v1/pages/"+resource.id;
+  const initial=await (await page.request.get(endpoint+"/content")).json();
+  const stableBlocks=[
+    {id:randomUUID(),type:"heading",props:{level:2},
+      content:"Restored collaborative state"},
+    {id:randomUUID(),type:"callout",props:{variant:"warning"},
+      content:[{type:"text",text:"Recovered evidence",styles:{bold:true}}]},
+    {id:randomUUID(),type:"divider"},
+    {id:randomUUID(),type:"paragraph",content:"Restored notes"},
+  ];
+  const first=await page.request.patch(endpoint+"/content",{
+    headers,data:{blocks:stableBlocks,expected_revision:initial.revision},
+  });
+  expect(first.ok(),await first.text()).toBeTruthy();
+  const rich=await first.json();
+  const second=await page.request.patch(endpoint+"/content",{
+    headers,data:{blocks:[{type:"paragraph",content:"Discarded temporary draft"}],
+      expected_revision:rich.revision},
+  });
+  expect(second.ok(),await second.text()).toBeTruthy();
+  const changed=await second.json();
+  const versions=await (await page.request.get(endpoint+"/versions")).json();
+  const snapshot=versions.find((v:any)=>v.revision===rich.revision);
+  expect(snapshot?.id).toBeTruthy();
+
+  const url="/?page="+resource.id;
+  await page.goto(url);
+  await expect(page.locator(".bn-editor"))
+    .toContainText("Discarded temporary draft");
+  const secondSession=await browser.newContext();
+  try {
+    const other=await secondSession.newPage();
+    await login(other,false);
+    await other.goto(url);
+    await expect(other.locator(".bn-editor"))
+      .toContainText("Discarded temporary draft");
+    // Both browsers are connected to the old epoch before this REST
+    // version restore. Neither browser is reloaded after the operation.
+    const priorTicket=await page.request.post(endpoint+"/collab",{
+      headers,data:{},
+    });
+    expect(priorTicket.ok(),await priorTicket.text()).toBeTruthy();
+    const before=await priorTicket.json();
+    expect(before.name).toContain(resource.id);
+
+    const restored=await page.request.post(
+      endpoint+"/versions/"+snapshot.id+"/restore",{
+        headers,data:{expected_revision:changed.revision},
+      });
+    expect(restored.ok(),await restored.text()).toBeTruthy();
+    const result=await restored.json();
+    expect(result.epoch).toBeGreaterThan(changed.epoch);
+    const freshTicket=await page.request.post(endpoint+"/collab",{
+      headers,data:{},
+    });
+    expect(freshTicket.ok(),await freshTicket.text()).toBeTruthy();
+    const after=await freshTicket.json();
+    expect(after.name).not.toBe(before.name);
+    expect(after.name).toContain(resource.id);
+
+    for(const client of [page,other]) {
+      await expect(client.locator(".bn-editor"),"must auto-reset the old Yjs epoch")
+        .toContainText("Restored collaborative state",{timeout:30000});
+      await expect(client.locator(".workspace-callout"))
+        .toContainText("Recovered evidence");
+      await expect(client.locator(".workspace-divider hr")).toBeVisible();
+      await expect(client.locator(".bn-editor"))
+        .not.toContainText("Discarded temporary draft");
+    }
+    const afterRestore=await (await page.request.get(endpoint+"/content")).json();
+    expect(afterRestore.blocks.map((b:any)=>b.id))
+      .toEqual(stableBlocks.map(b=>b.id));
+    expect(afterRestore.blocks[1].props.variant).toBe("warning");
+
+    // Confirm an editor reconnected to the new epoch can write and the
+    // stale old-room content never reappears after its autosave debounce.
+    await other.locator(".bn-editor").click();
+    await other.keyboard.press("ControlOrMeta+End");
+    await other.keyboard.insertText(" Fresh after reset.");
+    await expect.poll(async()=>{
+      const response=await page.request.get(endpoint+"/content");
+      if(!response.ok())return "";
+      return (await response.json()).plain_text||"";
+    },{timeout:30000}).toContain("Fresh after reset.");
+    await expect(page.locator(".bn-editor"))
+      .toContainText("Fresh after reset.");
+    const canonical=await (await page.request.get(endpoint+"/content")).json();
+    expect(canonical.plain_text).not.toContain("Discarded temporary draft");
+    expect(canonical.blocks.some((b:any)=>b.type==="callout")).toBe(true);
+  } finally {await secondSession.close();}
+});
