@@ -3150,6 +3150,12 @@ test("W08 permission-first pages: accessible records are not lost behind hidden 
     [dataset.id, peerId]));
   assert.equal(guestDenied.rows[0].allowed, false,
     "guest cannot acquire inherited access without an explicit ancestor grant");
+  const spoof = await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') forged," +
+    " workspace_can_read_resource($1::uuid,$2::uuid,NULL) missing",
+    [resourceIds[3], peerId]));
+  assert.deepEqual(spoof.rows[0], { forged: false, missing: false },
+    "predicate must not permit forged owner or absent caller roles");
   const foreignTenant = await db.tenant(other.tenant, (q) => q.query(
     "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') allowed",
     [dataset.id, peerId]));
