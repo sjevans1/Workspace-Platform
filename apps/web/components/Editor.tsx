@@ -61,11 +61,14 @@ function Body({
       setSearching(false);
     }
   }
-  function changeBlock(kind: "paragraph" | "heading" | "bulletListItem" | "numberedListItem") {
+  function changeBlock(
+    kind: "paragraph" | "heading" | "bulletListItem" | "numberedListItem" | "checkListItem",
+    level: 1 | 2 | 3 = 2,
+  ) {
     if (readOnly) return;
     const current = editor.getTextCursorPosition().block;
     editor.updateBlock(current, kind === "heading"
-      ? { type: "heading", props: { level: 2 } }
+      ? { type: "heading", props: { level } }
       : { type: kind });
     editor.focus();
   }
@@ -86,10 +89,19 @@ function Body({
     }
     editor.focus();
   }
-  function toggleMark(mark: "bold" | "italic") {
+  function toggleMark(mark: "bold" | "italic" | "underline") {
     if (readOnly) return;
     if (mark === "bold") editor.toggleStyles({ bold: true });
-    else editor.toggleStyles({ italic: true });
+    else if (mark === "italic") editor.toggleStyles({ italic: true });
+    else editor.toggleStyles({ underline: true });
+    editor.focus();
+  }
+  function historyAction(action: "undo" | "redo") {
+    if (readOnly) return;
+    // Work through the editor's collaboration-aware history; never replace
+    // canonical blocks from plain text or mutate the Yjs document manually.
+    if (action === "undo") editor.undo();
+    else editor.redo();
     editor.focus();
   }
   function insertPageLink(page: any) {
@@ -115,9 +127,21 @@ function Body({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => toggleMark("italic")}>Italic</button>
           <button type="button" className="button small-button"
+            aria-label="Underline selection" title="Toggle underline"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark("underline")}>Underline</button>
+          <button type="button" className="button small-button"
+            aria-label="Heading 1" title="Convert active block to heading level 1"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => changeBlock("heading", 1)}>H1</button>
+          <button type="button" className="button small-button"
             aria-label="Heading 2" title="Convert active block to heading"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => changeBlock("heading")}>H2</button>
+          <button type="button" className="button small-button"
+            aria-label="Heading 3" title="Convert active block to heading level 3"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => changeBlock("heading", 3)}>H3</button>
           <button type="button" className="button small-button"
             aria-label="Bulleted list" title="Convert active block to bullets"
             onMouseDown={(e) => e.preventDefault()}
@@ -126,6 +150,10 @@ function Body({
             aria-label="Numbered list" title="Convert active block to numbered list"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => changeBlock("numberedListItem")}>Numbers</button>
+          <button type="button" className="button small-button"
+            aria-label="Checklist" title="Convert active block to checklist"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => changeBlock("checkListItem")}>Checklist</button>
           <button type="button" className="button small-button"
             aria-label="Paragraph" title="Convert active block to paragraph"
             onMouseDown={(e) => e.preventDefault()}
@@ -138,6 +166,14 @@ function Body({
             aria-label="Insert divider" title="Insert a section divider"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => insertRichBlock("divider")}>Divider</button>
+          <button type="button" className="button small-button"
+            aria-label="Undo last edit" title="Undo recent local change"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => historyAction("undo")}>Undo</button>
+          <button type="button" className="button small-button"
+            aria-label="Redo last edit" title="Redo recent local change"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => historyAction("redo")}>Redo</button>
         </div>
       )}
       {!readOnly && (
