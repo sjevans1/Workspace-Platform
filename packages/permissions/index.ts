@@ -92,3 +92,53 @@ export function directChildCanReadSql(
     ",CASE WHEN " + r + ".inherit_permissions THEN " + base +
     " ELSE 0 END)>0)";
 }
+
+/**
+ * A batched, independent application-side ACL recheck for already SQL-filtered
+ * direct records. This avoids 10k sequential ancestry queries during exports.
+ *
+ * Reverify live parent ancestry once, then fetch current child metadata and
+ * personal/wildcard grants under tenant RLS. This is not a global permission
+ * cache: any changed/missing/trashed/moved record is excluded fail-closed.
+ */
+export async function visibleDirectRecordChildren(
+  q: Query, a: Actor, parentId: string, rows: any[],
+) {
+  if (!rows.length) return [];
+  const parent = await requireAccess(q, a, parentId);
+  const ids = rows.map((r) => r.resource_id || r.id);
+  const meta = (await q.query(
+    "SELECT id,inherit_permissions FROM resources" +
+    " WHERE id=ANY($1::uuid[]) AND parent_id=$2 AND kind='record'" +
+    " AND deleted_at IS NULL AND tenant_id=$3",
+    [ids, parentId, a.tenant_id],
+  )).rows;
+  const current = new Map<string, any>(meta.map((r) => [r.id, r]));
+  const grants = new Map<string, { personal?: number; wildcard?: number }>();
+  if (a.role !== "owner" && a.role !== "admin") {
+    const items = (await q.query(
+      "SELECT resource_id,principal_id,level FROM acl" +
+      " WHERE resource_id=ANY($1::uuid[])" +
+      " AND tenant_id=$2 AND principal_id=ANY($3::text[])",
+      [meta.map((r) => r.id), a.tenant_id, [a.user_id, "*"]],
+    )).rows;
+    for (const item of items) {
+      const grant = grants.get(item.resource_id) || {};
+      if (item.principal_id === a.user_id) grant.personal = item.level;
+      else if (item.principal_id === "*") grant.wildcard = item.level;
+      grants.set(item.resource_id, grant);
+    }
+  }
+  const visibleRows = [];
+  for (const row of rows) {
+    const id = row.resource_id || row.id;
+    const state = current.get(id);
+    if (!state) continue;
+    const permission = a.role === "owner" || a.role === "admin" ? 4 :
+      grants.get(id)?.personal ?? grants.get(id)?.wildcard ??
+      (state.inherit_permissions ? parent.effective_permission : 0);
+    if (permission > 0)
+      visibleRows.push({ ...row, effective_permission: permission });
+  }
+  return visibleRows;
+}
