@@ -30,7 +30,8 @@ export function readCsvTable(content: string): CsvTable {
     parsed = parse(content, { bom: true, skip_empty_lines: true,
       max_record_size: 100000, relax_column_count: false }) as string[][];
   } catch {
-    throw new Error("Invalid CSV rows, quoting or column counts");
+    assert(false, 400, "Invalid CSV rows, quoting or column counts");
+    throw new Error("Unreachable");
   }
   assert(parsed.length > 1 && parsed.length <= 2001, 400,
     "CSV requires 1–2000 data rows");
@@ -119,7 +120,8 @@ export function prepareCsvImport(content: string, mapping?: CsvColumnMapping[]) 
         m.skip ? [] : [[m.id, convert(row[i], m.type, !!mapping)]]));
       return validateValues(properties, values);
     } catch {
-      throw new Error("CSV conversion failed at data row " + (index + 1));
+      assert(false, 400, "CSV conversion failed at data row " + (index + 1));
+      throw new Error("Unreachable");
     }
   });
   return { columns: table.columns, properties, rows: prepared,
