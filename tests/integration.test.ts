@@ -3501,3 +3501,58 @@ test("W08b native: encrypted keyset skips hidden records, scopes actor and inval
   assert.ok(afterDelete.items.every((x: any) => x.id !== expectedNext[0].id),
     "cursor must never bypass deletion or ACL updates");
 });
+
+
+test("W08b calendar cursor: month binding, date filtering and custom-sort refusal", async () => {
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08b calendar",
+  });
+  const dbPath = "/databases/" + dataset.id;
+  await ok("PATCH", dbPath, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "due", name: "Due", type: "date" },
+  ] });
+  for (const [name, due] of [
+    ["March one", "2026-03-01"],
+    ["March two", "2026-03-31"],
+    ["April one", "2026-04-01"],
+  ]) await ok("POST", dbPath + "/records", { values: { name, due } });
+  const saved = await ok("POST", dbPath + "/views", {
+    name: "Calendar", config: {
+      type: "calendar", dateBy: "due", filters: [], sort: [],
+    },
+  });
+  const base = dbPath + "/records/page?view=" + saved.id + "&limit=1";
+  const march = base + "&month=2026-03";
+  const first = await ok("GET", march);
+  assert.equal(first.items.length, 1);
+  assert.equal(first.has_more, true);
+  assert.ok(first.next_cursor);
+  const second = await ok("GET", march + "&cursor=" +
+    encodeURIComponent(first.next_cursor));
+  assert.equal(second.items.length, 1);
+  assert.equal(second.has_more, false);
+  assert.equal(second.next_cursor, null);
+  assert.deepEqual([first.items[0].title, second.items[0].title].sort(),
+    ["March one", "March two"]);
+  const badMonth = await req("GET", base + "&month=2026-04&cursor=" +
+    encodeURIComponent(first.next_cursor));
+  assert.equal(badMonth.statusCode, 400);
+  const april = await ok("GET", base + "&month=2026-04");
+  assert.deepEqual(april.items.map((x: any) => x.title), ["April one"]);
+  assert.equal(april.has_more, false);
+  assert.equal((await req("GET", dbPath + "/records/page?view=" + saved.id))
+    .statusCode, 400, "calendar requires explicit month");
+
+  const sorted = await ok("POST", dbPath + "/views", {
+    name: "Custom sort", config: {
+      type: "table", filters: [],
+      sort: [{ property: "name", direction: "asc" }],
+    },
+  });
+  assert.equal((await req("GET", dbPath + "/records/page?view=" + sorted.id))
+    .statusCode, 400, "custom sort requires typed cursor comparator");
+  const legacy = await ok("GET", dbPath + "/records?view=" + sorted.id);
+  assert.equal(legacy.length, 3,
+    "legacy bounded offset remains available for custom-sorted views");
+});
