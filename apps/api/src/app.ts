@@ -1711,12 +1711,16 @@ function dataRoutes(
       } else {
         assert(!p.month, 400, "Month filter requires a calendar view");
       }
+      const requestedOffset = p.offset === undefined ? 0 : Number(p.offset);
+      assert(Number.isSafeInteger(requestedOffset) &&
+        requestedOffset >= 0 && requestedOffset <= 50000, 400,
+        "Database page offset must be an integer from 0 to 50000");
       return records(
         q,
         a,
         id(r),
         c,
-        Math.max(0, Number(p.offset) || 0),
+        requestedOffset,
         Math.min(200, Math.max(1, Number(p.limit) || 100)),
       );
     },
