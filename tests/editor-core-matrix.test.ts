@@ -120,3 +120,32 @@ test("W10c1 default BlockNote 0.55 documents migrate into extended shared schema
     assert.deepEqual(project(replay).blocks,canonical.blocks);
   } finally { legacyDoc.destroy(); replay.destroy(); }
 });
+
+
+test("W10c2 historical rich snapshots retain block identities and text marks on Yjs reconstruction", () => {
+  const ids=["dc0a441f-1252-4ff6-9671-9b97a329c101",
+    "dc0a441f-1252-4ff6-9671-9b97a329c102",
+    "dc0a441f-1252-4ff6-9671-9b97a329c103",
+    "dc0a441f-1252-4ff6-9671-9b97a329c104"];
+  const historical:any[]=[
+    {id:ids[0],type:"heading",props:{level:2},content:"Retained history"},
+    {id:ids[1],type:"callout",props:{variant:"warning"},content:[
+      {type:"text",text:"Sensitive workflow",styles:{bold:true,underline:true}},
+    ]},
+    {id:ids[2],type:"divider"},
+    {id:ids[3],type:"checkListItem",props:{checked:true},content:"Task done"},
+  ];
+  const live=new Y.Doc(),restored=new Y.Doc();
+  try{
+    Y.applyUpdate(live,blocksToState(historical));
+    const snapshot=project(live).blocks;
+    assert.deepEqual(snapshot.map((b:any)=>b.id),ids);
+    assert.equal((snapshot[1] as any).props.variant,"warning");
+    assert.match(JSON.stringify(snapshot[1].content),/"bold":true/);
+    assert.match(JSON.stringify(snapshot[1].content),/"underline":true/);
+    Y.applyUpdate(restored,blocksToState(snapshot));
+    const current=project(restored).blocks;
+    assert.deepEqual(current,snapshot,
+      "restoring canonical blocks must not replace stable ids, content, marks or layout");
+  } finally {live.destroy();restored.destroy();}
+});

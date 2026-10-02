@@ -1702,3 +1702,119 @@ test("W10c1 accessible formatting, local undo/redo and phone-sized editor", asyn
   await expect(page.locator(".bn-editor")).toContainText("W10c1 undo proof");
   await expect(page.getByRole("toolbar",{name:"Formatting"})).toBeVisible();
 });
+
+
+test("W10c2 historical rich content restores with stable block IDs across two sessions", async ({page,browser}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const meResponse=await page.request.get("/api/v1/me");
+  expect(meResponse.ok()).toBeTruthy();
+  const me=await meResponse.json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const rootsResponse=await page.request.get("/api/v1/resources");
+  expect(rootsResponse.ok()).toBeTruthy();
+  const roots=await rootsResponse.json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",title:"W10c2 history acceptance",parent_id:roots[0].id},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const created=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",title:"W10c2 historical page",parent_id:space.id},
+  });
+  expect(created.ok(),await created.text()).toBeTruthy();
+  const document=await created.json();
+  const ids=Array.from({length:4},()=>randomUUID());
+  const historical=[
+    {id:ids[0],type:"heading",props:{level:2},content:"Historical editor decisions"},
+    {id:ids[1],type:"callout",props:{variant:"warning"},content:[
+      {type:"text",text:"Retain this evidence",styles:{bold:true,underline:true}},
+    ]},
+    {id:ids[2],type:"divider"},
+    {id:ids[3],type:"checkListItem",props:{checked:true},content:"Signed off"},
+  ];
+  async function replace(blocks:any[],expected_revision:number){
+    const res=await page.request.patch(
+      `/api/v1/pages/${document.id}/content`,{
+      headers,data:{blocks,expected_revision},
+    });
+    expect(res.ok(),await res.text()).toBeTruthy();
+    return res.json();
+  }
+  const initial=await replace(historical,1);
+  expect(initial.revision).toBe(2);
+  const altered=await replace([
+    {id:randomUUID(),type:"paragraph",content:"Replacement version"},
+  ],initial.revision);
+  expect(altered.revision).toBe(3);
+  const versionsResponse=await page.request.get(
+    `/api/v1/pages/${document.id}/versions`);
+  expect(versionsResponse.ok()).toBeTruthy();
+  const versions=await versionsResponse.json();
+  const snapshot=versions.find((v:any)=>v.revision===initial.revision);
+  expect(snapshot?.id).toBeTruthy();
+  const oldResponse=await page.request.get(
+    `/api/v1/pages/${document.id}/versions/${snapshot.id}`);
+  expect(oldResponse.ok()).toBeTruthy();
+  const old=await oldResponse.json();
+  expect(old.blocks.map((b:any)=>b.id)).toEqual(ids);
+  expect(old.blocks.map((b:any)=>b.type))
+    .toEqual(["heading","callout","divider","checkListItem"]);
+  expect(old.blocks[1].props.variant).toBe("warning");
+  expect(JSON.stringify(old.blocks[1].content)).toContain('"underline":true');
+
+  const url=`/?page=${document.id}`;
+  await page.goto(url);
+  await expect(page.locator(".bn-editor")).toContainText("Replacement version");
+  const session=await browser.newContext();
+  try{
+    const other=await session.newPage();
+    await login(other,false);
+    await other.goto(url);
+    await expect(other.locator(".bn-editor")).toContainText("Replacement version");
+    // Restore with the current revision, not a stale expectation fabricated
+    // before collaborative sessions attached to the document.
+    const before=await page.request.get(
+      `/api/v1/pages/${document.id}/content`);
+    expect(before.ok()).toBeTruthy();
+    const current=await before.json();
+    const restore=await page.request.post(
+      `/api/v1/pages/${document.id}/versions/${snapshot.id}/restore`,{
+      headers,data:{expected_revision:current.revision},
+    });
+    expect(restore.ok(),await restore.text()).toBeTruthy();
+    const recovery=await restore.json();
+    expect(recovery.revision).toBe(current.revision+1);
+    expect(recovery.epoch).toBeGreaterThanOrEqual(2);
+    const stale=await page.request.post(
+      `/api/v1/pages/${document.id}/versions/${snapshot.id}/restore`,{
+      headers,data:{expected_revision:current.revision},
+    });
+    expect(stale.status()).toBe(409);
+
+    await page.reload();
+    await other.reload();
+    for(const client of [page,other]){
+      await expect(client.locator(".bn-editor")).toContainText("Historical editor decisions");
+      await expect(client.locator(".workspace-callout"))
+        .toContainText("Retain this evidence");
+      await expect(client.locator(".workspace-divider hr")).toBeVisible();
+      await expect(client.locator(".bn-editor")).not.toContainText("Replacement version");
+    }
+    await expect.poll(async()=>{
+      const res=await page.request.get(
+        `/api/v1/pages/${document.id}/content`);
+      if(!res.ok()) return "unavailable";
+      const content=await res.json();
+      const blocks=content.blocks||[];
+      if(blocks.length!==4)return "wrong-count";
+      if(blocks.map((b:any)=>b.id).join(",")!==ids.join(","))
+        return "ids-mismatch";
+      if(blocks[1].props?.variant!=="warning")return "variant-mismatch";
+      if(!JSON.stringify(blocks[1].content).includes('"underline":true'))
+        return "marks-mismatch";
+      if(blocks[2].type!=="divider")return "divider-mismatch";
+      return "restored";
+    },{timeout:30000}).toBe("restored");
+  }finally{await session.close();}
+});
