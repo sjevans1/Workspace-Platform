@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Plus,
   Table2,
@@ -248,13 +248,15 @@ export default function Database({
     }),
     [panel, setPanel] = useState(""),
     [name, setName] = useState("");
+  // Multiple overlapping view/cursor loads can resolve out of order.
+  // Only the newest request may replace displayed records and next_cursor.
+  const loadGeneration = useRef(0);
   const current =
     data?.views.find((v: any) => v.id === selected) || data?.views[0];
   async function load(viewId = selected, cursorOverride: string | null = cursor, offsetOverride = offset) {
+    const generation = ++loadGeneration.current;
     const d = await api(`/databases/${id}`);
-    setData(d);
     const v = d.views.find((v: any) => v.id === viewId) || d.views[0];
-    setSelected(v?.id || "");
     const size = v?.config.type === "calendar" ? 200 : 100;
     const argumentsPart = `limit=${size}${v ? `&view=${v.id}` : ""}${v?.config.type === "calendar" ? `&month=${month}` : ""}`;
     // Use deterministic typed keysets for scalar saved-view sorts.
@@ -262,12 +264,18 @@ export default function Database({
     if (!supportsCursorSort(v?.config, d.properties)) {
       const older = await api(
         `/databases/${id}/records?${argumentsPart}&offset=${offsetOverride}`);
+      if (generation !== loadGeneration.current) return;
+      setData(d);
+      setSelected(v?.id || "");
       setRows(older);
       setPageHasMore(older.length === size);
       setNextCursor(null);
     } else {
       const page = await api(
         `/databases/${id}/records/page?${argumentsPart}${cursorOverride ? `&cursor=${encodeURIComponent(cursorOverride)}` : ""}`);
+      if (generation !== loadGeneration.current) return;
+      setData(d);
+      setSelected(v?.id || "");
       setRows(page.items);
       setPageHasMore(page.has_more);
       setNextCursor(page.next_cursor);
