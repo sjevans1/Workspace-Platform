@@ -3387,3 +3387,95 @@ test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => 
       "W08 large visible-only export exceeded provisional 30s budget");
   }
 });
+
+
+test("W08b encrypted keyset: ACL-first pages, user isolation, replay and revoke", async () => {
+  const firstDb = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "Keyset W08b",
+  });
+  const secondDb = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "Keyset other DB",
+  });
+  const ids: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const row = await ok("POST",
+      "/databases/" + firstDb.id + "/records", {
+        values: { name: "W08b item " + String(i).padStart(2, "0") },
+      });
+    ids.push(row.id);
+  }
+  const peerId = randomUUID(), outsiderId = randomUUID();
+  await db.tenant(owner.tenant, async q => {
+    for (const id of [peerId, outsiderId]) {
+      await q.query("INSERT INTO users(id,email,name)" +
+        " VALUES($1,$2,'W08b viewer')", [id, id + "@example.test"]);
+      await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
+        " VALUES($1,$2,'member')", [owner.tenant, id]);
+    }
+    for (const hidden of [ids[0], ids[1], ids[4]]) await q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " VALUES($1,$2,$3,0)", [owner.tenant, hidden, peerId],
+    );
+  });
+  const session = await db.tenant(owner.tenant, q =>
+    createSession(q, owner.tenant, peerId));
+  const otherSession = await db.tenant(owner.tenant, q =>
+    createSession(q, owner.tenant, outsiderId));
+  const memberActor = {
+    cookie: "workspace_session=" + session, csrf: csrf(session),
+  };
+  const anotherActor = {
+    cookie: "workspace_session=" + otherSession,
+    csrf: csrf(otherSession),
+  };
+  const url = "/databases/" + firstDb.id + "/records-page";
+  const first = await ok("GET", url + "?limit=2", undefined, memberActor);
+  assert.deepEqual(first.items.map((r: any) => r.id), ids.slice(2, 4));
+  assert.equal(first.has_more, true);
+  assert.ok(first.next_cursor?.startsWith("db-page-v1."));
+  assert.ok(!first.next_cursor.includes(ids[0]));
+  const next = await ok("GET", url + "?cursor=" +
+    encodeURIComponent(first.next_cursor), undefined, memberActor);
+  assert.deepEqual(next.items.map((r: any) => r.id), [ids[5], ids[6]]);
+  assert.equal(next.has_more, true);
+  const finalPage = await ok("GET", url + "?cursor=" +
+    encodeURIComponent(next.next_cursor), undefined, memberActor);
+  assert.deepEqual(finalPage.items.map((r: any) => r.id), [ids[7]]);
+  assert.equal(finalPage.has_more, false);
+  assert.equal(finalPage.next_cursor, null);
+  for (const invalid of [
+    await req("GET", url + "?cursor=" +
+      encodeURIComponent(first.next_cursor), undefined, anotherActor),
+    await req("GET", "/databases/" + secondDb.id + "/records-page?cursor=" +
+      encodeURIComponent(first.next_cursor), undefined, memberActor),
+    await req("GET", url + "?limit=5&cursor=" +
+      encodeURIComponent(first.next_cursor), undefined, memberActor),
+    await req("GET", url + "?limit=0", undefined, memberActor),
+    await req("GET", url + "?offset=2", undefined, memberActor),
+    await req("GET", url + "?view=" + randomUUID(), undefined, memberActor),
+    await req("GET", url + "?cursor=invalid", undefined, memberActor),
+  ]) assert.equal(invalid.statusCode, 400);
+
+  // Membership role changes and new record revocations must fail closed.
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET role='guest' WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, peerId]));
+  const staleRole = await req("GET", url + "?cursor=" +
+    encodeURIComponent(first.next_cursor), undefined, memberActor);
+  assert.equal(staleRole.statusCode, 400);
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET role='member' WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, peerId]));
+  await db.tenant(owner.tenant, q => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,0)",
+    [owner.tenant, ids[5], peerId]));
+  const revoked = await ok("GET", url + "?cursor=" +
+    encodeURIComponent(first.next_cursor), undefined, memberActor);
+  assert.deepEqual(revoked.items.map((r: any) => r.id), [ids[6], ids[7]]);
+  assert.ok(!JSON.stringify(revoked).includes(ids[5]));
+
+  // Each actor's default first page is independently permitted.
+  const ownerPage = await ok("GET", url + "?limit=2");
+  assert.deepEqual(ownerPage.items.map((r: any) => r.id), ids.slice(0, 2));
+});
