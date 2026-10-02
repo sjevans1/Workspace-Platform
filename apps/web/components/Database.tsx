@@ -215,6 +215,17 @@ function RelationInput({
   );
 }
 
+function supportsCursorSort(config: any, properties: any[]) {
+  const scalar = new Set([
+    "title", "text", "number", "select", "status", "date",
+    "checkbox", "url", "email",
+  ]);
+  return (config?.sort || []).every((term: any) => {
+    const property = properties.find((p: any) => p.id === term.property);
+    return property && scalar.has(property.type);
+  });
+}
+
 export default function Database({
   id,
   editable,
@@ -246,9 +257,9 @@ export default function Database({
     setSelected(v?.id || "");
     const size = v?.config.type === "calendar" ? 200 : 100;
     const argumentsPart = `limit=${size}${v ? `&view=${v.id}` : ""}${v?.config.type === "calendar" ? `&month=${month}` : ""}`;
-    // Saved custom sort semantics require a typed keyset comparator.
-    // Preserve the bounded legacy API for those views until W08 supports it.
-    if (v?.config.sort?.length) {
+    // Use deterministic typed keysets for scalar saved-view sorts.
+    // Preserve the bounded legacy path for non-scalar legacy sorts.
+    if (!supportsCursorSort(v?.config, d.properties)) {
       const older = await api(
         `/databases/${id}/records?${argumentsPart}&offset=${offset}`);
       setRows(older);
@@ -270,6 +281,7 @@ export default function Database({
   }, [id, selected, offset, month, cursor]);
   if (!data) return <div className="loading">Opening database…</div>;
   const config = current?.config || { type: "table", filters: [], sort: [] };
+  const usesCursor = supportsCursorSort(config, data.properties);
   const props = (config.order || data.properties.map((p: any) => p.id))
     .map((k: string) => data.properties.find((p: any) => p.id === k))
     .filter(
@@ -623,9 +635,9 @@ export default function Database({
           {rows.length} records · {offset + (rows.length ? 1 : 0)}–{offset + rows.length}
         </span>
         <button
-          disabled={config.sort?.length ? !offset : cursorHistory.length === 0}
+          disabled={!usesCursor ? !offset : cursorHistory.length === 0}
           onClick={() => {
-            if (config.sort?.length) {
+            if (!usesCursor) {
               setOffset((v) => Math.max(0,
                 v - (config.type === "calendar" ? 200 : 100)));
             } else {
@@ -639,9 +651,9 @@ export default function Database({
           Previous
         </button>
         <button
-          disabled={config.sort?.length ? !pageHasMore : !nextCursor}
+          disabled={!usesCursor ? !pageHasMore : !nextCursor}
           onClick={() => {
-            if (!config.sort?.length) {
+            if (usesCursor) {
               setCursorHistory((history) => [...history, cursor]);
               setCursor(nextCursor);
             }

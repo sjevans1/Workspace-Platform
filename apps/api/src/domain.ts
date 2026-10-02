@@ -224,7 +224,8 @@ export async function records(
   config: any,
   offset = 0,
   limit = 100,
-  after?: { position: number; id: string },
+  after?: { position: number; id: string;
+    sort_values?: Array<string | number | null> },
 ) {
   // The source database's authenticated permission is already computed
   // along the full hierarchy. Direct records inherit that exact result,
@@ -276,18 +277,23 @@ export async function records(
     );
   }
   const sort = config.sort.map((s: any) => {
-    assert(d.properties.find((field: Property) =>
-      field.id === s.property)?.type !== "relation" &&
-      d.properties.find((field: Property) =>
-        field.id === s.property)?.type !== "formula" &&
-      d.properties.find((field: Property) =>
-        field.id === s.property)?.type !== "rollup", 400,
-      "Relation sorting requires permission-aware indexing");
+    const property = d.properties.find((field: Property) =>
+      field.id === s.property);
+    assert(property && !["relation", "formula", "rollup"].includes(property.type),
+      400, "Unsupported or permissioned sort property");
     p.push(s.property);
-    let key = `v.values->>$${p.length}`;
-    if (d.properties.find((x: any) => x.id === s.property)?.type === "number")
-      key = `(${key})::numeric`;
-    return `${key} ${s.direction === "desc" ? "DESC" : "ASC"} NULLS LAST`;
+    const param = "$" + p.length + "::text";
+    // A bad historical JSON payload must not be cast to a number unless
+    // it really is a numeric JSON value. Both legacy and cursor ordering
+    // now use this exact expression to maintain parity.
+    const key = property.type === "number"
+      ? "(CASE WHEN jsonb_typeof(v.values->" + param +
+        ")='number' THEN (v.values->>" + param + ")::numeric END)"
+      : "v.values->>" + param;
+    const direction = s.direction === "desc" ? "desc" : "asc";
+    return { key, direction, sqlType: property.type === "number"
+      ? "numeric" : "text", sql: key + " " + direction.toUpperCase() +
+        " NULLS LAST" };
   });
   // SQL filters permission BEFORE sort/limit/offset. Since every
   // r.parent_id=$1 is a direct child of the already validated database,
@@ -307,12 +313,37 @@ export async function records(
       "Unknown membership role");
   }
   if (after) {
-    // Keyset applies after server-side ACL and view predicates but before
-    // ORDER/LIMIT. A caller never chooses these values directly: they come
-    // from an AEAD-authenticated principal- and view-scoped cursor.
+    // Lexicographic keyset over supported typed sort fields. For EVERY
+    // direction, NULLS LAST: a null cursor can advance only inside its
+    // equality group; a non-null cursor advances to later values or NULL.
+    // Record position+UUID always breaks ties deterministically.
+    const keys = after.sort_values || [];
+    assert(keys.length === sort.length, 400,
+      "Invalid sort keys for database page cursor");
+    const preceding: string[] = [], next: string[] = [];
+    for (let i = 0; i < sort.length; i++) {
+      const term = sort[i];
+      const value = keys[i];
+      if (value === null) {
+        preceding.push(term.key + " IS NULL");
+        continue;
+      }
+      assert(term.sqlType === "numeric" ?
+        typeof value === "number" && Number.isFinite(value) :
+        typeof value === "string", 400, "Invalid typed sort cursor");
+      p.push(value);
+      const param = "$" + p.length + "::" + term.sqlType;
+      const compare = term.direction === "desc" ? "<" : ">";
+      const later = "(" + term.key + " IS NULL OR " +
+        term.key + compare + param + ")";
+      next.push("(" + [...preceding, later].join(" AND ") + ")");
+      preceding.push(term.key + " IS NOT DISTINCT FROM " + param);
+    }
     p.push(after.position, after.id);
-    where.push("(r.position,r.id) > ($" + (p.length - 1) +
-      "::double precision,$" + p.length + "::uuid)");
+    next.push("(" + [...preceding,
+      "(r.position,r.id)>($" + (p.length - 1) +
+      "::double precision,$" + p.length + "::uuid)"].join(" AND ") + ")");
+    where.push("(" + next.join(" OR ") + ")");
   }
   p.push(limit, offset);
   // Assemble placeholders as literal "$" + index strings. Do not
@@ -321,7 +352,7 @@ export async function records(
   const sql = "SELECT r.*,v.values,v.revision FROM resources r" +
     " JOIN database_records v ON v.resource_id=r.id WHERE " +
     where.join(" AND ") + " ORDER BY " +
-    (sort.length ? sort.join(",") + "," : "") +
+    (sort.length ? sort.map((s: any) => s.sql).join(",") + "," : "") +
     "r.position,r.id LIMIT $" + String(p.length - 1) +
     " OFFSET $" + String(p.length);
   const allowedRows = await visibleDirectRecordChildren(

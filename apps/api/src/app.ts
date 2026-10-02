@@ -1698,19 +1698,36 @@ function dataRoutes(
         assert(stored, 404, "View not found");
         config = view.parse(stored.config);
       }
-      // W08b supports default (position,id) ordering. A custom view sort
-      // needs a typed null/direction-aware keyset before it can be accepted.
-      assert(config.sort.length === 0, 400,
-        "Custom view sorting requires the legacy bounded page API");
+      // Only scalar values with a deterministic text/numeric SQL order are
+      // permitted in encrypted cursor sorts. Relation/derived values could
+      // leak unreadable data if sorted by raw JSON, and lists are not scalar.
+      const definition = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1",
+        [databaseId]);
+      // A continuation for a foreign/hidden database must not distinguish
+      // cross-tenant resource presence from an invalid encrypted cursor.
+      // First-page requests retain their ordinary 404 resource behavior.
+      if (!definition && params.cursor !== undefined)
+        throw new HttpError(400, "Invalid database page cursor");
+      assert(definition, 404, "Database unavailable");
+      const allowedSortTypes = new Set([
+        "title", "text", "number", "select", "status", "date",
+        "checkbox", "url", "email",
+      ]);
+      const sortFields = config.sort.map((term: any) => {
+        const property = definition.properties.find((field: any) =>
+          field.id === term.property);
+        assert(property && allowedSortTypes.has(property.type), 400,
+          "Cursor sorting requires readable scalar properties");
+        return { id: property.id, type: property.type,
+          direction: term.direction };
+      });
       if (config.type === "calendar") {
         assert(typeof params.month === "string" &&
           /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(params.month), 400,
           "Calendar view requires YYYY-MM month");
         await requireAccess(q, a, databaseId);
-        const definition = await one(q,
-          "SELECT properties FROM databases WHERE resource_id=$1",
-          [databaseId]);
-        assert(definition?.properties.some((field: any) =>
+        assert(definition.properties.some((field: any) =>
           field.id === config.dateBy && field.type === "date"), 400,
           "Calendar view requires a valid date property");
         const begin = new Date(params.month + "-01T00:00:00.000Z");
@@ -1729,23 +1746,44 @@ function dataRoutes(
         assert(params.month === undefined, 400,
           "Month filter requires a calendar view");
       }
-      const fingerprint = databasePageFingerprint(config, params.month);
+      // Bind both view configuration and current sort property types.
+      // A schema change invalidates old tokens even if view JSON is stable.
+      const fingerprint = databasePageFingerprint(
+        { ...config, sortFields }, params.month);
       const state = params.cursor === undefined ? null :
         decodeDatabasePageCursor(params.cursor, {
           tenant: a.tenant_id, principal: a.user_id, role: a.role,
           database: databaseId, view: viewId, fingerprint, limit: size,
         });
       const pageRows = await records(q, a, databaseId, config, 0, size + 1,
-        state ? { position: state.position, id: state.after } : undefined);
+        state ? { position: state.position, id: state.after,
+          sort_values: state.sort_values } : undefined);
       const hasMore = pageRows.length > size;
       const items = pageRows.slice(0, size);
       const tail = items.at(-1);
       assert(!hasMore || tail && Number.isFinite(tail.position), 500,
         "Invalid database record position");
+      const sortValues = tail ? sortFields.map((field: any) => {
+        const value = tail.values[field.id];
+        if (value === undefined || value === null) return null;
+        if (field.type === "number") {
+          assert(typeof value === "number" && Number.isFinite(value), 400,
+            "Cursor numeric value is invalid");
+          return value;
+        }
+        assert(["string", "boolean"].includes(typeof value), 400,
+          "Unsupported cursor sort value");
+        const scalar = String(value);
+        assert(scalar.length <= 512, 400,
+          "Sort value too large for encrypted cursor");
+        return scalar;
+      }) : [];
+      assert(JSON.stringify(sortValues).length <= 900, 400,
+        "Sort keys exceed encrypted cursor size budget");
       const nextCursor = hasMore && tail
         ? encodeDatabasePageCursor(newDatabasePageCursor(
           a.tenant_id, a.user_id, a.role, databaseId, viewId,
-          fingerprint, size, tail.position, tail.id))
+          fingerprint, size, tail.position, tail.id, undefined, sortValues))
         : null;
       return { items, next_cursor: nextCursor, has_more: hasMore };
     },

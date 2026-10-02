@@ -16,6 +16,10 @@ const schema = z.object({
   limit: z.number().int().min(1).max(200),
   position: z.number().finite(),
   after: z.uuid(),
+  sort_values: z.array(z.union([
+    z.string().max(1024), z.number().finite(), z.null(),
+  ])).max(5).refine((values) =>
+    JSON.stringify(values).length <= 900, "Sort cursor too large").default([]),
   issued: z.number().int().nonnegative(),
   expires: z.number().int().positive(),
 }).strict();
@@ -44,10 +48,12 @@ export function newDatabasePageCursor(
   role: DatabasePageCursor["role"], database: string, view: string | null,
   fingerprint: string, limit: number, position: number, after: string,
   now = Math.floor(Date.now() / 1000),
+  sortValues: Array<string | number | null> = [],
 ): DatabasePageCursor {
   return schema.parse({
     v: 1, tenant, principal, role, database, view, fingerprint, limit,
-    position, after, issued: now, expires: now + lifetime,
+    position, after, sort_values: sortValues,
+    issued: now, expires: now + lifetime,
   });
 }
 
