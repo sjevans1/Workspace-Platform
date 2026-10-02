@@ -14,9 +14,17 @@ DECLARE
   grant_level integer;
   have_resource boolean := false;
 BEGIN
-  IF p_role NOT IN ('owner','admin','member','guest') OR p_actor IS NULL
-    THEN RETURN false;
+  IF p_role IS NULL OR
+    p_role NOT IN ('owner','admin','member','guest') OR
+    p_actor IS NULL THEN RETURN false;
   END IF;
+  -- A caller may never manufacture a higher privilege by passing an
+  -- arbitrary role. Tenant RLS applies to memberships under this invoker.
+  IF NOT EXISTS (
+    SELECT 1 FROM memberships
+    WHERE tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+      AND user_id=p_actor AND role=p_role AND active
+  ) THEN RETURN false; END IF;
   permission_level := CASE WHEN p_role IN ('owner','admin') THEN 4
     WHEN p_role = 'guest' THEN 0 ELSE 3 END;
   FOR chain_entry IN
