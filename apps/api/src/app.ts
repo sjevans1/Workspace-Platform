@@ -1683,8 +1683,9 @@ function dataRoutes(
     "Read permission-filtered database records with an encrypted keyset cursor",
     async (q, a, r) => {
       const params = query(r), databaseId = id(r);
-      assert(params.offset === undefined, 400,
-        "Cursor paging cannot accept an offset");
+      assert(Object.keys(params).every((key) =>
+        ["view", "month", "limit", "cursor"].includes(key)), 400,
+        "Unsupported database cursor query parameter");
       const size = params.limit === undefined ? 100 : Number(params.limit);
       assert(Number.isSafeInteger(size) && size >= 1 && size <= 200, 400,
         "Cursor page limit must be an integer from 1 to 200");
@@ -1731,7 +1732,7 @@ function dataRoutes(
       const fingerprint = databasePageFingerprint(config, params.month);
       const state = params.cursor === undefined ? null :
         decodeDatabasePageCursor(params.cursor, {
-          tenant: a.tenant_id, principal: a.user_id,
+          tenant: a.tenant_id, principal: a.user_id, role: a.role,
           database: databaseId, view: viewId, fingerprint, limit: size,
         });
       const pageRows = await records(q, a, databaseId, config, 0, size + 1,
@@ -1743,7 +1744,7 @@ function dataRoutes(
         "Invalid database record position");
       const nextCursor = hasMore && tail
         ? encodeDatabasePageCursor(newDatabasePageCursor(
-          a.tenant_id, a.user_id, databaseId, viewId,
+          a.tenant_id, a.user_id, a.role, databaseId, viewId,
           fingerprint, size, tail.position, tail.id))
         : null;
       return { items, next_cursor: nextCursor, has_more: hasMore };
