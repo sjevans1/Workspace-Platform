@@ -3387,3 +3387,104 @@ test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => 
       "W08 large visible-only export exceeded provisional 30s budget");
   }
 });
+
+
+test("W08b native: encrypted keyset skips hidden records, scopes actor and invalidates changed views", async () => {
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08b encrypted pages",
+  });
+  for (let i = 0; i < 8; i++)
+    await ok("POST", "/databases/" + dataset.id + "/records", {
+      values: { name: "W08b Row " + i },
+    });
+  const base = "/databases/" + dataset.id + "/records";
+  const all = await ok("GET", base + "?limit=30");
+  assert.equal(all.length, 8);
+  const hiddenIds = [all[0].id, all[3].id];
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08b peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
+      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
+    for (const hidden of hiddenIds)
+      await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)", [owner.tenant, hidden, peerId]);
+  });
+  const peerToken = await db.tenant(owner.tenant, q =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken) };
+  const readable = all.map((x: any) => x.id)
+    .filter((x: string) => !hiddenIds.includes(x));
+  const url = base + "/page?limit=2";
+  const returned: string[] = [];
+  let cursor: string | null = null;
+  let firstCursor: string | null = null;
+  for (let page = 0; page < 4; page++) {
+    const response = await ok("GET", url +
+      (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+      undefined, peer);
+    returned.push(...response.items.map((x: any) => x.id));
+    if (page === 0) {
+      firstCursor = response.next_cursor;
+      assert.equal(response.has_more, true);
+      assert.ok(firstCursor?.startsWith("db-page-v1."));
+      for (const hidden of hiddenIds)
+        assert.ok(!firstCursor!.includes(hidden));
+    }
+    if (!response.has_more) {
+      assert.equal(response.next_cursor, null);
+      break;
+    }
+    cursor = response.next_cursor;
+  }
+  assert.deepEqual(returned, readable,
+    "cursor continues over readable order without duplicates or hidden slots");
+  assert.equal(new Set(returned).size, readable.length);
+
+  // Cursor does not authorize reading in another user or tenant.
+  assert.equal((await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!))).statusCode, 400);
+  assert.equal((await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, other)).statusCode, 400);
+  assert.equal((await req("GET", url + "&limit=3&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, peer)).statusCode, 400);
+  assert.equal((await req("GET", url + "&offset=1", undefined, peer))
+    .statusCode, 400);
+  assert.equal((await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!.slice(0, -1) + "!"), undefined, peer))
+    .statusCode, 400);
+
+  const saved = await ok("POST", "/databases/" + dataset.id + "/views", {
+    name: "Cursor filter",
+    config: { type: "table", filters: [{
+      property: "name", op: "contains", value: "W08b Row",
+    }], sort: [] },
+  });
+  const filteredUrl = url + "&view=" + saved.id;
+  const filteredFirst = await ok("GET", filteredUrl, undefined, peer);
+  assert.ok(filteredFirst.next_cursor);
+  assert.equal((await req("GET", filteredUrl + "&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, peer)).statusCode, 400);
+  await ok("PATCH", "/databases/" + dataset.id + "/views/" + saved.id, {
+    name: "Modified cursor filter",
+    config: { type: "table", filters: [{
+      property: "name", op: "eq", value: "W08b Row 999",
+    }], sort: [] },
+  });
+  assert.equal((await req("GET", filteredUrl + "&cursor=" +
+    encodeURIComponent(filteredFirst.next_cursor), undefined, peer))
+    .statusCode, 400, "changed view invalidates encrypted cursor digest");
+
+  // A fresh ACL change is honored on the next cursor read.
+  const firstOwnerPage = await ok("GET", url);
+  const expectedNext = (await ok("GET", url + "&cursor=" +
+    encodeURIComponent(firstOwnerPage.next_cursor))).items;
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE resources SET deleted_at=now() WHERE id=$1", [expectedNext[0].id]));
+  const afterDelete = await ok("GET", url + "&cursor=" +
+    encodeURIComponent(firstOwnerPage.next_cursor));
+  assert.ok(afterDelete.items.every((x: any) => x.id !== expectedNext[0].id),
+    "cursor must never bypass deletion or ACL updates");
+});
