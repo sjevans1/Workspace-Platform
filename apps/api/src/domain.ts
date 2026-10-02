@@ -7,6 +7,7 @@ import {
   requireAccess,
   ancestry,
   visible,
+  directChildCanReadSql,
 } from "../../../packages/permissions/index.ts";
 import {
   assert,
@@ -224,7 +225,10 @@ export async function records(
   offset = 0,
   limit = 100,
 ) {
-  await requireAccess(q, a, id);
+  // The source database's authenticated permission is already computed
+  // along the full hierarchy. Direct records inherit that exact result,
+  // subject only to their own actor/wildcard ACL and reset flag.
+  const parent = await requireAccess(q, a, id);
   const d = await one(
     q,
     "SELECT properties FROM databases WHERE resource_id=$1",
@@ -284,15 +288,19 @@ export async function records(
       key = `(${key})::numeric`;
     return `${key} ${s.direction === "desc" ? "DESC" : "ASC"} NULLS LAST`;
   });
-  // The SQL permission predicate matches evaluate() under tenant RLS, and
-  // filters inaccessible records BEFORE SQL ORDER/LIMIT/OFFSET. This avoids
-  // underfilled pages and raw hidden-row offsets. Keep the application ACL
-  // recheck on the bounded returned page as defense in depth.
-  p.push(a.user_id, a.role);
-  const actorIndex = p.length - 1, roleIndex = p.length;
+  // SQL filters permission BEFORE sort/limit/offset. Since every
+  // r.parent_id=$1 is a direct child of the already validated database,
+  // only the final resource's personal/wildcard ACL can change the inherited
+  // effective level. The indexed child ACL probes avoid a recursive
+  // workspace_can_read_resource call for every candidate at 10k+ scale.
+  // Tenant RLS and JS visible() rechecks remain in force.
+  p.push(a.tenant_id, a.user_id, parent.effective_permission);
+  const permission = directChildCanReadSql(
+    "r", a.role, p.length - 2, p.length - 1, p.length);
+  where.push(permission);
   p.push(limit, offset);
   const allowedRows = await visible(q, a, (await q.query(
-    `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} AND workspace_can_read_resource(r.id,$${actorIndex}::uuid,$${roleIndex}::text) ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT $${p.length - 1} OFFSET $${p.length}`,
+    `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT ${p.length - 1} OFFSET ${p.length}`,
     p,
   )).rows);
   return Promise.all(allowedRows.map(async (row) => ({
