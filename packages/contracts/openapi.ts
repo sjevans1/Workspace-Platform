@@ -280,6 +280,47 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
       ...errors,
     },
   },
+  "POST /imports/preview": {
+    body: {
+      type: "object",
+      required: ["parent_id", "content"],
+      properties: {
+        parent_id: uuid,
+        content: { type: "string", maxLength: 2097152 },
+      },
+      additionalProperties: false,
+    },
+    response: {
+      200: {
+        type: "object",
+        required: ["columns", "row_count", "mapping", "sample", "warnings"],
+        properties: {
+          columns: { type: "array", maxItems: 100,
+            items: { type: "string", minLength: 1, maxLength: 120 } },
+          row_count: { type: "integer", minimum: 1, maximum: 2000 },
+          mapping: { type: "array", minItems: 1, maxItems: 100,
+            items: {
+              type: "object",
+              required: ["source", "id", "name", "type"],
+              properties: {
+                source: { type: "string", minLength: 1, maxLength: 120 },
+                id: { type: "string", pattern: "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$" },
+                name: { type: "string", minLength: 1, maxLength: 120 },
+                type: { enum: ["title","text","number","date","checkbox"] },
+                skip: { type: "boolean" },
+              },
+              additionalProperties: false,
+            } },
+          sample: { type: "array", maxItems: 5,
+            items: { type: "array", maxItems: 100,
+              items: { type: "string" } } },
+          warnings: { type: "array", items: { type: "string" } },
+        },
+        additionalProperties: false,
+      },
+      ...errors,
+    },
+  },
   "POST /imports": {
     body: {
       type: "object",
@@ -289,6 +330,19 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
         format: { enum: ["markdown", "csv"] },
         name: { type: "string", minLength: 1, maxLength: 500 },
         content: { type: "string", maxLength: 2097152 },
+        mapping: { type: "array", minItems: 1, maxItems: 100,
+          items: {
+            type: "object",
+            required: ["source", "id", "name", "type"],
+            properties: {
+              source: { type: "string", minLength: 1, maxLength: 120 },
+              id: { type: "string", pattern: "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$" },
+              name: { type: "string", minLength: 1, maxLength: 120 },
+              type: { enum: ["title","text","number","date","checkbox"] },
+              skip: { type: "boolean" },
+            },
+            additionalProperties: false,
+          } },
       },
       additionalProperties: false,
     },
