@@ -59,3 +59,94 @@ export async function visible(
   }
   return out;
 }
+
+/**
+ * W08: a caller who has already passed requireAccess() on a known parent
+ * can filter its DIRECT children with two indexed ACL probes per resource.
+ * This reproduces evaluate()'s final child step, avoiding 10k individual
+ * recursive ancestry / membership checks in listing and relation pickers.
+ *
+ * SQL RLS remains enforced; the parent level and role MUST come from the
+ * authenticated server actor/requireAccess(), never request parameters.
+ * Use on direct-child queries only (r.parent_id = accepted parent.id),
+ * with the normal JS visible() recheck after LIMIT as defense in depth.
+ */
+export function directChildCanReadSql(
+  resourceAlias: "r",
+  role: Actor["role"],
+  tenantParam: number,
+  userParam: number,
+  parentPermissionParam: number,
+) {
+  // All callers bind tenant, principal and inherited permission slots.
+  // Even privileged roles must reference all three placeholders; returning
+  // bare TRUE would leave untyped gaps in PostgreSQL's prepared parameters.
+  const verifiedParent =
+    "(" + resourceAlias + ".tenant_id=$" + tenantParam +
+    "::uuid AND $" + userParam + "::uuid IS NOT NULL AND $" +
+    parentPermissionParam + "::integer>0)";
+  if (role === "owner" || role === "admin") return verifiedParent;
+  if (role !== "member" && role !== "guest")
+    return "(" + verifiedParent + " AND FALSE)";
+  const r = resourceAlias;
+  const tenant = "$" + tenantParam;
+  const actor = "$" + userParam + "::text";
+  const base = "$" + parentPermissionParam + "::integer";
+  const grant = (principal: string) =>
+    "(SELECT a.level FROM acl a WHERE a.tenant_id=" + tenant +
+    "::uuid AND a.resource_id=" + r + ".id AND a.principal_id=" +
+    principal + ")";
+  return "(COALESCE(" + grant(actor) + "," + grant("'*'") +
+    ",CASE WHEN " + r + ".inherit_permissions THEN " + base +
+    " ELSE 0 END)>0)";
+}
+
+/**
+ * A batched, independent application-side ACL recheck for already SQL-filtered
+ * direct records. This avoids 10k sequential ancestry queries during exports.
+ *
+ * Reverify live parent ancestry once, then fetch current child metadata and
+ * personal/wildcard grants under tenant RLS. This is not a global permission
+ * cache: any changed/missing/trashed/moved record is excluded fail-closed.
+ */
+export async function visibleDirectRecordChildren(
+  q: Query, a: Actor, parentId: string, rows: any[],
+) {
+  if (!rows.length) return [];
+  const parent = await requireAccess(q, a, parentId);
+  const ids = rows.map((r) => r.resource_id || r.id);
+  const meta = (await q.query(
+    "SELECT id,inherit_permissions FROM resources" +
+    " WHERE id=ANY($1::uuid[]) AND parent_id=$2 AND kind='record'" +
+    " AND deleted_at IS NULL AND tenant_id=$3",
+    [ids, parentId, a.tenant_id],
+  )).rows;
+  const current = new Map<string, any>(meta.map((r) => [r.id, r]));
+  const grants = new Map<string, { personal?: number; wildcard?: number }>();
+  if (a.role !== "owner" && a.role !== "admin") {
+    const items = (await q.query(
+      "SELECT resource_id,principal_id,level FROM acl" +
+      " WHERE resource_id=ANY($1::uuid[])" +
+      " AND tenant_id=$2 AND principal_id=ANY($3::text[])",
+      [meta.map((r) => r.id), a.tenant_id, [a.user_id, "*"]],
+    )).rows;
+    for (const item of items) {
+      const grant = grants.get(item.resource_id) || {};
+      if (item.principal_id === a.user_id) grant.personal = item.level;
+      else if (item.principal_id === "*") grant.wildcard = item.level;
+      grants.set(item.resource_id, grant);
+    }
+  }
+  const visibleRows = [];
+  for (const row of rows) {
+    const id = row.resource_id || row.id;
+    const state = current.get(id);
+    if (!state) continue;
+    const permission = a.role === "owner" || a.role === "admin" ? 4 :
+      grants.get(id)?.personal ?? grants.get(id)?.wildcard ??
+      (state.inherit_permissions ? parent.effective_permission : 0);
+    if (permission > 0)
+      visibleRows.push({ ...row, effective_permission: permission });
+  }
+  return visibleRows;
+}

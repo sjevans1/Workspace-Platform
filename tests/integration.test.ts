@@ -3088,3 +3088,302 @@ test("W07 Rollup native: hide revoked links in all aggregates and exports", asyn
   assert.equal(deleted.values.total, 0);
   assert.equal(deleted.values.average, null);
 });
+
+
+test("W08 permission-first pages: accessible records are not lost behind hidden rows", async () => {
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 ACL pagination",
+  });
+  const resourceIds: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const row = await ok("POST", "/databases/" + dataset.id + "/records", {
+      values: { name: "W08 Row " + String(i).padStart(2, "0") },
+    });
+    resourceIds.push(row.id);
+  }
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, peerId]);
+    for (const hiddenId of resourceIds.slice(0, 3))
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)",
+        [owner.tenant, hiddenId, peerId]);
+  });
+  const peerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken) };
+  const path = "/databases/" + dataset.id + "/records?limit=2";
+  const page1 = await ok("GET", path + "&offset=0", undefined, peer);
+  assert.deepEqual(page1.map((row: any) => row.id), resourceIds.slice(3, 5),
+    "first page must contain two readable records, not two raw SQL rows");
+  const page2 = await ok("GET", path + "&offset=2", undefined, peer);
+  assert.deepEqual(page2.map((row: any) => row.id), resourceIds.slice(5, 7),
+    "offset counts accessible rows, not hidden source rows");
+  assert.equal((await ok("GET", path + "&offset=4", undefined, peer)).length, 0);
+  for (const row of [...page1, ...page2])
+    assert.ok(!resourceIds.slice(0, 3).includes(row.id));
+  const ownerPage = await ok("GET", path + "&offset=0");
+  assert.deepEqual(ownerPage.map((row: any) => row.id), resourceIds.slice(0, 2));
+
+  // Candidate picker must paginate over readable choices, not raw rows.
+  const source = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 Picker source",
+  });
+  await ok("PATCH", "/databases/" + source.id, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "links", name: "Links", type: "relation",
+      target_database_id: dataset.id },
+  ] });
+  const candidatesPath = "/databases/" + source.id +
+    "/relation-candidates?property=links&limit=2";
+  const candidateFirst = await ok("GET", candidatesPath + "&offset=0",
+    undefined, peer);
+  const candidateNext = await ok("GET", candidatesPath + "&offset=2",
+    undefined, peer);
+  assert.deepEqual(candidateFirst.items.map((row: any) => row.id),
+    resourceIds.slice(3, 5));
+  assert.equal(candidateFirst.has_more, true);
+  assert.deepEqual(candidateNext.items.map((row: any) => row.id),
+    resourceIds.slice(5, 7));
+  assert.equal(candidateNext.has_more, false);
+
+  const hiddenTarget = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08-Picker A hidden",
+  });
+  const visibleTarget = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08-Picker B visible",
+  });
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,0)", [owner.tenant, hiddenTarget.id, peerId]));
+  const targetSearch = await ok("GET",
+    "/databases/" + source.id +
+      "/relation-targets?search=W08-Picker&limit=1&offset=0",
+    undefined, peer);
+  assert.deepEqual(targetSearch.items.map((row: any) => row.id),
+    [visibleTarget.id],
+    "picker must never reveal inaccessible databases in offset/has_more");
+  assert.equal(targetSearch.has_more, false);
+
+  // ACL changes must take effect immediately; do not use a stale cache.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
+    [owner.tenant, resourceIds[0], peerId]));
+  const afterGrant = await ok("GET", path + "&offset=0", undefined, peer);
+  assert.deepEqual(afterGrant.map((row: any) => row.id),
+    [resourceIds[0], resourceIds[3]]);
+  const predicate = await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource(id,$2::uuid,'member') allowed" +
+    " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position",
+    [resourceIds, peerId]));
+  assert.deepEqual(predicate.rows.map((row: any) => row.allowed),
+    [true, false, false, true, true, true, true],
+    "database predicate must honor current per-resource denials and grants");
+  const guestDenied = await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'guest') allowed",
+    [dataset.id, peerId]));
+  assert.equal(guestDenied.rows[0].allowed, false,
+    "guest cannot acquire inherited access without an explicit ancestor grant");
+  const spoof = await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') forged," +
+    " workspace_can_read_resource($1::uuid,$2::uuid,NULL) missing",
+    [resourceIds[3], peerId]));
+  assert.deepEqual(spoof.rows[0], { forged: false, missing: false },
+    "predicate must not permit forged owner or absent caller roles");
+  const foreignTenant = await db.tenant(other.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') allowed",
+    [dataset.id, peerId]));
+  assert.equal(foreignTenant.rows[0].allowed, false,
+    "SQL access predicate stays restricted to current tenant RLS");
+
+  // Explicitly exercise the unusual early-zero semantics shared with the
+  // existing JS evaluator, including inherited reset and wildcard priority.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "UPDATE resources SET inherit_permissions=false WHERE id=$1",
+    [dataset.id]));
+  const check = (user: string, role: string, id: string) =>
+    db.tenant(owner.tenant, (q) => q.query(
+      "SELECT workspace_can_read_resource($1::uuid,$2::uuid,$3) allowed",
+      [id, user, role]));
+  assert.equal((await check(peerId, "member", resourceIds[3]))
+    .rows[0].allowed, false, "ACL reset without grant denies children");
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,3)", [owner.tenant, dataset.id, peerId]));
+  assert.equal((await check(peerId, "member", resourceIds[3]))
+    .rows[0].allowed, true, "same-node explicit grant restores inheritance");
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("UPDATE acl SET level=0 WHERE tenant_id=$1" +
+      " AND resource_id=$2 AND principal_id=$3",
+      [owner.tenant, dataset.id, peerId]);
+    await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " VALUES($1,$2,'*',4)", [owner.tenant, dataset.id]);
+  });
+  assert.equal((await check(peerId, "member", resourceIds[3]))
+    .rows[0].allowed, false,
+    "explicit user-level denial overrides wildcard grant");
+  await db.tenant(owner.tenant, (q) => q.query(
+    "UPDATE resources SET deleted_at=now() WHERE id=$1", [dataset.id]));
+  assert.equal((await check(owner.id, "owner", resourceIds[3]))
+    .rows[0].allowed, false,
+    "even owner read must exclude deleted ancestors");
+});
+
+
+test("W08 indexed direct-child ACL agrees with full evaluator and picker", async () => {
+  const parent = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 ACL fast-path parity",
+  });
+  const ids: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const item = await ok("POST", "/databases/" + parent.id + "/records", {
+      values: { name: "ACL fast " + String(i).padStart(2, "0") },
+    });
+    ids.push(item.id);
+  }
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'Fast path peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
+      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
+    await q.query("UPDATE resources SET inherit_permissions=false" +
+      " WHERE id=ANY($1::uuid[])", [[ids[3], ids[4], ids[5]]]);
+    // 1: wildcard deny; 2: personal grant wins wildcard deny;
+    // 4: reset+personal grant; 5: reset+wildcard grant;
+    // 6: personal deny wins wildcard grant.
+    const grants: Array<[string, string, number]> = [
+      [ids[1], "*", 0],
+      [ids[2], "*", 0], [ids[2], peerId, 3],
+      [ids[4], peerId, 2], [ids[5], "*", 3],
+      [ids[6], "*", 4], [ids[6], peerId, 0],
+    ];
+    for (const [resource, principal, level] of grants)
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,$4)",
+        [owner.tenant, resource, principal, level],
+      );
+  });
+  const token = await db.tenant(owner.tenant, q =>
+    createSession(q, owner.tenant, peerId));
+  const actor = { cookie: "workspace_session=" + token, csrf: csrf(token) };
+  const expected = [ids[0], ids[2], ids[4], ids[5]];
+  const base = "/databases/" + parent.id + "/records?limit=2&offset=";
+  assert.deepEqual((await ok("GET", base + "0", undefined, actor))
+    .map((r: any) => r.id), expected.slice(0, 2));
+  assert.deepEqual((await ok("GET", base + "2", undefined, actor))
+    .map((r: any) => r.id), expected.slice(2));
+  assert.deepEqual((await ok("GET", base + "4", undefined, actor)), []);
+  const checked = await db.tenant(owner.tenant, q => q.query(
+    "SELECT id,workspace_can_read_resource(id,$2::uuid,'member') visible" +
+    " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position,id",
+    [ids, peerId],
+  ));
+  assert.deepEqual(checked.rows.filter((r:any) => r.visible)
+    .map((r:any) => r.id), expected,
+    "direct-child filter must be semantically equal to full SQL ancestry");
+
+  const source = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 linked fast picker",
+  });
+  await ok("PATCH", "/databases/" + source.id, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "linked", name: "Linked", type: "relation",
+      target_database_id: parent.id },
+  ] });
+  const url = "/databases/" + source.id +
+    "/relation-candidates?property=linked&limit=2&offset=";
+  const choices0 = await ok("GET", url + "0", undefined, actor);
+  const choices2 = await ok("GET", url + "2", undefined, actor);
+  assert.deepEqual(choices0.items.map((r:any) => r.id), expected.slice(0, 2));
+  assert.deepEqual(choices2.items.map((r:any) => r.id), expected.slice(2));
+  assert.equal(choices0.has_more, true);
+  assert.equal(choices2.has_more, false);
+  assert.ok(!JSON.stringify([choices0, choices2]).includes(ids[1]));
+  assert.ok(!JSON.stringify([choices0, choices2]).includes(ids[6]));
+});
+
+test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => {
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Scale Peer')",
+    [peerId, peerId + "@example.test"]));
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO memberships(tenant_id,user_id,role)" +
+    " VALUES($1,$2,'member')", [owner.tenant, peerId]));
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + token,
+    csrf: csrf(token) };
+
+  for (const size of [1000, 10000]) {
+    const dataset = await ok("POST", "/resources", {
+      kind: "database", parent_id: space.id,
+      title: "W08 scale " + size,
+    });
+    const ids = Array.from({ length: size }, () => randomUUID());
+    const tenant = owner.tenant;
+    await db.tenant(tenant, async (q) => {
+      // A transactionally inserted deterministic fixture makes the 10k
+      // qualification practical under restricted PostgreSQL/RLS.
+      await q.query(
+        "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
+        " SELECT x.id,$2::uuid,$3::uuid,'record'," +
+        " 'W08 Scale item ' || x.n::text,x.n::float8" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+        [ids, tenant, dataset.id]);
+      await q.query(
+        "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
+        " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object('name',r.title)" +
+        " FROM resources r WHERE r.id=ANY($1::uuid[])",
+        [ids, tenant, dataset.id]);
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " SELECT $2::uuid,x.id,$3::text,0" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+        " WHERE x.n <= $4::int",
+        [ids, tenant, peerId, size / 2]);
+    });
+    const offset = size / 2 - 100;
+    const started = Date.now();
+    const page = await ok("GET",
+      "/databases/" + dataset.id + "/records?limit=100&offset=" + offset,
+      undefined, peer);
+    const ms = Date.now() - started;
+    assert.deepEqual(page.map((row: any) => row.id), ids.slice(size - 100),
+      "deep offsets must count 100 accessible rows after hidden half");
+    console.info("W08_ACL_BENCH " + JSON.stringify({
+      size, hidden: size / 2, visible: size / 2,
+      offset, page_size: page.length, elapsed_ms: ms,
+    }));
+    const budgetMs = size === 1000 ? 15000 : 60000;
+    assert.ok(ms < budgetMs,
+      "W08 " + size + "row permission-aware page exceeded " + budgetMs +
+      "ms provisional CI budget: " + ms + "ms");
+
+    // Export scales over the same caller-specific visible set. A hidden
+    // row must never be leaked even when thousands of rows are returned.
+    const exportStarted = Date.now();
+    const output = await ok("GET",
+      "/resources/" + dataset.id + "/export?format=json",
+      undefined, peer);
+    const exportElapsed = Date.now() - exportStarted;
+    const hidden = new Set(ids.slice(0, size / 2));
+    assert.equal(output.records.length, size / 2);
+    assert.ok(output.records.every((row: any) =>
+      !hidden.has(row.id)),
+      "Export cannot include hidden source records or their metadata");
+    console.info("W08_ACL_EXPORT_BENCH " + JSON.stringify({
+      size, visible: output.records.length, elapsed_ms: exportElapsed,
+    }));
+    assert.ok(exportElapsed < 30000,
+      "W08 large visible-only export exceeded provisional 30s budget");
+  }
+});

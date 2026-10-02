@@ -1276,3 +1276,69 @@ test("W07 browser: configure sum Rollup and recompute linked Number values", asy
   await page.reload();
   await expect(page.locator("output.rollup-result").first()).toHaveText("60");
 });
+
+
+test("W08 deployed browser: accessible database pages and ordered Relation candidate pages", async ({ page }) => {
+  await login(page);
+  const actor = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": actor.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const stamp = Date.now();
+  const make = async (kind: "space" | "database", parent_id: string,
+    title: string) => {
+    const r = await page.request.post("/api/v1/resources", {
+      headers, data: { kind, parent_id, title },
+    });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    return r.json();
+  };
+  const folder = await make("space", roots[0].id, "W08 Browser " + stamp);
+  const clients = await make("database", folder.id, "W08 Clients " + stamp);
+  const projects = await make("database", folder.id, "W08 Projects " + stamp);
+  const ids: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const r = await page.request.post(
+      "/api/v1/databases/" + clients.id + "/records", {
+        headers, data: { values: {
+          name: "W08 Record " + String(i).padStart(2, "0") + " " + stamp,
+        } },
+      });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    ids.push((await r.json()).id);
+  }
+  const props = await page.request.patch(
+    "/api/v1/databases/" + projects.id, {
+      headers, data: { properties: [
+        { id: "name", name: "Name", type: "title" },
+        { id: "clients", name: "Clients", type: "relation",
+          target_database_id: clients.id },
+      ] },
+    });
+  expect(props.ok(), await props.text()).toBeTruthy();
+
+  const base = "/api/v1/databases/" + clients.id + "/records?limit=3";
+  const first = await page.request.get(base + "&offset=0");
+  const second = await page.request.get(base + "&offset=3");
+  expect(first.ok() && second.ok()).toBeTruthy();
+  expect((await first.json()).map((r: any) => r.id)).toEqual(ids.slice(0, 3));
+  expect((await second.json()).map((r: any) => r.id)).toEqual(ids.slice(3, 6));
+
+  const candidates = "/api/v1/databases/" + projects.id +
+    "/relation-candidates?property=clients&limit=3";
+  const p1 = await page.request.get(candidates + "&offset=0");
+  const p2 = await page.request.get(candidates + "&offset=3");
+  expect(p1.ok() && p2.ok()).toBeTruthy();
+  const c1 = await p1.json(), c2 = await p2.json();
+  expect(c1.items.map((r: any) => r.id)).toEqual(ids.slice(0, 3));
+  expect(c1.has_more).toBe(true);
+  expect(c2.items.map((r: any) => r.id)).toEqual(ids.slice(3, 6));
+  expect(c2.has_more).toBe(true);
+  const last = await page.request.get(candidates + "&offset=6");
+  expect((await last.json()).items.map((r: any) => r.id)).toEqual(ids.slice(6));
+  expect((await last.json()).has_more).toBe(false);
+
+  await page.goto("/?page=" + clients.id);
+  await expect(page.getByRole("button", {
+    name: "Open record W08 Record 06 " + stamp,
+  })).toBeVisible();
+});

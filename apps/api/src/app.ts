@@ -46,6 +46,7 @@ import {
   access,
   visible,
   ancestry,
+  directChildCanReadSql,
 } from "../../../packages/permissions/index.ts";
 import {
   defaultBranding,
@@ -1554,21 +1555,22 @@ function dataRoutes(
         search = String(params.search || "").slice(0, 120).toLowerCase(),
         limit = Math.min(50, Math.max(1, Number(params.limit) || 20)),
         offset = Math.max(0, Math.min(10000, Number(params.offset) || 0));
+      // Execute visibility inside SQL BEFORE sorting and paging; select one
+      // extra permitted row to compute has_more without exposing hidden rows.
       const rows = (await q.query(
         "SELECT id,title FROM resources WHERE kind='database'" +
         " AND deleted_at IS NULL AND id<>$1" +
         " AND position($2 in lower(title))>0" +
-        " ORDER BY lower(title),id",
-        [source.id, search],
+        " AND workspace_can_read_resource(id,$3::uuid,$4::text)" +
+        " ORDER BY lower(title),id LIMIT $5 OFFSET $6",
+        [source.id, search, a.user_id, a.role, limit + 1, offset],
       )).rows;
-      // Pagination is over accessible matches only: never reveal the count
-      // or location of filtered-out target databases through has_more/offset.
       const readable = await visible(q, a, rows);
       return {
-        items: readable.slice(offset, offset + limit).map((item) =>
+        items: readable.slice(0, limit).map((item) =>
           ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
-        has_more: readable.length > offset + limit,
+        has_more: readable.length > limit,
       };
     },
     "databases.read",
@@ -1607,19 +1609,36 @@ function dataRoutes(
         };
       }
       const search = String(params.search || "").slice(0, 120).toLowerCase();
-      const rows = (await q.query(
-        "SELECT id,title FROM resources WHERE kind='record'" +
-        " AND parent_id=$1 AND deleted_at IS NULL" +
-        " AND position($2 in lower(title))>0" +
-        " ORDER BY lower(title),id",
-        [target.id, search],
-      )).rows;
+      // Source target database has been permission checked. Every candidate
+      // record is an immediate child; use indexed personal/wildcard grants
+      // instead of re-running ancestry for all search matches.
+      const bind: any[] = [target.id, search];
+      let gate = "TRUE";
+      if (a.role === "member" || a.role === "guest") {
+        bind.push(a.tenant_id, a.user_id, target.effective_permission);
+        gate = directChildCanReadSql("r", a.role,
+          bind.length - 2, bind.length - 1, bind.length);
+      } else {
+        assert(a.role === "owner" || a.role === "admin", 403,
+          "Unknown membership role");
+      }
+      bind.push(limit + 1, offset);
+      // Bind positions must be continuous for both member and admin; no
+      // unused untyped parameters in the trusted owner fast path.
+      const sql = "SELECT r.id,r.title FROM resources r" +
+        " WHERE r.kind='record' AND r.parent_id=$1" +
+        " AND r.deleted_at IS NULL" +
+        " AND position($2 in lower(r.title))>0" +
+        " AND " + gate + " ORDER BY lower(r.title),r.id LIMIT $" +
+        String(bind.length - 1) + " OFFSET $" + String(bind.length);
+      const rows = (await q.query(sql, bind)).rows;
+      // Defense in depth; visible() must agree with the SQL predicate.
       const readable = await visible(q, a, rows);
       return {
-        items: readable.slice(offset, offset + limit).map((item) =>
+        items: readable.slice(0, limit).map((item) =>
           ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
-        has_more: readable.length > offset + limit,
+        has_more: readable.length > limit,
       };
     },
     "databases.read",
@@ -1711,12 +1730,16 @@ function dataRoutes(
       } else {
         assert(!p.month, 400, "Month filter requires a calendar view");
       }
+      const requestedOffset = p.offset === undefined ? 0 : Number(p.offset);
+      assert(Number.isSafeInteger(requestedOffset) &&
+        requestedOffset >= 0 && requestedOffset <= 50000, 400,
+        "Database page offset must be an integer from 0 to 50000");
       return records(
         q,
         a,
         id(r),
         c,
-        Math.max(0, Number(p.offset) || 0),
+        requestedOffset,
         Math.min(200, Math.max(1, Number(p.limit) || 100)),
       );
     },

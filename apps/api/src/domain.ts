@@ -6,7 +6,8 @@ import { admin } from "../../../packages/auth/index.ts";
 import {
   requireAccess,
   ancestry,
-  visible,
+  visibleDirectRecordChildren,
+  directChildCanReadSql,
 } from "../../../packages/permissions/index.ts";
 import {
   assert,
@@ -224,7 +225,10 @@ export async function records(
   offset = 0,
   limit = 100,
 ) {
-  await requireAccess(q, a, id);
+  // The source database's authenticated permission is already computed
+  // along the full hierarchy. Direct records inherit that exact result,
+  // subject only to their own actor/wildcard ACL and reset flag.
+  const parent = await requireAccess(q, a, id);
   const d = await one(
     q,
     "SELECT properties FROM databases WHERE resource_id=$1",
@@ -284,17 +288,35 @@ export async function records(
       key = `(${key})::numeric`;
     return `${key} ${s.direction === "desc" ? "DESC" : "ASC"} NULLS LAST`;
   });
+  // SQL filters permission BEFORE sort/limit/offset. Since every
+  // r.parent_id=$1 is a direct child of the already validated database,
+  // only the final resource's personal/wildcard ACL can change the inherited
+  // effective level. The indexed child ACL probes avoid a recursive
+  // workspace_can_read_resource call for every candidate at 10k+ scale.
+  // Tenant RLS and a fresh batched JS permission recheck remain in force.
+  // Owner/admin needs no child ACL probes; do not add unused bind
+  // arguments, since PostgreSQL cannot infer types for skipped parameters.
+  // Member/guest binds are consecutive and used by the indexed predicate.
+  if (a.role === "member" || a.role === "guest") {
+    p.push(a.tenant_id, a.user_id, parent.effective_permission);
+    where.push(directChildCanReadSql(
+      "r", a.role, p.length - 2, p.length - 1, p.length));
+  } else {
+    assert(a.role === "owner" || a.role === "admin", 403,
+      "Unknown membership role");
+  }
   p.push(limit, offset);
-  const allowedRows = await visible(
-    q,
-    a,
-    (
-      await q.query(
-        `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT $${p.length - 1} OFFSET $${p.length}`,
-        p,
-      )
-    ).rows,
-  );
+  // Assemble placeholders as literal "$" + index strings. Do not
+  // accidentally interpolate numeric indices into SQL constants: that
+  // would leave the extended-protocol bind array out of alignment.
+  const sql = "SELECT r.*,v.values,v.revision FROM resources r" +
+    " JOIN database_records v ON v.resource_id=r.id WHERE " +
+    where.join(" AND ") + " ORDER BY " +
+    (sort.length ? sort.join(",") + "," : "") +
+    "r.position,r.id LIMIT $" + String(p.length - 1) +
+    " OFFSET $" + String(p.length);
+  const allowedRows = await visibleDirectRecordChildren(
+    q, a, id, (await q.query(sql, p)).rows);
   return Promise.all(allowedRows.map(async (row) => ({
     ...row,
     values: await presentedRecordValues(q, a, d.properties, row.values),
