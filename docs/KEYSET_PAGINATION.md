@@ -10,7 +10,7 @@ Returns `{ "items": [...], "has_more": true|false, "next_cursor": "db-page-v1.<e
 
 - Applies the W08a SQL permission predicate **before** the indexed `(position,id)` keyset comparator and `LIMIT limit+1`, followed by current tenant RLS and independent bounded-ACL revalidation.
 - Uses AES-256-GCM over a strict cursor envelope, HKDF-derived purpose-separated key from `ENCRYPTION_KEY`, 12-byte random nonce, 16-byte auth tag and authenticated associated data. Encoded token contains no plaintext record identifiers or sort positions. Maximum length 2048; TTL 30 minutes.
-- Cursor binds version, tenant, principal, database, saved-view identity (or null), SHA-256 of the **validated effective view config and month**, page size, last position+UUID and timestamps. Any tampering, expiry, mismatch or malformed token fails with HTTP 400.
+- Cursor binds version, tenant, principal, **currently validated membership role**, database, saved-view identity (or null), SHA-256 of the **validated effective view config and month**, page size, last position+UUID and timestamps. Any tampering, expiry, mismatch or malformed token fails with HTTP 400.
 - Read permissions never derive from the cursor. Each new page independently checks the current DB ACL and surviving active records; a removed or hidden record may not reappear solely because it was formerly in a page.
 - Default table, board and calendar view order is the indexed `position,id` ordering. **Saved views with custom sort** intentionally continue using bounded OFFSET until a typed null-aware/direction-aware keyset comparator is accepted; cursor API rejects them explicitly rather than silently mis-sorting. Formula/Relation/Rollup raw derived sorting/filtering remains disallowed.
 
@@ -24,7 +24,7 @@ The cursor describes a stable **position+UUID ordering**, not a database snapsho
 
 ## Release gates
 
-Native PostgreSQL under `workspace_runtime`: 1k/10k mixed-ACL page continuation, hidden/trashed records, cursor tampering/cross-actor/view/month/limit/revision mismatch, bounded positions, saved-view invalidation, admin/member parity and no denied record IDs or counts in responses.
+Native PostgreSQL under `workspace_runtime`: 1k/10k mixed-ACL page continuation, hidden/trashed records, cursor tampering/cross-actor/role/view/month/limit mismatch, bounded positions, saved-view invalidation, admin/member parity, an actual month-filtered calendar and custom-sort fallback, and no denied record IDs or counts in responses.
 
 Deployed Chromium: configure and traverse a multi-page database through Next/Previous, verify reset on view/month and that the last page disables Next. Run full inherited project checks including TypeScript, native restricted-RLS tests, S3 encrypted recovery, SBOM/Trivy/ClamAV/EICAR, Chromium/Firefox accessibility and trusted HTTPS/WSS. Publish actual numbers, limitations and exact accepted commit/run only after green CI.
 
