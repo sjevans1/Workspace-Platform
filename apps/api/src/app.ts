@@ -1704,6 +1704,11 @@ function dataRoutes(
       const definition = await one(q,
         "SELECT properties FROM databases WHERE resource_id=$1",
         [databaseId]);
+      // A continuation for a foreign/hidden database must not distinguish
+      // cross-tenant resource presence from an invalid encrypted cursor.
+      // First-page requests retain their ordinary 404 resource behavior.
+      if (!definition && params.cursor !== undefined)
+        throw new HttpError(400, "Invalid database page cursor");
       assert(definition, 404, "Database unavailable");
       const allowedSortTypes = new Set([
         "title", "text", "number", "select", "status", "date",
