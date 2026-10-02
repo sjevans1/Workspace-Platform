@@ -3689,3 +3689,123 @@ test("W08c mixed ASC/DESC numeric and text keysets preserve null-last and actor 
     undefined, peer)).statusCode, 400,
   "Editing sort specification must invalidate previously issued cursor");
 });
+
+
+test("W08d: 25 concurrent principals remain tenant/ACL isolated across cursor pages and edits", async () => {
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id,
+    title: "W08d multiuser cursor capacity",
+  });
+  const size = 200, denied = 100;
+  const ids = Array.from({ length: size }, () => randomUUID());
+  const userIds = Array.from({ length: 25 }, () => randomUUID());
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
+      " SELECT x.id,$2::uuid,$3::uuid,'record'," +
+      " 'W08d item '||x.n::text,x.n::float8" +
+      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+      [ids, owner.tenant, dataset.id]);
+    await q.query(
+      "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
+      " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object('name',r.title)" +
+      " FROM resources r WHERE r.id=ANY($1::uuid[])",
+      [ids, owner.tenant, dataset.id]);
+    await q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " SELECT $2::uuid,x.id,'*',0" +
+      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+      " WHERE x.n<=$3",
+      [ids, owner.tenant, denied]);
+    for (let i = 0; i < userIds.length; i++) {
+      const uid = userIds[i];
+      await q.query("INSERT INTO users(id,email,name)" +
+        " VALUES($1,$2,$3)",
+        [uid, uid + "@w08d.example.test", "Concurrent actor " + i]);
+      await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
+        " VALUES($1,$2,'member')", [owner.tenant, uid]);
+      // Half the members additionally cannot read the first visible row.
+      if (i % 2)
+        await q.query(
+          "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+          " VALUES($1,$2,$3,0)", [owner.tenant, ids[100], uid]);
+    }
+  });
+  const actors = await Promise.all(userIds.map(async (uid) => {
+    const token = await db.tenant(owner.tenant,
+      (q) => createSession(q, owner.tenant, uid));
+    return { cookie: "workspace_session=" + token, csrf: csrf(token) };
+  }));
+  const url = "/databases/" + dataset.id + "/records/page?limit=20";
+  const started = Date.now();
+  const timings: number[] = [];
+  async function pageFor(actor: any, cursor: string | null) {
+    const begin = Date.now();
+    const result = await ok("GET",
+      url + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+      undefined, actor);
+    timings.push(Date.now() - begin);
+    return result;
+  }
+  const firstPages = await Promise.all(
+    actors.map((actor) => pageFor(actor, null)));
+  const secondPages = await Promise.all(
+    actors.map((actor, i) =>
+      pageFor(actor, firstPages[i].next_cursor)));
+  const hidden = new Set<string>(ids.slice(0, denied));
+  for (let i = 0; i < actors.length; i++) {
+    const first = firstPages[i], second = secondPages[i];
+    assert.equal(first.items.length, 20);
+    assert.equal(second.items.length, 20);
+    assert.equal(first.has_more, true);
+    const list = [...first.items, ...second.items].map((x: any) => x.id);
+    assert.equal(list.length, new Set(list).size,
+      "stable pages must not duplicate records");
+    assert.ok(list.every((id: string) => !hidden.has(id)),
+      "no globally denied record may leak in any concurrent session");
+    if (i % 2) assert.ok(!list.includes(ids[100]),
+      "personal ACL denies must override inherited/wildcard access");
+    else assert.ok(list.includes(ids[100]),
+      "other principals retain the differently permitted record");
+  }
+  const elapsed = Date.now() - started;
+  timings.sort((a, b) => a - b);
+  const percentile = (fraction: number) =>
+    timings[Math.min(timings.length - 1,
+      Math.ceil(fraction * timings.length) - 1)];
+  console.info("W08_MULTIUSER_BENCH " + JSON.stringify({
+    database_rows: size, globally_hidden: denied,
+    principals: actors.length, parallel_page_requests: 25,
+    completed_page_requests: timings.length,
+    p50_ms: percentile(0.5), p95_ms: percentile(0.95),
+    p99_ms: percentile(0.99), elapsed_ms: elapsed,
+  }));
+  assert.ok(elapsed < 30000,
+    "W08d provisional 25-session native throughput gate exceeded 30s");
+
+  // Foreign tenant principal cannot enumerate database records.
+  const foreign = await req("GET", url, undefined, other);
+  assert.notEqual(foreign.statusCode, 200,
+    "tenant boundary cannot be bypassed by cursor API");
+
+  // Read-committed live semantics: a moved item may cross a cursor; a
+  // fresh query restarts at the new current order. A revoked item must
+  // disappear on every continuation regardless of cursor issuance time.
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("UPDATE resources SET position=0 WHERE id=$1", [ids[159]]);
+    await q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " VALUES($1,$2,$3,0)",
+      [owner.tenant, ids[129], userIds[0]]);
+  });
+  const continued = await pageFor(actors[0], firstPages[0].next_cursor);
+  assert.ok(!continued.items.some((row: any) => row.id === ids[129]),
+    "current ACL revocation must take effect after a cursor was issued");
+  assert.ok(!continued.items.some((row: any) => row.id === ids[159]),
+    "a moved-before-cursor record is not snapshot pinned");
+  const restarted = await pageFor(actors[0], null);
+  assert.equal(restarted.items[0].id, ids[159],
+    "restart from first page must see the latest ordering");
+  assert.ok(!restarted.items.some((row: any) => row.id === ids[129]),
+    "new pagination never bypasses a revoked row");
+});

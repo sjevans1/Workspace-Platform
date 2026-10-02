@@ -1,6 +1,6 @@
 # W08c — typed saved-view cursor sorts
 
-**Status: draft implementation, not released or merged.** Based on accepted W08b [PR #77](https://github.com/sjevans1/Workspace-Platform/pull/77). The W08 parent roadmap [#68](https://github.com/sjevans1/Workspace-Platform/issues/68) and master [#62](https://github.com/sjevans1/Workspace-Platform/issues/62) remain unchecked until all scale, snapshot/concurrency and support tests pass.
+**Status: ACCEPTED** in [PR #78](https://github.com/sjevans1/Workspace-Platform/pull/78), merged `b61061d3327950ef9738444d58191a8879e5fd3b` after [full run 36959041575](https://github.com/sjevans1/Workspace-Platform/actions/runs/36959041575) passed 85/85 native backend tests and complete deployment/browser/accessibility/HTTPS. W08 remains unchecked pending [live reordering and multiuser capacity #80](https://github.com/sjevans1/Workspace-Platform/issues/80).
 
 ## Additive behavior
 

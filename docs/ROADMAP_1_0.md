@@ -92,7 +92,7 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 | Search/experience | W13 → W14 → W15 → W16 → W17 | Keep user-visible ACL guarantees; avoid conflicting edits to `Workspace.tsx` and navigation until main refreshed. |
 | Platform/release | W20 → W21/W22; W18/W19; W23/W24 → W25–W28 | No live OpenJM Enterprise AI runtime/dependency; use isolated test providers and data. |
 
-**Recommended immediate execution order:** W01 (security exposure noted in #50), W05 (customer-visible Relations, #60) and W02 architecture/fixtures in parallel as *preparation*, then merge W01, W05, W02, W03 in whichever order yields independent green heads. Never conflate product feature work with tenant IdP authentication changes in the same PR. The order should be revisited based on failing tests and dependency drift.
+**Next sequence (Oct 2026):** finish W08d's bounded multiuser/snapshot-policy acceptance, then W09 typed CSV import and W02 tenant IdP activation in separately scoped PRs, with W03 identity provenance following W02. Never mix identity changes with database UI/security changes or merge without exact-head full CI.
 
 ## 6. Mandatory definition of done — every implementation PR
 
@@ -110,7 +110,7 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 
 After every accepted merge, record the **W-ID, actual GitHub PR number, merge SHA, exact-head workflow run, post-merge status, user-visible acceptance evidence, and outstanding risks** in Issue #62 (one checkbox per W-ID). Update this roadmap when dependencies or scope genuinely change. `W##` numbering stays stable even if a package requires multiple real GitHub PRs. No promises based solely on unfinished tool sessions or local uncommitted work.
 
-**Project state (as of plan publication):** 0/28 planned W-items accepted; this is a *new work register*, **not** a statement that earlier completed PRs are unbuilt. Already merged PR #59 and #61 are baseline, not counted as outstanding.
+**Project state (2026-10-01):** 4/28 W-items accepted (W01, W05, W06, W07). W08a–W08c are accepted *slices* (PRs #70, #77, #78), but **W08 remains unchecked** until [W08d Issue #80](https://github.com/sjevans1/Workspace-Platform/issues/80) qualifies the single-node capacity and live-data reordering policy. The [live tracker #62](https://github.com/sjevans1/Workspace-Platform/issues/62) is authoritative; historical baseline PRs #59/#61 are not double-counted.
 
 ## 8. Post-1.0 optional roadmap — explicitly outside release blocker list
 

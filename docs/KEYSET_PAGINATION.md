@@ -1,6 +1,6 @@
 # W08b — encrypted, permission-safe database keyset pagination
 
-**Status:** Candidate under review, not released. Follow-on to W08a, which was accepted in [PR #70](https://github.com/sjevans1/Workspace-Platform/pull/70) with exact-head 81/81 native tests and full deployment success. W08's release checkbox remains **open** until full cursor/view/performance acceptance is satisfied. Tracking: [Issue #75](https://github.com/sjevans1/Workspace-Platform/issues/75), [Issue #68](https://github.com/sjevans1/Workspace-Platform/issues/68) and [roadmap #62](https://github.com/sjevans1/Workspace-Platform/issues/62).
+**Status: ACCEPTED** W08b in [PR #77](https://github.com/sjevans1/Workspace-Platform/pull/77) (84/84 native backend plus full deployment); follow-on typed saved-view W08c [PR #78](https://github.com/sjevans1/Workspace-Platform/pull/78) also accepted (85/85 native + full deployment). The parent W08 remains **open** for [W08d live reordering/capacity Issue #80](https://github.com/sjevans1/Workspace-Platform/issues/80). Tracking: [Issue #75](https://github.com/sjevans1/Workspace-Platform/issues/75), [Issue #68](https://github.com/sjevans1/Workspace-Platform/issues/68) and [roadmap #62](https://github.com/sjevans1/Workspace-Platform/issues/62).
 
 ## Additive API
 

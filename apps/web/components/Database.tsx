@@ -250,7 +250,7 @@ export default function Database({
     [name, setName] = useState("");
   const current =
     data?.views.find((v: any) => v.id === selected) || data?.views[0];
-  async function load(viewId = selected, cursorOverride: string | null = cursor) {
+  async function load(viewId = selected, cursorOverride: string | null = cursor, offsetOverride = offset) {
     const d = await api(`/databases/${id}`);
     setData(d);
     const v = d.views.find((v: any) => v.id === viewId) || d.views[0];
@@ -261,7 +261,7 @@ export default function Database({
     // Preserve the bounded legacy path for non-scalar legacy sorts.
     if (!supportsCursorSort(v?.config, d.properties)) {
       const older = await api(
-        `/databases/${id}/records?${argumentsPart}&offset=${offset}`);
+        `/databases/${id}/records?${argumentsPart}&offset=${offsetOverride}`);
       setRows(older);
       setPageHasMore(older.length === size);
       setNextCursor(null);
@@ -631,6 +631,19 @@ export default function Database({
         </div>
       )}
       <div className="table-footer">
+        <span className="muted" aria-label="Live page consistency">
+          Live results may shift after edits or reordering.
+          <button className="button quiet" type="button"
+            onClick={() => run(async () => {
+              setOffset(0);
+              setCursor(null);
+              setCursorHistory([]);
+              setNextCursor(null);
+              await load(selected, null, 0);
+            })}>
+            Refresh results
+          </button>
+        </span>
         <span>
           {rows.length} records · {offset + (rows.length ? 1 : 0)}–{offset + rows.length}
         </span>
