@@ -1117,7 +1117,8 @@ function CreateDialog({
                           <label>
                             Column name
                             <input aria-label={`Column name for ${item.source}`}
-                              maxLength={120} disabled={item.skip}
+                              maxLength={120}
+                              disabled={item.skip || !!targetDatabase}
                               value={item.name}
                               onChange={(e) => setMapping((old) => old.map(
                                 (v: any, i: number) => i === index ?
