@@ -149,3 +149,28 @@ test("W10c2 explicit custom block identities and rich marks survive Yjs snapshot
     assert.deepEqual(reopened.blocks,committed.blocks);
   }finally{first.destroy();version.destroy();}
 });
+
+
+test("W10c3a link allowlist rejects executable and protocol-relative URLs", () => {
+  const approved=[
+    "https://example.org/knowledge",
+    "http://example.org/help",
+    "mailto:support@example.org",
+    "/?page=11111111-1111-4111-8111-111111111111",
+    "/api/v1/files/22222222-2222-4222-8222-222222222222/content",
+  ];
+  for(const href of approved){
+    assert.doesNotThrow(()=>validateBlocks([
+      {type:"paragraph",content:[{type:"link",href,content:"Approved"}]},
+    ]),"expected approved link "+href);
+  }
+  for(const href of [
+    "javascript:alert(1)","data:text/html,<script>alert(1)</script>",
+    "vbscript:alert(1)","//example.org/not-canonical",
+    "file:///etc/passwd","httpsx://example.org",
+  ]){
+    assert.throws(()=>validateBlocks([
+      {type:"paragraph",content:[{type:"link",href,content:"Untrusted"}]},
+    ]),/Unsafe link/,"unsafe link escaped allowlist: "+href);
+  }
+});
