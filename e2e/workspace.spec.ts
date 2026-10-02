@@ -1618,7 +1618,13 @@ test("W10b callout and divider sync across two users and survive reload", async 
   await toolbar.getByRole("button",{name:"Insert callout"}).click();
   await expect(page.locator(".workspace-callout")).toBeVisible();
   await toolbar.getByRole("button",{name:"Insert divider"}).click();
-  await expect(page.locator(".workspace-divider hr")).toBeVisible();
+  const dividerRule=page.locator(".workspace-divider hr");
+  await expect(dividerRule).toBeVisible();
+  const ruleBox=await dividerRule.boundingBox();
+  expect(ruleBox?.width, "Divider must span a meaningful editor width")
+    .toBeGreaterThan(100);
+  expect(ruleBox?.height, "Divider must not collapse to zero height")
+    .toBeGreaterThanOrEqual(1);
   await expect.poll(async()=>{
     const response=await page.request.get(`/api/v1/pages/${docId}/content`);
     if(!response.ok())return [];
