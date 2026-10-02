@@ -2297,7 +2297,18 @@ nav button:hover,
 }
 .workspace-callout-icon { flex: 0 0 auto; font-weight: 700; }
 .workspace-callout-content { flex: 1; min-width: 0; }
-.workspace-divider { padding: 12px 0; }
+/* BlockNote wraps custom node views in a display:flex block-content.
+   Without an explicit flex basis this divider becomes a zero-width flex item,
+   leaving an HR in the DOM that Playwright correctly reports as hidden. */
+.bn-block-content[data-content-type="divider"] > .workspace-divider,
+.workspace-divider {
+  box-sizing: border-box;
+  display: block;
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 0;
+}
 .workspace-divider hr {
   display: block;
   width: 100%;
