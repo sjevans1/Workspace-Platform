@@ -1432,4 +1432,14 @@ test("W08b deployed browser: encrypted cursor paging and Next/Previous round tri
   await expect(table).toHaveCount(100);
   await expect(table.first().locator('input[aria-label="Name"]'))
     .toHaveValue("W08b Item 101");
+
+  await expect(page.getByLabel("Live page consistency"))
+    .toContainText("Live results may shift");
+  await forward.click();
+  await expect(table).toHaveCount(2);
+  await page.getByRole("button", { name: "Refresh results" }).click();
+  await expect(table).toHaveCount(100);
+  await expect(backward).toBeDisabled();
+  await expect(table.first().locator('input[aria-label="Name"]'))
+    .toHaveValue("W08b Item 101");
 });
