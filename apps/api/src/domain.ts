@@ -224,6 +224,7 @@ export async function records(
   config: any,
   offset = 0,
   limit = 100,
+  after?: { position: number; id: string },
 ) {
   // The source database's authenticated permission is already computed
   // along the full hierarchy. Direct records inherit that exact result,
@@ -304,6 +305,14 @@ export async function records(
   } else {
     assert(a.role === "owner" || a.role === "admin", 403,
       "Unknown membership role");
+  }
+  if (after) {
+    // Keyset applies after server-side ACL and view predicates but before
+    // ORDER/LIMIT. A caller never chooses these values directly: they come
+    // from an AEAD-authenticated principal- and view-scoped cursor.
+    p.push(after.position, after.id);
+    where.push("(r.position,r.id) > ($" + (p.length - 1) +
+      "::double precision,$" + p.length + "::uuid)");
   }
   p.push(limit, offset);
   // Assemble placeholders as literal "$" + index strings. Do not
