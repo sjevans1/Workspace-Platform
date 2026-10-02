@@ -850,6 +850,9 @@ function CreateDialog({
     [destination, setDestination] = useState(parent),
     [parents, setParents] = useState<any[]>([]),
     [file, setFile] = useState<File>(),
+    [preview, setPreview] = useState<any>(),
+    [mapping, setMapping] = useState<any[]>([]),
+    [previewContent, setPreviewContent] = useState(""),
     [busy, setBusy] = useState(false);
   useEffect(() => {
     run(async () => {
@@ -862,17 +865,42 @@ function CreateDialog({
         setDestination(spaces.find((n: any) => n.kind === "space")?.id || root);
     });
   }, []);
+  async function previewFile() {
+    if (!file || !file.name.toLowerCase().endsWith(".csv"))
+      return notify("Choose a CSV file to preview its column mapping");
+    setBusy(true);
+    try {
+      await run(async () => {
+        if (file.size > 2097152)
+          throw Error("CSV exceeds the 2 MiB import limit");
+        const content = await file.text();
+        const proposal = await api("/imports/preview", "POST", {
+          parent_id: destination, content,
+        });
+        setPreviewContent(content);
+        setPreview(proposal);
+        setMapping(proposal.mapping);
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     await run(async () => {
       if (importing) {
         if (!file) throw Error("Choose a Markdown or CSV file");
+        const isCsv = file.name.toLowerCase().endsWith(".csv");
+        if (isCsv && !preview)
+          throw Error("Preview the CSV and review its column mapping before import");
+        const content = isCsv ? previewContent : await file.text();
         const j = await api("/imports", "POST", {
           parent_id: destination,
           name: name || file.name,
-          format: file.name.endsWith(".csv") ? "csv" : "markdown",
-          content: await file.text(),
+          format: isCsv ? "csv" : "markdown",
+          content,
+          ...(isCsv ? { mapping } : {}),
         });
         notify(
           "Import queued. This window will open the result when it is ready.",
@@ -939,7 +967,12 @@ function CreateDialog({
         <Field label="Create in">
           <select
             value={destination}
-            onChange={(e) => setDestination(e.target.value)}
+            onChange={(e) => {
+              setDestination(e.target.value);
+              setPreview(undefined);
+              setMapping([]);
+              setPreviewContent("");
+            }}
           >
             {!parents.some((n) => n.id === parent) && (
               <option value={parent}>Current page</option>
@@ -958,19 +991,81 @@ function CreateDialog({
           </select>
         </Field>
         {importing && (
-          <Field label="Markdown or CSV file">
-            <input
-              type="file"
-              accept=".md,.markdown,.csv"
-              onChange={(e) => setFile(e.target.files?.[0])}
-            />
-          </Field>
+          <>
+            <Field label="Markdown or CSV file">
+              <input
+                type="file"
+                accept=".md,.markdown,.csv"
+                onChange={(e) => {
+                  setFile(e.target.files?.[0]);
+                  setPreview(undefined);
+                  setMapping([]);
+                  setPreviewContent("");
+                }}
+              />
+            </Field>
+            {file?.name.toLowerCase().endsWith(".csv") && (
+              <>
+                <button type="button" className="button" disabled={busy}
+                  onClick={() => void previewFile()}>
+                  Preview CSV columns
+                </button>
+                {preview && (
+                  <div className="import-preview">
+                    <strong>{preview.row_count} data rows · {preview.columns.length} columns</strong>
+                    <p>Review the suggested types. Untick fields you do not want to import. Every row is checked again before saving.</p>
+                    <div style={{ maxHeight: 340, overflow: "auto" }}>
+                      {mapping.map((item: any, index: number) => (
+                        <div key={item.source} className="import-column">
+                          <label>
+                            <input type="checkbox" checked={!item.skip}
+                              aria-label={`Import column ${item.source}`}
+                              onChange={(e) => setMapping((old) => old.map(
+                                (v: any, i: number) => i === index ?
+                                  { ...v, skip: !e.target.checked } : v))} />
+                            <strong>{item.source}</strong>
+                          </label>
+                          <small>{preview.sample.slice(0, 2).map(
+                            (r: string[]) => r[index]).join(" · ").slice(0, 120)}</small>
+                          <label>
+                            Field type
+                            <select aria-label={`Type for ${item.source}`}
+                              value={item.type} disabled={item.skip}
+                              onChange={(e) => setMapping((old) => old.map(
+                                (v: any, i: number) => i === index ?
+                                  { ...v, type: e.target.value } : v))}>
+                              {["title", "text", "number", "date", "checkbox"]
+                                .map((t) => (
+                                  <option key={t} value={t}>{t}</option>
+                                ))}
+                            </select>
+                          </label>
+                          <label>
+                            Column name
+                            <input aria-label={`Column name for ${item.source}`}
+                              maxLength={120} disabled={item.skip}
+                              value={item.name}
+                              onChange={(e) => setMapping((old) => old.map(
+                                (v: any, i: number) => i === index ?
+                                  { ...v, name: e.target.value } : v))} />
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                    <small>{preview.warnings[0]}</small>
+                  </div>
+                )}
+              </>
+            )}
+          </>
         )}
         <div className="modal-actions">
           <button type="button" className="button" onClick={close}>
             Cancel
           </button>
-          <button disabled={busy} className="button primary">
+          <button disabled={busy || (importing &&
+            !!file?.name.toLowerCase().endsWith(".csv") && !preview)}
+            className="button primary">
             {busy ? "Working…" : importing ? "Import" : "Create"}
           </button>
         </div>
