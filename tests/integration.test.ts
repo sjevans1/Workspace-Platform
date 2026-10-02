@@ -4132,4 +4132,26 @@ test("W09b existing-database CSV append checks schema, ACL and atomicity", async
   assert.match(stale.result.error,/schema changed/i);
   assert.equal((await ok("GET",path+"/records")).length,3,
     "schema revision after queue must fail closed before appending");
+
+  // Execution-time authorization is separate from the enqueue decision.
+  // Disabling membership after queue must prevent all appended rows.
+  const refreshed = await ok("POST", "/imports/preview", args);
+  const revoked = await ok("POST", "/imports", {
+    ...payload, expected_schema_digest: refreshed.target.schema_digest,
+  });
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET active=false WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, owner.id]));
+  try {
+    await tick(db);
+  } finally {
+    await db.tenant(owner.tenant, q => q.query(
+      "UPDATE memberships SET active=true WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, owner.id]));
+  }
+  const revokedJob = await ok("GET", "/jobs/" + revoked.id);
+  assert.equal(revokedJob.status, "failed");
+  assert.match(revokedJob.result.error, /membership revoked/i);
+  assert.equal((await ok("GET", path + "/records")).length, 3,
+    "revoked membership must not append any records");
 });
