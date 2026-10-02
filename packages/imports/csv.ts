@@ -1,4 +1,5 @@
 import { parse } from "csv-parse/sync";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assert, type Property, validateValues } from "../contracts/index.ts";
 
@@ -140,4 +141,29 @@ export function previewCsvImport(content: string) {
     sample: table.rows.slice(0, 5).map((row) => [...row]),
     warnings: ["Type suggestions use the first 100 rows. Review mappings " +
       "before import; the worker validates every cell without partial writes."] };
+}
+
+// W09b: existing-target imports are explicit APPEND ONLY. Never infer a
+// natural key from hidden rows or silently update an existing record.
+export function csvSchemaDigest(properties: Property[]) {
+  return createHash("sha256").update(JSON.stringify(properties)).digest("hex");
+}
+
+
+export function prepareCsvIntoExisting(
+  content: string, mapping: CsvColumnMapping[], targetProperties: Property[],
+) {
+  const parsed = prepareCsvImport(content, mapping);
+  const targets = new Map(targetProperties.map((p) => [p.id, p]));
+  for (const field of parsed.properties) {
+    const target = targets.get(field.id);
+    assert(target && target.type === field.type, 400,
+      "Mapped CSV property does not match the current target schema");
+  }
+  const titleField = targetProperties.find((p) => p.type === "title");
+  assert(titleField && parsed.properties.some((p) =>
+    p.type === "title" && p.id === titleField.id), 400,
+    "Mapped CSV title must match target database title property");
+  return { ...parsed, rows: parsed.rows.map((values) =>
+    validateValues(targetProperties, values)) };
 }
