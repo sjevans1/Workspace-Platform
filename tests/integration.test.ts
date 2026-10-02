@@ -3592,6 +3592,8 @@ test("W08c mixed ASC/DESC numeric and text keysets preserve null-last and actor 
     { id: "name", name: "Name", type: "title" },
     { id: "score", name: "Score", type: "number" },
     { id: "label", name: "Label", type: "text" },
+    { id: "category", name: "Category", type: "select",
+      options: ["Group"] },
   ] });
   const fixtures: Array<{ name: string; score?: number; label?: string }> = [
     { name: "A", score: 2, label: "B" },
@@ -3618,7 +3620,7 @@ test("W08c mixed ASC/DESC numeric and text keysets preserve null-last and actor 
   });
   const desc = await ok("POST", path + "/views", {
     name: "Descending score, ascending label",
-    config: { type: "board", filters: [], sort: [
+    config: { type: "board", groupBy: "category", filters: [], sort: [
       { property: "score", direction: "desc" },
       { property: "label", direction: "asc" },
     ] },
