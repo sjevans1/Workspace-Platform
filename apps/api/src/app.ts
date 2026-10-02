@@ -58,6 +58,7 @@ import {
 import { emit, encrypt } from "../../../packages/events/index.ts";
 import { beginEventCursor, decodeEventCursor, encodeEventCursor } from "../../../packages/events/cursor.ts";
 import { beginReconcileCursor, decodeReconcileCursor, encodeReconcileCursor } from "../../../packages/events/reconcile-cursor.ts";
+import { csvMappingSchema, previewCsvImport } from "../../../packages/imports/csv.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -3200,6 +3201,18 @@ function dataRoutes(
       return { ok: true, id: deliveryId, status: "pending" };
     },
   );
+  route("POST", "/imports/preview", "Validate and preview a bounded CSV without writes",
+    async (q, a, r) => {
+      const request = body(z.object({
+        parent_id: uuid,
+        content: z.string().max(2097152),
+      }).strict(), r);
+      scope(a, "databases.write");
+      const parent = await requireAccess(q, a, request.parent_id, 3);
+      assert(["space", "page"].includes(parent.kind), 400,
+        "Import destination must be a page or space");
+      return previewCsvImport(request.content);
+    }, "databases.write");
   route("POST", "/imports", "Queue Markdown or CSV import", async (q, a, r) => {
     const v = body(
       z
@@ -3208,11 +3221,14 @@ function dataRoutes(
           format: z.enum(["markdown", "csv"]),
           name: title,
           content: z.string().max(2097152),
+          mapping: csvMappingSchema.optional(),
         })
         .strict(),
       r,
     );
     scope(a, v.format === "csv" ? "databases.write" : "pages.write");
+    assert(v.format === "csv" || v.mapping === undefined, 400,
+      "CSV mapping is only supported for CSV imports");
     await requireAccess(q, a, v.parent_id, 3);
     const jid = randomUUID();
     await q.query(
