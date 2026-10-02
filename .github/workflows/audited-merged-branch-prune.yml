@@ -1,0 +1,58 @@
+name: Audited Workspace merged-branch cleanup
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/audited-merged-branch-prune.yml"
+      - "maintenance/merged-branch-prune-2026-10-01.json"
+      - "scripts/maintenance/**"
+  push:
+    branches: [main]
+    paths:
+      - "maintenance/merged-branch-prune-2026-10-01.json"
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Run only the exact-SHA, merged-PR manifest after review"
+        required: true
+        type: choice
+        options:
+          - "NO"
+          - "PRUNE_AUDITED_MERGED_ONLY"
+
+concurrency:
+  group: workspace-audited-branch-prune
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Prove protected branch safety offline
+        run: python3 -m unittest discover -s scripts/maintenance -p 'test_prune_merged_branches.py' -v
+      - name: Validate exact-SHA manifest with no API actions
+        run: python3 scripts/maintenance/prune_merged_branches.py
+
+  prune:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.confirmation == 'PRUNE_AUDITED_MERGED_ONLY')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify manifest and deletion safety offline
+        run: |
+          python3 -m unittest discover -s scripts/maintenance -p 'test_prune_merged_branches.py' -v
+          python3 scripts/maintenance/prune_merged_branches.py
+      - name: Prune only audited SHA-matched, merged PR branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/maintenance/prune_merged_branches.py --apply
