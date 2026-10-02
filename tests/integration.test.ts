@@ -3131,6 +3131,46 @@ test("W08 permission-first pages: accessible records are not lost behind hidden 
   const ownerPage = await ok("GET", path + "&offset=0");
   assert.deepEqual(ownerPage.map((row: any) => row.id), resourceIds.slice(0, 2));
 
+  // Candidate picker must paginate over readable choices, not raw rows.
+  const source = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 Picker source",
+  });
+  await ok("PATCH", "/databases/" + source.id, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "links", name: "Links", type: "relation",
+      target_database_id: dataset.id },
+  ] });
+  const candidatesPath = "/databases/" + source.id +
+    "/relation-candidates?property=links&limit=2";
+  const candidateFirst = await ok("GET", candidatesPath + "&offset=0",
+    undefined, peer);
+  const candidateNext = await ok("GET", candidatesPath + "&offset=2",
+    undefined, peer);
+  assert.deepEqual(candidateFirst.items.map((row: any) => row.id),
+    resourceIds.slice(3, 5));
+  assert.equal(candidateFirst.has_more, true);
+  assert.deepEqual(candidateNext.items.map((row: any) => row.id),
+    resourceIds.slice(5, 7));
+  assert.equal(candidateNext.has_more, false);
+
+  const hiddenTarget = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08-Picker A hidden",
+  });
+  const visibleTarget = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08-Picker B visible",
+  });
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,0)", [owner.tenant, hiddenTarget.id, peerId]));
+  const targetSearch = await ok("GET",
+    "/databases/" + source.id +
+      "/relation-targets?search=W08-Picker&limit=1&offset=0",
+    undefined, peer);
+  assert.deepEqual(targetSearch.items.map((row: any) => row.id),
+    [visibleTarget.id],
+    "picker must never reveal inaccessible databases in offset/has_more");
+  assert.equal(targetSearch.has_more, false);
+
   // ACL changes must take effect immediately; do not use a stale cache.
   await db.tenant(owner.tenant, (q) => q.query(
     "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
