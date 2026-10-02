@@ -72,11 +72,18 @@ function Body({
   function insertRichBlock(type: "callout" | "divider") {
     if (readOnly) return;
     const active = editor.getTextCursorPosition().block;
-    if (type === "callout") editor.insertBlocks([{
-      type: "callout", props: { variant: "info" },
-      content: "Add a note for your team.",
-    }], active, "after");
-    else editor.insertBlocks([{ type: "divider" }], active, "after");
+    if (type === "callout") {
+      const inserted = editor.insertBlocks([{
+        type: "callout", props: { variant: "info" },
+        content: "Add a note for your team.",
+      }], active, "after");
+      // insertBlocks does not automatically move the cursor. Leave it at
+      // the new inline-capable block so the next inserted divider appears
+      // *after* the callout rather than unexpectedly before it.
+      editor.setTextCursorPosition(inserted[0], "end");
+    } else {
+      editor.insertBlocks([{ type: "divider" }], active, "after");
+    }
     editor.focus();
   }
   function toggleMark(mark: "bold" | "italic") {
