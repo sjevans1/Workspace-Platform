@@ -3236,6 +3236,80 @@ test("W08 permission-first pages: accessible records are not lost behind hidden 
 });
 
 
+test("W08 indexed direct-child ACL agrees with full evaluator and picker", async () => {
+  const parent = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 ACL fast-path parity",
+  });
+  const ids: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const item = await ok("POST", "/databases/" + parent.id + "/records", {
+      values: { name: "ACL fast " + String(i).padStart(2, "0") },
+    });
+    ids.push(item.id);
+  }
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'Fast path peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
+      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
+    await q.query("UPDATE resources SET inherit_permissions=false" +
+      " WHERE id=ANY($1::uuid[])", [[ids[3], ids[4], ids[5]]]);
+    // 1: wildcard deny; 2: personal grant wins wildcard deny;
+    // 4: reset+personal grant; 5: reset+wildcard grant;
+    // 6: personal deny wins wildcard grant.
+    const grants: Array<[string, string, number]> = [
+      [ids[1], "*", 0],
+      [ids[2], "*", 0], [ids[2], peerId, 3],
+      [ids[4], peerId, 2], [ids[5], "*", 3],
+      [ids[6], "*", 4], [ids[6], peerId, 0],
+    ];
+    for (const [resource, principal, level] of grants)
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,$4)",
+        [owner.tenant, resource, principal, level],
+      );
+  });
+  const token = await db.tenant(owner.tenant, q =>
+    createSession(q, owner.tenant, peerId));
+  const actor = { cookie: "workspace_session=" + token, csrf: csrf(token) };
+  const expected = [ids[0], ids[2], ids[4], ids[5]];
+  const base = "/databases/" + parent.id + "/records?limit=2&offset=";
+  assert.deepEqual((await ok("GET", base + "0", undefined, actor))
+    .map((r: any) => r.id), expected.slice(0, 2));
+  assert.deepEqual((await ok("GET", base + "2", undefined, actor))
+    .map((r: any) => r.id), expected.slice(2));
+  assert.deepEqual((await ok("GET", base + "4", undefined, actor)), []);
+  const checked = await db.tenant(owner.tenant, q => q.query(
+    "SELECT id,workspace_can_read_resource(id,$2::uuid,'member') visible" +
+    " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position,id",
+    [ids, peerId],
+  ));
+  assert.deepEqual(checked.rows.filter((r:any) => r.visible)
+    .map((r:any) => r.id), expected,
+    "direct-child filter must be semantically equal to full SQL ancestry");
+
+  const source = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08 linked fast picker",
+  });
+  await ok("PATCH", "/databases/" + source.id, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "linked", name: "Linked", type: "relation",
+      target_database_id: parent.id },
+  ] });
+  const url = "/databases/" + source.id +
+    "/relation-candidates?property=linked&limit=2&offset=";
+  const choices0 = await ok("GET", url + "0", undefined, actor);
+  const choices2 = await ok("GET", url + "2", undefined, actor);
+  assert.deepEqual(choices0.items.map((r:any) => r.id), expected.slice(0, 2));
+  assert.deepEqual(choices2.items.map((r:any) => r.id), expected.slice(2));
+  assert.equal(choices0.has_more, true);
+  assert.equal(choices2.has_more, false);
+  assert.ok(!JSON.stringify([choices0, choices2]).includes(ids[1]));
+  assert.ok(!JSON.stringify([choices0, choices2]).includes(ids[6]));
+});
+
 test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => {
   const peerId = randomUUID();
   await db.tenant(owner.tenant, (q) => q.query(
