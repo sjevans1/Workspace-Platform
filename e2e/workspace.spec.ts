@@ -1342,3 +1342,64 @@ test("W08 deployed browser: accessible database pages and ordered Relation candi
     name: "Open record W08 Record 06 " + stamp,
   })).toBeVisible();
 });
+
+
+test("W08b deployed browser: encrypted cursor paging and Next/Previous round trip", async ({ page }) => {
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const stamp = Date.now();
+  const folderRequest = await page.request.post("/api/v1/resources", {
+    headers, data: { kind: "space", parent_id: roots[0].id,
+      title: "W08b Cursor " + stamp },
+  });
+  expect(folderRequest.ok(), await folderRequest.text()).toBeTruthy();
+  const folder = await folderRequest.json();
+  const dbRequest = await page.request.post("/api/v1/resources", {
+    headers, data: { kind: "database", parent_id: folder.id,
+      title: "W08b Paging " + stamp },
+  });
+  expect(dbRequest.ok(), await dbRequest.text()).toBeTruthy();
+  const dataset = await dbRequest.json();
+  const base = "/api/v1/databases/" + dataset.id + "/records";
+  for (let i = 0; i < 102; i++) {
+    const res = await page.request.post(base, {
+      headers, data: { values: {
+        name: "W08b Item " + String(i).padStart(3, "0") },
+      },
+    });
+    expect(res.ok(), await res.text()).toBeTruthy();
+  }
+  const cursorPage = base + "/page?limit=2";
+  const first = await page.request.get(cursorPage);
+  expect(first.ok()).toBeTruthy();
+  const a = await first.json();
+  expect(a.items).toHaveLength(2);
+  expect(a.has_more).toBe(true);
+  expect(a.next_cursor).toMatch(/^db-page-v1\./);
+  const next = await page.request.get(cursorPage +
+    "&cursor=" + encodeURIComponent(a.next_cursor));
+  expect(next.ok()).toBeTruthy();
+  const b = await next.json();
+  expect(b.items).toHaveLength(2);
+  expect(b.items[0].id).not.toBe(a.items[1].id);
+  const tampered = await page.request.get(cursorPage +
+    "&cursor=" + encodeURIComponent(a.next_cursor + "!"));
+  expect(tampered.status()).toBe(400);
+
+  await page.goto("/?page=" + dataset.id);
+  const table = page.locator(".record-table tbody tr");
+  await expect(table).toHaveCount(100);
+  const forward = page.getByRole("button", { name: "Next", exact: true });
+  const backward = page.getByRole("button", { name: "Previous", exact: true });
+  await expect(forward).toBeEnabled();
+  await expect(backward).toBeDisabled();
+  await forward.click();
+  await expect(table).toHaveCount(2);
+  await expect(backward).toBeEnabled();
+  await expect(forward).toBeDisabled();
+  await backward.click();
+  await expect(table).toHaveCount(100);
+  await expect(forward).toBeEnabled();
+});
