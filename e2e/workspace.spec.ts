@@ -1821,3 +1821,70 @@ test("W10c2 version restore preserves custom rich blocks, marks and identity", a
     await secondContext.close();
   }
 });
+
+
+test("W10c3a browser HTML paste preserves benign text without executable markup", async ({page}) => {
+  test.setTimeout(120000);
+  await login(page);
+  await page.getByRole("button",{name:"New page",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Create something new"});
+  const title="W10c3a paste safety "+randomUUID();
+  await dialog.getByLabel("Name",{exact:true}).fill(title);
+  await dialog.getByRole("button",{name:"Create",exact:true}).click();
+  await expect(page.getByLabel("Page title",{exact:true})).toHaveValue(title);
+  await expect.poll(()=>new URL(page.url()).searchParams.get("page"))
+    .not.toBeNull();
+  const id=new URL(page.url()).searchParams.get("page");
+  expect(id).toBeTruthy();
+  const content=page.locator(".bn-editor");
+  await expect(content).toBeVisible();
+  const html=[
+    "<h3>Trusted pasted heading</h3>",
+    "<p><strong>Approved bold</strong> and ",
+    '<a href="https://example.org/reference">Trusted reference</a> ',
+    '<a href="javascript:alert(12345)">Dangerous link text</a></p>',
+    '<img src="x-broken" onerror="window.__workspacePasteExecuted=true">',
+    '<svg onload="window.__workspacePasteExecuted=true"></svg>',
+    "<script>window.__workspacePasteExecuted=true</script>",
+  ].join("");
+  const plain="Trusted pasted heading\nApproved bold and Trusted reference Dangerous link text";
+  await page.evaluate(() => { (window as any).__workspacePasteExecuted=false; });
+  // Use an actual Chromium clipboard and keyboard paste, not an untrusted
+  // synthetic DOM paste event that ProseMirror might ignore.
+  await page.context().grantPermissions(["clipboard-read","clipboard-write"]);
+  await page.evaluate(async ({html,plain})=>{
+    const item=new ClipboardItem({
+      "text/html":new Blob([html],{type:"text/html"}),
+      "text/plain":new Blob([plain],{type:"text/plain"}),
+    });
+    await navigator.clipboard.write([item]);
+  },{html,plain});
+  await content.click();
+  await page.keyboard.press("ControlOrMeta+V");
+  await expect(content).toContainText("Trusted pasted heading");
+  await expect(content).toContainText("Approved bold");
+  await expect(content).toContainText("Trusted reference");
+  await expect.poll(async()=>{
+    const res=await page.request.get("/api/v1/pages/"+id+"/content");
+    if(!res.ok())return "";
+    return (await res.json()).plain_text||"";
+  },{timeout:30000}).toContain("Approved bold");
+  expect(await page.evaluate(()=>(window as any).__workspacePasteExecuted))
+    .toBe(false);
+  await expect(content.locator("script")).toHaveCount(0);
+  await expect(content.locator("[onerror],[onload]")).toHaveCount(0);
+  await expect(content.locator('a[href^="javascript:"],a[href^="data:"]'))
+    .toHaveCount(0);
+  const persisted=await (await page.request.get(
+    "/api/v1/pages/"+id+"/content")).json();
+  const serialized=JSON.stringify(persisted.blocks);
+  expect(serialized).not.toContain("javascript:alert");
+  expect(serialized).not.toContain("__workspacePasteExecuted");
+  await page.reload();
+  await expect(page.locator(".bn-editor"))
+    .toContainText("Trusted pasted heading");
+  await expect(page.locator(".bn-editor"))
+    .toContainText("Approved bold");
+  await expect(page.locator(".bn-editor [onerror],.bn-editor [onload]"))
+    .toHaveCount(0);
+});

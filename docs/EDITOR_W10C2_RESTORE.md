@@ -1,6 +1,6 @@
 # W10c2 — Rich document history restore and hostile input acceptance
 
-**Draft, unaccepted:** W10c #92. Depends on accepted W10c1 PR #94 on standalone Workspace main.
+**ACCEPTED:** [W10c2 PR #96](https://github.com/sjevans1/Workspace-Platform/pull/96) merged `6a7430495615b3136c75562a18acd498dc54182b` after clean exact-head [CI #37061157674](https://github.com/sjevans1/Workspace-Platform/actions/runs/37061157674): native 99/99, deployed browser/security/accessibility/HTTPS/WSS success.  W10c #92. Depends on accepted W10c1 PR #94 on standalone Workspace main.
 
 ## Verification contract
 - A browser user creates a page and stores callout, divider, heading and checklist with explicit stable block IDs, marks and safe variant.
