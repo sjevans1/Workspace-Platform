@@ -3581,3 +3581,104 @@ test("W08b calendar cursor: month binding, date filtering and custom-sort refusa
   assert.equal(legacy.length, 3,
     "legacy bounded offset remains available for custom-sorted views");
 });
+
+
+test("W08c mixed ASC/DESC numeric and text keysets preserve null-last and actor ACL", async () => {
+  const database = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08c typed sort",
+  });
+  const path = "/databases/" + database.id;
+  await ok("PATCH", path, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "score", name: "Score", type: "number" },
+    { id: "label", name: "Label", type: "text" },
+  ] });
+  const fixtures: Array<{ name: string; score?: number; label?: string }> = [
+    { name: "A", score: 2, label: "B" },
+    { name: "B", score: 1, label: "A" },
+    { name: "C", score: 2, label: "A" },
+    { name: "D", label: "B" },
+    { name: "E", score: 1, label: "B" },
+    { name: "F", score: 2 },
+    { name: "G", score: 1, label: "B" },
+    { name: "H" },
+    { name: "I", score: 3, label: "A" },
+  ];
+  const rowIds = new Map<string, string>();
+  for (const row of fixtures) {
+    const created = await ok("POST", path + "/records", { values: row });
+    rowIds.set(row.name, created.id);
+  }
+  const asc = await ok("POST", path + "/views", {
+    name: "Ascending score, descending label",
+    config: { type: "table", filters: [], sort: [
+      { property: "score", direction: "asc" },
+      { property: "label", direction: "desc" },
+    ] },
+  });
+  const desc = await ok("POST", path + "/views", {
+    name: "Descending score, ascending label",
+    config: { type: "board", filters: [], sort: [
+      { property: "score", direction: "desc" },
+      { property: "label", direction: "asc" },
+    ] },
+  });
+  async function iterate(viewId: string, actor = owner) {
+    const url = path + "/records/page?limit=2&view=" + viewId;
+    const rows: any[] = [];
+    let cursor: string | null = null;
+    for (let index = 0; index < 7; index++) {
+      const result = await ok("GET", url +
+        (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+        undefined, actor);
+      assert.ok(result.items.length <= 2);
+      rows.push(...result.items);
+      if (!result.has_more) {
+        assert.equal(result.next_cursor, null);
+        return rows;
+      }
+      assert.ok(result.next_cursor?.startsWith("db-page-v1."));
+      cursor = result.next_cursor;
+    }
+    assert.fail("Did not terminate bounded sorted keyset traversal");
+  }
+  const ascending = await iterate(asc.id);
+  assert.deepEqual(ascending.map((r) => r.values.name),
+    ["E", "G", "B", "A", "C", "F", "I", "D", "H"]);
+  const descending = await iterate(desc.id);
+  assert.deepEqual(descending.map((r) => r.values.name),
+    ["I", "C", "A", "F", "B", "E", "G", "D", "H"]);
+  assert.equal(new Set(ascending.map((r) => r.id)).size, 9);
+
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'Sort peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
+      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
+    await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " VALUES($1,$2,$3,0)", [owner.tenant, rowIds.get("A"), peerId]);
+  });
+  const token = await db.tenant(owner.tenant, q =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + token, csrf: csrf(token) };
+  const visibleSorted = await iterate(asc.id, peer);
+  assert.deepEqual(visibleSorted.map((r) => r.values.name),
+    ["E", "G", "B", "C", "F", "I", "D", "H"]);
+  assert.ok(!JSON.stringify(visibleSorted).includes(rowIds.get("A")!));
+
+  const first = await ok("GET",
+    path + "/records/page?limit=2&view=" + asc.id, undefined, peer);
+  assert.equal((await req("GET", path + "/records/page?limit=2&view=" +
+    desc.id + "&cursor=" + encodeURIComponent(first.next_cursor),
+    undefined, peer)).statusCode, 400,
+  "Cursor must reject changes to saved view sort order");
+  await ok("PATCH", path + "/views/" + asc.id, {
+    name: "Modified sort direction", config: { type: "table", filters: [],
+      sort: [{ property: "score", direction: "desc" }] },
+  });
+  assert.equal((await req("GET", path + "/records/page?limit=2&view=" +
+    asc.id + "&cursor=" + encodeURIComponent(first.next_cursor),
+    undefined, peer)).statusCode, 400,
+  "Editing sort specification must invalidate previously issued cursor");
+});
