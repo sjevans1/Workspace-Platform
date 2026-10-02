@@ -58,7 +58,7 @@ import {
 import { emit, encrypt } from "../../../packages/events/index.ts";
 import { beginEventCursor, decodeEventCursor, encodeEventCursor } from "../../../packages/events/cursor.ts";
 import { beginReconcileCursor, decodeReconcileCursor, encodeReconcileCursor } from "../../../packages/events/reconcile-cursor.ts";
-import { csvMappingSchema, previewCsvImport } from "../../../packages/imports/csv.ts";
+import { csvMappingSchema, previewCsvImport, csvSchemaDigest } from "../../../packages/imports/csv.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -3206,12 +3206,40 @@ function dataRoutes(
       const request = body(z.object({
         parent_id: uuid,
         content: z.string().max(2097152),
+        target_database_id: uuid.optional(),
       }).strict(), r);
       scope(a, "databases.write");
       const parent = await requireAccess(q, a, request.parent_id, 3);
       assert(["space", "page"].includes(parent.kind), 400,
         "Import destination must be a page or space");
-      return previewCsvImport(request.content);
+      const preview = previewCsvImport(request.content);
+      if (!request.target_database_id) return preview;
+      const target = await requireAccess(q, a,
+        request.target_database_id, 3);
+      assert(target.kind === "database" && !target.deleted_at &&
+        target.parent_id === parent.id, 404,
+        "Import target unavailable in selected destination");
+      const schema = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1",
+        [target.id]);
+      assert(schema, 404, "Import target unavailable");
+      const allowed = new Set(["title","text","number","date","checkbox"]);
+      const columns = schema.properties.filter((p: any) =>
+        allowed.has(p.type));
+      const suggestions = preview.mapping.map((m) => {
+        const targetProperty = columns.find((p: any) =>
+          p.name.toLowerCase() === m.source.toLowerCase());
+        return targetProperty ? {
+          source: m.source, id: targetProperty.id,
+          name: targetProperty.name, type: targetProperty.type,
+        } : { ...m, skip: true };
+      });
+      return { ...preview, mapping: suggestions, target: {
+        id: target.id, schema_digest: csvSchemaDigest(schema.properties),
+        properties: columns.map((p: any) => ({
+          id:p.id, name:p.name, type:p.type,
+        })),
+      } };
     }, "databases.write");
   route("POST", "/imports", "Queue Markdown or CSV import", async (q, a, r) => {
     const v = body(
@@ -3222,14 +3250,36 @@ function dataRoutes(
           name: title,
           content: z.string().max(2097152),
           mapping: csvMappingSchema.optional(),
+          target_database_id: uuid.optional(),
+          expected_schema_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+          existing_mode: z.literal("append").optional(),
         })
         .strict(),
       r,
     );
     scope(a, v.format === "csv" ? "databases.write" : "pages.write");
-    assert(v.format === "csv" || v.mapping === undefined, 400,
-      "CSV mapping is only supported for CSV imports");
-    await requireAccess(q, a, v.parent_id, 3);
+    assert(v.format === "csv" || (v.mapping === undefined &&
+      v.target_database_id === undefined), 400,
+      "CSV-specific options require CSV format");
+    const parent = await requireAccess(q, a, v.parent_id, 3);
+    if (v.target_database_id) {
+      assert(v.format === "csv" && v.mapping &&
+        v.existing_mode === "append" && v.expected_schema_digest, 400,
+        "Existing imports require explicit append mode, mapping and schema digest");
+      const target = await requireAccess(q,a,v.target_database_id,3);
+      assert(target.kind === "database" && !target.deleted_at &&
+        target.parent_id === parent.id, 404, "Import target unavailable");
+      const definition = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1",
+        [target.id]);
+      assert(definition && csvSchemaDigest(definition.properties) ===
+        v.expected_schema_digest,409,
+        "Target schema changed; preview again");
+    } else {
+      assert(v.existing_mode === undefined &&
+        v.expected_schema_digest === undefined,400,
+        "Existing import controls require a target database");
+    }
     const jid = randomUUID();
     await q.query(
       "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload) VALUES($1,$2,$3,$4,$5)",
