@@ -44,6 +44,11 @@ export function readCsvTable(content: string): CsvTable {
     columns.length, 400, "CSV column headings must be unique");
   assert(parsed.slice(1).every((row) => row.length === columns.length),
     400, "CSV rows must match the header column count");
+  // csv-parse's max_record_size is a parser buffer bound, not a guarantee
+  // that a single very long final cell is rejected in every configuration.
+  assert(parsed.every((row) =>
+    row.every((cell) => cell.length <= 100000)), 400,
+    "CSV field exceeds 100000 characters");
   return { columns, rows: parsed.slice(1) };
 }
 
