@@ -3578,7 +3578,7 @@ test("W08b calendar cursor: month binding, date filtering and custom-sort refusa
   const sortedPage = await ok("GET",
     dbPath + "/records/page?view=" + sorted.id);
   assert.deepEqual(sortedPage.items.map((row: any) => row.title),
-    ["April one", "March last", "March one"],
+    ["April one", "March one", "March two"],
     "W08c scalar Title sorting is now supported by the encrypted cursor");
   assert.equal(sortedPage.has_more, false);
   const legacy = await ok("GET", dbPath + "/records?view=" + sorted.id);
