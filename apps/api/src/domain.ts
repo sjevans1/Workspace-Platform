@@ -25,6 +25,7 @@ import {
 import { emit } from "../../../packages/events/index.ts";
 import { indexedRecordText, validateRelationWrites } from "./relations.ts";
 import { presentedRecordValues } from "./rollups.ts";
+import { encodeDatabasePage, type DatabasePageCursor } from "../../../packages/database/page-cursor.ts";
 export const treeLock = (q: Query, t: string) =>
   q.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`tree:${t}`]);
 export async function createResource(
@@ -322,6 +323,55 @@ export async function records(
     values: await presentedRecordValues(q, a, d.properties, row.values),
   })));
 }
+
+/** W08b: default table order only (position, immutable UUID tie break).
+ * Cursor is encrypted and scope-bound by route, not user-supplied SQL.
+ * W08c will qualify non-default saved-view sorting/filtering independently.
+ */
+export async function databaseKeysetPage(
+  q: Query, a: Actor, id: string, cursor: DatabasePageCursor,
+) {
+  const parent = await requireAccess(q, a, id);
+  const d = await one(q,
+    "SELECT properties FROM databases WHERE resource_id=$1", [id]);
+  assert(parent.kind === "database" && d, 404, "Database not found");
+  const args: any[] = [id];
+  const clauses = ["r.parent_id=$1", "r.kind='record'", "r.deleted_at IS NULL"];
+  if (cursor.after_id !== null) {
+    args.push(cursor.after_pos, cursor.after_id);
+    clauses.push("(r.position>$" + (args.length - 1) +
+      "::double precision OR (r.position=$" + (args.length - 1) +
+      "::double precision AND r.id>$" + args.length + "::uuid))");
+  }
+  if (a.role === "member" || a.role === "guest") {
+    args.push(a.tenant_id, a.user_id, parent.effective_permission);
+    clauses.push(directChildCanReadSql(
+      "r", a.role, args.length - 2, args.length - 1, args.length));
+  } else {
+    assert(a.role === "owner" || a.role === "admin", 403,
+      "Unknown membership role");
+  }
+  args.push(cursor.limit + 1);
+  const sql = "SELECT r.*,v.values,v.revision FROM resources r" +
+    " JOIN database_records v ON v.resource_id=r.id" +
+    " WHERE " + clauses.join(" AND ") +
+    " ORDER BY r.position,r.id LIMIT $" + args.length;
+  const found = (await q.query(sql, args)).rows;
+  const visible = await visibleDirectRecordChildren(
+    q, a, id, found.slice(0, cursor.limit));
+  const items = await Promise.all(visible.map(async (row) => ({
+    ...row,
+    values: await presentedRecordValues(q, a, d.properties, row.values),
+  })));
+  const has_more = found.length > cursor.limit;
+  const last = visible.at(-1);
+  const next_cursor = has_more && last
+    ? encodeDatabasePage({
+      ...cursor, after_pos: last.position, after_id: last.id,
+    }) : null;
+  return { items, has_more: Boolean(next_cursor), next_cursor };
+}
+
 export async function replaceDocument(
   q: Query,
   a: Actor,
