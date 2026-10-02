@@ -59,6 +59,19 @@ function Body({
       setSearching(false);
     }
   }
+  function changeBlock(kind: "paragraph" | "heading" | "bulletListItem" | "numberedListItem") {
+    if (readOnly) return;
+    const current = editor.getTextCursorPosition().block;
+    editor.updateBlock(current, kind === "heading"
+      ? { type: "heading", props: { level: 2 } }
+      : { type: kind });
+    editor.focus();
+  }
+  function toggleMark(mark: "bold" | "italic") {
+    if (readOnly) return;
+    editor.toggleStyles({ [mark]: true });
+    editor.focus();
+  }
   function insertPageLink(page: any) {
     if (readOnly) return;
     editor.focus();
@@ -70,6 +83,35 @@ function Body({
   }
   return (
     <>
+      {!readOnly && (
+        <div className="page-link-tools editor-format-tools"
+          role="toolbar" aria-label="Formatting">
+          <button type="button" className="button small-button"
+            aria-label="Bold selection" title="Toggle bold"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark("bold")}>Bold</button>
+          <button type="button" className="button small-button"
+            aria-label="Italic selection" title="Toggle italic"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark("italic")}>Italic</button>
+          <button type="button" className="button small-button"
+            aria-label="Heading 2" title="Convert active block to heading"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => changeBlock("heading")}>H2</button>
+          <button type="button" className="button small-button"
+            aria-label="Bulleted list" title="Convert active block to bullets"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => changeBlock("bulletListItem")}>Bullets</button>
+          <button type="button" className="button small-button"
+            aria-label="Numbered list" title="Convert active block to numbered list"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => changeBlock("numberedListItem")}>Numbers</button>
+          <button type="button" className="button small-button"
+            aria-label="Paragraph" title="Convert active block to paragraph"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => changeBlock("paragraph")}>Text</button>
+        </div>
+      )}
       {!readOnly && (
         <div className="page-link-tools">
           <button type="button" className="button small-button"

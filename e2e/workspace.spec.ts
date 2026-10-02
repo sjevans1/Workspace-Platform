@@ -1560,3 +1560,33 @@ test("W09b deployed browser requires explicit append-only target confirmation", 
   expect(afterRows.ok(),await afterRows.text()).toBeTruthy();
   expect((await afterRows.json())).toHaveLength(2);
 });
+
+
+test("W10a formatting toolbar creates persistent Core heading", async ({page}) => {
+  await login(page);
+  await page.getByRole("button",{name:"New page",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Create something new"});
+  await dialog.getByLabel("Name",{exact:true}).fill("W10a rich editor");
+  await dialog.getByRole("button",{name:"Create",exact:true}).click();
+  const id=new URL(page.url()).searchParams.get("page");
+  expect(id).toBeTruthy();
+  const editable=page.locator(".bn-editor");
+  await expect(editable).toBeVisible();
+  const toolbar=page.getByRole("toolbar",{name:"Formatting"});
+  await expect(toolbar.getByRole("button",{name:"Bold selection"})).toBeVisible();
+  await expect(toolbar.getByRole("button",{name:"Italic selection"})).toBeVisible();
+  await editable.click();
+  await page.keyboard.type("W10a heading persists");
+  await toolbar.getByRole("button",{name:"Heading 2"}).click();
+  await expect.poll(async()=>{
+    const res=await page.request.get(`/api/v1/pages/${id}/content`);
+    if(!res.ok())return "not-ready";
+    const content=await res.json();
+    return content.blocks?.find((b:any)=>b.type==="heading")?.props?.level === 2
+      ? "heading-2" : "pending";
+  },{timeout:20000}).toBe("heading-2");
+  await page.reload();
+  await expect(page.getByRole("toolbar",{name:"Formatting"})).toBeVisible();
+  await expect(page.locator(".bn-editor")).toContainText("W10a heading persists");
+  await expect(page.locator(".bn-editor h2")).toContainText("W10a heading persists");
+});
