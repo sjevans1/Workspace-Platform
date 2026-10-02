@@ -1522,4 +1522,41 @@ test("W09b deployed browser requires explicit append-only target confirmation", 
   const rows = await rowsResponse.json();
   expect(rows).toHaveLength(1);
   expect(rows[0].values.name).toBe("New item");
+
+  // W09c: the deployed HTTP endpoint returns the same durable job when an
+  // acknowledgement is lost or a completed CSV request is retried.
+  const csv = "Name\\nRetry once\\n";
+  const previewResponse = await page.request.post("/api/v1/imports/preview",{
+    headers,data:{parent_id:space.id,target_database_id:database.id,content:csv},
+  });
+  expect(previewResponse.ok(),await previewResponse.text()).toBeTruthy();
+  const proposal = await previewResponse.json();
+  const importBody = {
+    parent_id:space.id,target_database_id:database.id,
+    content:csv,format:"csv",name:"Browser replay job",
+    mapping:proposal.mapping,
+    expected_schema_digest:proposal.target.schema_digest,
+    existing_mode:"append",idempotency_key:crypto.randomUUID(),
+  };
+  const send = async () => {
+    const response=await page.request.post("/api/v1/imports",{
+      headers,data:importBody,
+    });
+    expect(response.ok(),await response.text()).toBeTruthy();
+    return response.json();
+  };
+  const first=await send();
+  const duplicate=await send();
+  expect(duplicate.id).toBe(first.id);
+  await expect.poll(async () => {
+    const res=await page.request.get("/api/v1/jobs/"+first.id);
+    if (!res.ok()) return "unavailable";
+    return (await res.json()).status;
+  },{timeout:30000}).toBe("completed");
+  const afterCompletion=await send();
+  expect(afterCompletion).toEqual({id:first.id,status:"completed"});
+  const afterRows=await page.request.get(
+    `/api/v1/databases/${database.id}/records`);
+  expect(afterRows.ok(),await afterRows.text()).toBeTruthy();
+  expect((await afterRows.json())).toHaveLength(2);
 });
