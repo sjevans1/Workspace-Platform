@@ -3752,7 +3752,7 @@ test("W08d: 25 concurrent principals remain tenant/ACL isolated across cursor pa
   const secondPages = await Promise.all(
     actors.map((actor, i) =>
       pageFor(actor, firstPages[i].next_cursor)));
-  const hidden = new Set(ids.slice(0, denied));
+  const hidden = new Set<string>(ids.slice(0, denied));
   for (let i = 0; i < actors.length; i++) {
     const first = firstPages[i], second = secondPages[i];
     assert.equal(first.items.length, 20);
