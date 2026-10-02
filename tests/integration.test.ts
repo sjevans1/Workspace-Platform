@@ -3880,6 +3880,7 @@ test("W08e: 10k mixed-ACL records under 25 sessions, sorted pages, search, expor
   ] });
   const sortedUrl = "/databases/" + dataset.id +
     "/records/page?view=" + view.id + "&limit=50";
+  const fixtureMs = Date.now() - insertionStarted;
   const wallStart = Date.now(), cpuStart = process.cpuUsage(),
     rssBefore = process.memoryUsage().rss;
   const latencies: number[] = [];
@@ -3945,7 +3946,7 @@ test("W08e: 10k mixed-ACL records under 25 sessions, sorted pages, search, expor
     sessions: actors.length, concurrent_first_page_requests: 25,
     total_page_requests: latencies.length,
     relation_picker_requests: candidates.length, exports: exported.length,
-    edits: 5, fixture_ms: Date.now() - insertionStarted,
+    edits: 5, fixture_ms: fixtureMs,
     workload_ms: totalMs,
     page_p50_ms: percentile(0.5), page_p95_ms: percentile(0.95),
     page_p99_ms: percentile(0.99),
