@@ -1612,16 +1612,26 @@ function dataRoutes(
       // Source target database has been permission checked. Every candidate
       // record is an immediate child; use indexed personal/wildcard grants
       // instead of re-running ancestry for all search matches.
-      const gate = directChildCanReadSql("r", a.role, 3, 4, 5);
-      const rows = (await q.query(
-        "SELECT r.id,r.title FROM resources r WHERE r.kind='record'" +
-        " AND r.parent_id=$1 AND r.deleted_at IS NULL" +
+      const bind: any[] = [target.id, search];
+      let gate = "TRUE";
+      if (a.role === "member" || a.role === "guest") {
+        bind.push(a.tenant_id, a.user_id, target.effective_permission);
+        gate = directChildCanReadSql("r", a.role,
+          bind.length - 2, bind.length - 1, bind.length);
+      } else {
+        assert(a.role === "owner" || a.role === "admin", 403,
+          "Unknown membership role");
+      }
+      bind.push(limit + 1, offset);
+      // Bind positions must be continuous for both member and admin; no
+      // unused untyped parameters in the trusted owner fast path.
+      const sql = "SELECT r.id,r.title FROM resources r" +
+        " WHERE r.kind='record' AND r.parent_id=$1" +
+        " AND r.deleted_at IS NULL" +
         " AND position($2 in lower(r.title))>0" +
-        " AND " + gate +
-        " ORDER BY lower(r.title),r.id LIMIT $6 OFFSET $7",
-        [target.id, search, a.tenant_id, a.user_id,
-          target.effective_permission, limit + 1, offset],
-      )).rows;
+        " AND " + gate + " ORDER BY lower(r.title),r.id LIMIT $" +
+        String(bind.length - 1) + " OFFSET $" + String(bind.length);
+      const rows = (await q.query(sql, bind)).rows;
       // Defense in depth; visible() must agree with the SQL predicate.
       const readable = await visible(q, a, rows);
       return {
