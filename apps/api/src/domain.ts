@@ -284,31 +284,17 @@ export async function records(
       key = `(${key})::numeric`;
     return `${key} ${s.direction === "desc" ? "DESC" : "ASC"} NULLS LAST`;
   });
-  // W08 correctness baseline: ACL check precedes visible LIMIT/OFFSET.
-  // Existing raw SQL offsets returned short/empty pages when earlier rows
-  // were restricted. Scan stable internal batches; return only visible rows.
-  // Indexed ACL filtering and high-volume performance remain W08 gates.
-  const batchSize = Math.min(500, Math.max(100, limit * 3));
-  const sql = `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT $${p.length + 1} OFFSET $${p.length + 2}`;
-  const allowedRows: any[] = [];
-  let rawOffset = 0;
-  let visibleSkipped = 0;
-  while (allowedRows.length < limit) {
-    const candidates = (await q.query(sql,
-      [...p, batchSize, rawOffset])).rows;
-    if (!candidates.length) break;
-    const authorized = await visible(q, a, candidates);
-    for (const row of authorized) {
-      if (visibleSkipped < offset) {
-        visibleSkipped++;
-        continue;
-      }
-      allowedRows.push(row);
-      if (allowedRows.length >= limit) break;
-    }
-    rawOffset += candidates.length;
-    if (candidates.length < batchSize) break;
-  }
+  // The SQL permission predicate matches evaluate() under tenant RLS, and
+  // filters inaccessible records BEFORE SQL ORDER/LIMIT/OFFSET. This avoids
+  // underfilled pages and raw hidden-row offsets. Keep the application ACL
+  // recheck on the bounded returned page as defense in depth.
+  p.push(a.user_id, a.role);
+  const actorIndex = p.length - 1, roleIndex = p.length;
+  p.push(limit, offset);
+  const allowedRows = await visible(q, a, (await q.query(
+    `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} AND workspace_can_read_resource(r.id,$${actorIndex}::uuid,$${roleIndex}::text) ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT $${p.length - 1} OFFSET $${p.length}`,
+    p,
+  )).rows);
   return Promise.all(allowedRows.map(async (row) => ({
     ...row,
     values: await presentedRecordValues(q, a, d.properties, row.values),
