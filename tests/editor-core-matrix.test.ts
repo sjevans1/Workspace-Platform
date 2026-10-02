@@ -120,3 +120,32 @@ test("W10c1 default BlockNote 0.55 documents migrate into extended shared schema
     assert.deepEqual(project(replay).blocks,canonical.blocks);
   } finally { legacyDoc.destroy(); replay.destroy(); }
 });
+
+
+test("W10c2 explicit custom block identities and rich marks survive Yjs snapshots", () => {
+  const ids=[
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+    "33333333-3333-4333-8333-333333333333",
+  ];
+  const original:any[]=[
+    {id:ids[0],type:"heading",props:{level:3},content:"Stable title"},
+    {id:ids[1],type:"callout",props:{variant:"success"},content:[
+      {type:"text",text:"Bold",styles:{bold:true}},
+      {type:"text",text:" underlined",styles:{underline:true}},
+    ]},
+    {id:ids[2],type:"divider"},
+  ];
+  const first=new Y.Doc();
+  const version=new Y.Doc();
+  try{
+    Y.applyUpdate(first,blocksToState(original));
+    const committed=project(first);
+    assert.deepEqual(committed.blocks.map((b:any)=>b.id),ids);
+    assert.equal((committed.blocks[1] as any).props.variant,"success");
+    assert.match(JSON.stringify(committed.blocks[1]),/"underline":true/);
+    Y.applyUpdate(version,committed.state);
+    const reopened=project(version);
+    assert.deepEqual(reopened.blocks,committed.blocks);
+  }finally{first.destroy();version.destroy();}
+});
