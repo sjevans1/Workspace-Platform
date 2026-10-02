@@ -1568,6 +1568,12 @@ test("W10a formatting toolbar creates persistent Core heading", async ({page}) =
   const dialog=page.getByRole("dialog",{name:"Create something new"});
   await dialog.getByLabel("Name",{exact:true}).fill("W10a rich editor");
   await dialog.getByRole("button",{name:"Create",exact:true}).click();
+  // Creating a page is asynchronous; wait for the committed navigation
+  // rather than reading the URL in the same browser turn as the click.
+  await expect(page.getByLabel("Page title",{exact:true}))
+    .toHaveValue("W10a rich editor");
+  await expect.poll(() => new URL(page.url()).searchParams.get("page"))
+    .not.toBeNull();
   const id=new URL(page.url()).searchParams.get("page");
   expect(id).toBeTruthy();
   const editable=page.locator(".bn-editor");
