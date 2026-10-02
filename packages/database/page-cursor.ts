@@ -9,6 +9,7 @@ const schema = z.object({
   v: z.literal(1),
   tenant: z.uuid(),
   principal: z.uuid(),
+  role: z.enum(["owner", "admin", "member", "guest"]),
   database: z.uuid(),
   view: z.uuid().nullable(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
@@ -39,12 +40,13 @@ function secret() {
 }
 
 export function newDatabasePageCursor(
-  tenant: string, principal: string, database: string, view: string | null,
+  tenant: string, principal: string,
+  role: DatabasePageCursor["role"], database: string, view: string | null,
   fingerprint: string, limit: number, position: number, after: string,
   now = Math.floor(Date.now() / 1000),
 ): DatabasePageCursor {
   return schema.parse({
-    v: 1, tenant, principal, database, view, fingerprint, limit,
+    v: 1, tenant, principal, role, database, view, fingerprint, limit,
     position, after, issued: now, expires: now + lifetime,
   });
 }
@@ -64,7 +66,8 @@ export function encodeDatabasePageCursor(value: DatabasePageCursor) {
 
 export function decodeDatabasePageCursor(
   value: string, context: {
-    tenant: string; principal: string; database: string; view: string | null;
+    tenant: string; principal: string; role: DatabasePageCursor["role"];
+    database: string; view: string | null;
     fingerprint: string; limit: number;
   }, now = Math.floor(Date.now() / 1000),
 ): DatabasePageCursor {
@@ -88,6 +91,7 @@ export function decodeDatabasePageCursor(
     ]).toString("utf8")));
     if (state.tenant !== context.tenant ||
         state.principal !== context.principal ||
+        state.role !== context.role ||
         state.database !== context.database ||
         state.view !== context.view ||
         state.fingerprint !== context.fingerprint ||
