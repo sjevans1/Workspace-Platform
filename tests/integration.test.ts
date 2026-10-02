@@ -3138,4 +3138,21 @@ test("W08 permission-first pages: accessible records are not lost behind hidden 
   const afterGrant = await ok("GET", path + "&offset=0", undefined, peer);
   assert.deepEqual(afterGrant.map((row: any) => row.id),
     [resourceIds[0], resourceIds[3]]);
+  const predicate = await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource(id,$2::uuid,'member') allowed" +
+    " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position",
+    [resourceIds, peerId]));
+  assert.deepEqual(predicate.rows.map((row: any) => row.allowed),
+    [true, false, false, true, true, true, true],
+    "database predicate must honor current per-resource denials and grants");
+  const guestDenied = await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'guest') allowed",
+    [dataset.id, peerId]));
+  assert.equal(guestDenied.rows[0].allowed, false,
+    "guest cannot acquire inherited access without an explicit ancestor grant");
+  const foreignTenant = await db.tenant(other.tenant, (q) => q.query(
+    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') allowed",
+    [dataset.id, peerId]));
+  assert.equal(foreignTenant.rows[0].allowed, false,
+    "SQL access predicate stays restricted to current tenant RLS");
 });
