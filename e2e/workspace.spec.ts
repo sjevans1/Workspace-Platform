@@ -1402,4 +1402,30 @@ test("W08b deployed browser: encrypted cursor paging and Next/Previous round tri
   await backward.click();
   await expect(table).toHaveCount(100);
   await expect(forward).toBeEnabled();
+
+  // Reuse the real 102-row deployment fixture to verify that a saved
+  // descending scalar sort uses keyset navigation rather than raw OFFSET.
+  const sortedResponse = await page.request.post(
+    "/api/v1/databases/" + dataset.id + "/views", {
+      headers, data: {
+        name: "Descending title W08c",
+        config: { type: "table", filters: [], sort: [
+          { property: "name", direction: "desc" },
+        ] },
+      },
+    });
+  expect(sortedResponse.ok(), await sortedResponse.text()).toBeTruthy();
+  const savedSort = await sortedResponse.json();
+  await page.reload();
+  await page.getByRole("combobox", { name: "Saved view" })
+    .selectOption(savedSort.id);
+  await expect(table).toHaveCount(100);
+  await expect(table.first()).toContainText("W08b Item 101");
+  await forward.click();
+  await expect(table).toHaveCount(2);
+  await expect(table.first()).toContainText("W08b Item 001");
+  await expect(table.last()).toContainText("W08b Item 000");
+  await backward.click();
+  await expect(table).toHaveCount(100);
+  await expect(table.first()).toContainText("W08b Item 101");
 });
