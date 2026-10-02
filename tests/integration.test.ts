@@ -3456,6 +3456,19 @@ test("W08b native: encrypted keyset skips hidden records, scopes actor and inval
     encodeURIComponent(firstCursor!.slice(0, -1) + "!"), undefined, peer))
     .statusCode, 400);
 
+  // An issued cursor is bound to the verified membership role; switching
+  // member→guest→member must invalidate the token for the changed role,
+  // while the SQL ACL gate separately enforces current permissions.
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET role='guest' WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, peerId]));
+  const staleRole = await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, peer);
+  assert.equal(staleRole.statusCode, 400);
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET role='member' WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, peerId]));
+
   const saved = await ok("POST", "/databases/" + dataset.id + "/views", {
     name: "Cursor filter",
     config: { type: "table", filters: [{
