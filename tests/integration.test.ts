@@ -3385,5 +3385,199 @@ test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => 
     }));
     assert.ok(exportElapsed < 30000,
       "W08 large visible-only export exceeded provisional 30s budget");
+
+    const cursorStarted = Date.now();
+    const gathered: string[] = [];
+    let continuation: string | null = null;
+    const cursorPath = "/databases/" + dataset.id + "/records/page?limit=100";
+    for (let segment = 0; segment < size / 200; segment++) {
+      const response = await ok("GET", cursorPath +
+        (continuation ? "&cursor=" + encodeURIComponent(continuation) : ""),
+        undefined, peer);
+      assert.equal(response.items.length, 100);
+      gathered.push(...response.items.map((item: any) => item.id));
+      continuation = response.next_cursor;
+      assert.equal(response.has_more, segment < size / 200 - 1);
+      if (response.has_more) assert.ok(continuation);
+      else assert.equal(continuation, null);
+    }
+    assert.deepEqual(gathered, ids.slice(size / 2),
+      "keyset traversal includes every readable record exactly once");
+    const cursorMs = Date.now() - cursorStarted;
+    console.info("W08_KEYSET_BENCH " + JSON.stringify({
+      size, hidden: size / 2, visible: gathered.length,
+      pages: size / 200, elapsed_ms: cursorMs,
+    }));
+    assert.ok(cursorMs < 30000,
+      "W08 " + size + "row keyset traversal exceeded provisional CI budget");
   }
+});
+
+
+test("W08b native: encrypted keyset skips hidden records, scopes actor and invalidates changed views", async () => {
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08b encrypted pages",
+  });
+  for (let i = 0; i < 8; i++)
+    await ok("POST", "/databases/" + dataset.id + "/records", {
+      values: { name: "W08b Row " + i },
+    });
+  const base = "/databases/" + dataset.id + "/records";
+  const all = await ok("GET", base + "?limit=30");
+  assert.equal(all.length, 8);
+  const hiddenIds = [all[0].id, all[3].id];
+  const peerId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08b peer')",
+      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
+      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
+    for (const hidden of hiddenIds)
+      await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)", [owner.tenant, hidden, peerId]);
+  });
+  const peerToken = await db.tenant(owner.tenant, q =>
+    createSession(q, owner.tenant, peerId));
+  const peer = { cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken) };
+  const readable = all.map((x: any) => x.id)
+    .filter((x: string) => !hiddenIds.includes(x));
+  const url = base + "/page?limit=2";
+  const returned: string[] = [];
+  let cursor: string | null = null;
+  let firstCursor: string | null = null;
+  for (let page = 0; page < 4; page++) {
+    const response = await ok("GET", url +
+      (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+      undefined, peer);
+    returned.push(...response.items.map((x: any) => x.id));
+    if (page === 0) {
+      firstCursor = response.next_cursor;
+      assert.equal(response.has_more, true);
+      assert.ok(firstCursor?.startsWith("db-page-v1."));
+      for (const hidden of hiddenIds)
+        assert.ok(!firstCursor!.includes(hidden));
+    }
+    if (!response.has_more) {
+      assert.equal(response.next_cursor, null);
+      break;
+    }
+    cursor = response.next_cursor;
+  }
+  assert.deepEqual(returned, readable,
+    "cursor continues over readable order without duplicates or hidden slots");
+  assert.equal(new Set(returned).size, readable.length);
+
+  // Cursor does not authorize reading in another user or tenant.
+  assert.equal((await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!))).statusCode, 400);
+  assert.equal((await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, other)).statusCode, 400);
+  assert.equal((await req("GET", url + "&limit=3&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, peer)).statusCode, 400);
+  assert.equal((await req("GET", url + "&offset=1", undefined, peer))
+    .statusCode, 400);
+  assert.equal((await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!.slice(0, -1) + "!"), undefined, peer))
+    .statusCode, 400);
+
+  // An issued cursor is bound to the verified membership role; switching
+  // member→guest→member must invalidate the token for the changed role,
+  // while the SQL ACL gate separately enforces current permissions.
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET role='guest' WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, peerId]));
+  const staleRole = await req("GET", url + "&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, peer);
+  assert.equal(staleRole.statusCode, 400);
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET role='member' WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, peerId]));
+
+  const saved = await ok("POST", "/databases/" + dataset.id + "/views", {
+    name: "Cursor filter",
+    config: { type: "table", filters: [{
+      property: "name", op: "contains", value: "W08b Row",
+    }], sort: [] },
+  });
+  const filteredUrl = url + "&view=" + saved.id;
+  const filteredFirst = await ok("GET", filteredUrl, undefined, peer);
+  assert.ok(filteredFirst.next_cursor);
+  assert.equal((await req("GET", filteredUrl + "&cursor=" +
+    encodeURIComponent(firstCursor!), undefined, peer)).statusCode, 400);
+  await ok("PATCH", "/databases/" + dataset.id + "/views/" + saved.id, {
+    name: "Modified cursor filter",
+    config: { type: "table", filters: [{
+      property: "name", op: "eq", value: "W08b Row 999",
+    }], sort: [] },
+  });
+  assert.equal((await req("GET", filteredUrl + "&cursor=" +
+    encodeURIComponent(filteredFirst.next_cursor), undefined, peer))
+    .statusCode, 400, "changed view invalidates encrypted cursor digest");
+
+  // A fresh ACL change is honored on the next cursor read.
+  const firstOwnerPage = await ok("GET", url);
+  const expectedNext = (await ok("GET", url + "&cursor=" +
+    encodeURIComponent(firstOwnerPage.next_cursor))).items;
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE resources SET deleted_at=now() WHERE id=$1", [expectedNext[0].id]));
+  const afterDelete = await ok("GET", url + "&cursor=" +
+    encodeURIComponent(firstOwnerPage.next_cursor));
+  assert.ok(afterDelete.items.every((x: any) => x.id !== expectedNext[0].id),
+    "cursor must never bypass deletion or ACL updates");
+});
+
+
+test("W08b calendar cursor: month binding, date filtering and custom-sort refusal", async () => {
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08b calendar",
+  });
+  const dbPath = "/databases/" + dataset.id;
+  await ok("PATCH", dbPath, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "due", name: "Due", type: "date" },
+  ] });
+  for (const [name, due] of [
+    ["March one", "2026-03-01"],
+    ["March two", "2026-03-31"],
+    ["April one", "2026-04-01"],
+  ]) await ok("POST", dbPath + "/records", { values: { name, due } });
+  const saved = await ok("POST", dbPath + "/views", {
+    name: "Calendar", config: {
+      type: "calendar", dateBy: "due", filters: [], sort: [],
+    },
+  });
+  const base = dbPath + "/records/page?view=" + saved.id + "&limit=1";
+  const march = base + "&month=2026-03";
+  const first = await ok("GET", march);
+  assert.equal(first.items.length, 1);
+  assert.equal(first.has_more, true);
+  assert.ok(first.next_cursor);
+  const second = await ok("GET", march + "&cursor=" +
+    encodeURIComponent(first.next_cursor));
+  assert.equal(second.items.length, 1);
+  assert.equal(second.has_more, false);
+  assert.equal(second.next_cursor, null);
+  assert.deepEqual([first.items[0].title, second.items[0].title].sort(),
+    ["March one", "March two"]);
+  const badMonth = await req("GET", base + "&month=2026-04&cursor=" +
+    encodeURIComponent(first.next_cursor));
+  assert.equal(badMonth.statusCode, 400);
+  const april = await ok("GET", base + "&month=2026-04");
+  assert.deepEqual(april.items.map((x: any) => x.title), ["April one"]);
+  assert.equal(april.has_more, false);
+  assert.equal((await req("GET", dbPath + "/records/page?view=" + saved.id))
+    .statusCode, 400, "calendar requires explicit month");
+
+  const sorted = await ok("POST", dbPath + "/views", {
+    name: "Custom sort", config: {
+      type: "table", filters: [],
+      sort: [{ property: "name", direction: "asc" }],
+    },
+  });
+  assert.equal((await req("GET", dbPath + "/records/page?view=" + sorted.id))
+    .statusCode, 400, "custom sort requires typed cursor comparator");
+  const legacy = await ok("GET", dbPath + "/records?view=" + sorted.id);
+  assert.equal(legacy.length, 3,
+    "legacy bounded offset remains available for custom-sorted views");
 });

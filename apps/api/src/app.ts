@@ -12,6 +12,9 @@ import { z } from "zod";
 import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
 import { stringify } from "csv-stringify/sync";
 import { Database, one, type Query } from "../../../packages/database/index.ts";
+import { databasePageFingerprint, decodeDatabasePageCursor,
+  encodeDatabasePageCursor, newDatabasePageCursor
+} from "../../../packages/database/page-cursor.ts";
 import { oidcFromEnv, type OidcProvider } from "../../../packages/auth/oidc.ts";
 import { sealTenantOidcSecret, validateTenantOidcRegistration } from "../../../packages/auth/tenant-provider.ts";
 import {
@@ -1673,6 +1676,80 @@ function dataRoutes(
       return { ok: true };
     },
     "databases.write",
+  );
+  route(
+    "GET",
+    "/databases/:id/records/page",
+    "Read permission-filtered database records with an encrypted keyset cursor",
+    async (q, a, r) => {
+      const params = query(r), databaseId = id(r);
+      assert(Object.keys(params).every((key) =>
+        ["view", "month", "limit", "cursor"].includes(key)), 400,
+        "Unsupported database cursor query parameter");
+      const size = params.limit === undefined ? 100 : Number(params.limit);
+      assert(Number.isSafeInteger(size) && size >= 1 && size <= 200, 400,
+        "Cursor page limit must be an integer from 1 to 200");
+      let config = view.parse({ type: "table" });
+      const viewId = params.view ? uuid.parse(params.view) : null;
+      if (viewId) {
+        const stored = await one(q,
+          "SELECT config FROM database_views WHERE id=$1 AND database_id=$2",
+          [viewId, databaseId]);
+        assert(stored, 404, "View not found");
+        config = view.parse(stored.config);
+      }
+      // W08b supports default (position,id) ordering. A custom view sort
+      // needs a typed null/direction-aware keyset before it can be accepted.
+      assert(config.sort.length === 0, 400,
+        "Custom view sorting requires the legacy bounded page API");
+      if (config.type === "calendar") {
+        assert(typeof params.month === "string" &&
+          /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(params.month), 400,
+          "Calendar view requires YYYY-MM month");
+        await requireAccess(q, a, databaseId);
+        const definition = await one(q,
+          "SELECT properties FROM databases WHERE resource_id=$1",
+          [databaseId]);
+        assert(definition?.properties.some((field: any) =>
+          field.id === config.dateBy && field.type === "date"), 400,
+          "Calendar view requires a valid date property");
+        const begin = new Date(params.month + "-01T00:00:00.000Z");
+        const last = new Date(begin.getTime() - 86400000)
+          .toISOString().slice(0, 10);
+        const next = new Date(Date.UTC(begin.getUTCFullYear(),
+          begin.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
+        config = {
+          ...config, filters: [
+            ...config.filters,
+            { property: config.dateBy!, op: "after", value: last },
+            { property: config.dateBy!, op: "before", value: next },
+          ],
+        };
+      } else {
+        assert(params.month === undefined, 400,
+          "Month filter requires a calendar view");
+      }
+      const fingerprint = databasePageFingerprint(config, params.month);
+      const state = params.cursor === undefined ? null :
+        decodeDatabasePageCursor(params.cursor, {
+          tenant: a.tenant_id, principal: a.user_id, role: a.role,
+          database: databaseId, view: viewId, fingerprint, limit: size,
+        });
+      const pageRows = await records(q, a, databaseId, config, 0, size + 1,
+        state ? { position: state.position, id: state.after } : undefined);
+      const hasMore = pageRows.length > size;
+      const items = pageRows.slice(0, size);
+      const tail = items.at(-1);
+      assert(!hasMore || tail && Number.isFinite(tail.position), 500,
+        "Invalid database record position");
+      const nextCursor = hasMore && tail
+        ? encodeDatabasePageCursor(newDatabasePageCursor(
+          a.tenant_id, a.user_id, a.role, databaseId, viewId,
+          fingerprint, size, tail.position, tail.id))
+        : null;
+      return { items, next_cursor: nextCursor, has_more: hasMore };
+    },
+    "databases.read",
   );
   route(
     "GET",
