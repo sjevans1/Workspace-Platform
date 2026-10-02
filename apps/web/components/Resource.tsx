@@ -309,7 +309,7 @@ export default function Resource({
           )}
         </>
       ) : node.kind === "database" ? (
-        <Database id={id} editable={editable} />
+        <Database key={id} id={id} editable={editable} />
       ) : (
         <>
           {record && (
