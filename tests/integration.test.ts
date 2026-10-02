@@ -3809,3 +3809,154 @@ test("W08d: 25 concurrent principals remain tenant/ACL isolated across cursor pa
   assert.ok(!restarted.items.some((row: any) => row.id === ids[129]),
     "new pagination never bypasses a revoked row");
 });
+
+test("W08e: 10k mixed-ACL records under 25 sessions, sorted pages, search, export and edits", async () => {
+  const size = 10000, hiddenCount = 5000;
+  const dataset = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W08e concurrent large table",
+  });
+  await ok("PATCH", "/databases/" + dataset.id, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "score", name: "Score", type: "number" },
+  ] });
+  const ids: string[] = Array.from({ length: size }, () => randomUUID());
+  const userIds: string[] = Array.from({ length: 25 }, () => randomUUID());
+  const insertionStarted = Date.now();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
+      " SELECT x.id,$2::uuid,$3::uuid,'record'," +
+      " 'W08e item '||x.n::text,x.n::float8" +
+      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+      [ids, owner.tenant, dataset.id]);
+    await q.query(
+      "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
+      " SELECT $2::uuid,r.id,$3::uuid," +
+      " jsonb_build_object('name',r.title,'score'," +
+      " CASE WHEN r.position::int%7=0 THEN NULL" +
+      " ELSE r.position::int%101 END)" +
+      " FROM resources r WHERE r.id=ANY($1::uuid[])",
+      [ids, owner.tenant, dataset.id]);
+    await q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " SELECT $2::uuid,x.id,'*',0" +
+      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+      " WHERE x.n<=$3",
+      [ids, owner.tenant, hiddenCount]);
+    for (let i = 0; i < userIds.length; i++) {
+      const uid = userIds[i];
+      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
+        [uid, uid + "@w08e.example.test", "W08e member " + i]);
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role)" +
+        " VALUES($1,$2,'member')", [owner.tenant, uid]);
+      if (i % 2)
+        await q.query(
+          "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+          " VALUES($1,$2,$3,0)", [owner.tenant, ids[hiddenCount], uid]);
+    }
+  });
+  const actors = await Promise.all(userIds.map(async (uid) => {
+    const token = await db.tenant(owner.tenant,
+      q => createSession(q, owner.tenant, uid));
+    return { cookie: "workspace_session=" + token, csrf: csrf(token) };
+  }));
+  const view = await ok("POST",
+    "/databases/" + dataset.id + "/views", {
+      name: "Numeric score descending",
+      config: { type: "table", filters: [], sort: [
+        { property: "score", direction: "desc" },
+        { property: "name", direction: "asc" },
+      ] },
+    });
+  const source = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id,
+    title: "W08e relation candidate workload",
+  });
+  await ok("PATCH", "/databases/" + source.id, { properties: [
+    { id: "name", name: "Name", type: "title" },
+    { id: "linked", name: "Linked", type: "relation",
+      target_database_id: dataset.id },
+  ] });
+  const sortedUrl = "/databases/" + dataset.id +
+    "/records/page?view=" + view.id + "&limit=50";
+  const wallStart = Date.now(), cpuStart = process.cpuUsage(),
+    rssBefore = process.memoryUsage().rss;
+  const latencies: number[] = [];
+  const getPage = async (actor: any, cursor?: string) => {
+    const t = Date.now();
+    const response = await ok("GET", sortedUrl +
+      (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+      undefined, actor);
+    latencies.push(Date.now() - t);
+    return response;
+  };
+  const firstRequests = actors.map(actor => getPage(actor));
+  const waitingObserved = db.pool.waitingCount;
+  const first = await Promise.all(firstRequests);
+  const second = await Promise.all(actors.map((actor, i) =>
+    getPage(actor, first[i].next_cursor)));
+  const globallyHidden = new Set<string>(ids.slice(0, hiddenCount));
+  for (let i = 0; i < actors.length; i++) {
+    const rows = [...first[i].items, ...second[i].items];
+    assert.equal(rows.length, 100);
+    assert.equal(new Set(rows.map((r: any) => r.id)).size, 100,
+      "stable multikey cursor should not duplicate unchanged records");
+    assert.ok(rows.every((r: any) => !globallyHidden.has(r.id)),
+      "no hidden record may leak under 25-session concurrent access");
+    if (i % 2) assert.ok(!rows.some((r: any) =>
+      r.id === ids[hiddenCount]), "personal deny wins per actor");
+    assert.equal(first[i].has_more, true);
+    assert.equal(second[i].has_more, true);
+  }
+  const pickerUrl = "/databases/" + source.id +
+    "/relation-candidates?property=linked&search=" +
+    encodeURIComponent("W08e item 9999") + "&limit=10";
+  const candidates = await Promise.all(actors.slice(0, 10).map(actor =>
+    ok("GET", pickerUrl, undefined, actor)));
+  for (const candidatesForActor of candidates)
+    assert.deepEqual(candidatesForActor.items.map((r: any) => r.id),
+      [ids[9998]], "relation picker must stay RLS/ACL filtered at 10k");
+
+  const exported = await Promise.all(actors.slice(0, 2).map(actor =>
+    ok("GET", "/resources/" + dataset.id + "/export?format=json",
+      undefined, actor)));
+  assert.equal(exported[0].records.length, 5000);
+  assert.equal(exported[1].records.length, 4999);
+  for (const result of exported)
+    assert.ok(result.records.every((r: any) => !globallyHidden.has(r.id)),
+      "large concurrent exports cannot reveal globally hidden record IDs");
+
+  await Promise.all(Array.from({ length: 5 }, (_, i) =>
+    ok("PATCH", "/records/" + ids[7000 + i], {
+      values: { name: "W08e updated " + i }, expected_revision: 1,
+    })));
+  assert.notEqual((await req("GET", sortedUrl, undefined, other)).statusCode,
+    200, "second tenant must never see first tenant results");
+
+  const cpu = process.cpuUsage(cpuStart), rssAfter = process.memoryUsage().rss;
+  const totalMs = Date.now() - wallStart;
+  latencies.sort((a, b) => a - b);
+  const percentile = (p: number) =>
+    latencies[Math.min(latencies.length - 1,
+      Math.ceil(p * latencies.length) - 1)];
+  console.info("W08_10K_CONCURRENT_BENCH " + JSON.stringify({
+    rows: size, hidden_rows: hiddenCount,
+    sessions: actors.length, concurrent_first_page_requests: 25,
+    total_page_requests: latencies.length,
+    relation_picker_requests: candidates.length, exports: exported.length,
+    edits: 5, fixture_ms: Date.now() - insertionStarted,
+    workload_ms: totalMs,
+    page_p50_ms: percentile(0.5), page_p95_ms: percentile(0.95),
+    page_p99_ms: percentile(0.99),
+    node_cpu_user_ms: Math.round(cpu.user / 1000),
+    node_cpu_system_ms: Math.round(cpu.system / 1000),
+    node_rss_before_mib: Math.round(rssBefore / 1048576),
+    node_rss_after_mib: Math.round(rssAfter / 1048576),
+    pg_pool_max: 12, pg_pool_total: db.pool.totalCount,
+    pg_pool_idle: db.pool.idleCount,
+    pg_waiting_after_start: waitingObserved,
+  }));
+  assert.ok(totalMs < 60000,
+    "10k/25-session provisional native CI qualification exceeded 60s");
+});
