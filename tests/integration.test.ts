@@ -3961,3 +3961,79 @@ test("W08e: 10k mixed-ACL records under 25 sessions, sorted pages, search, expor
   assert.ok(totalMs < 60000,
     "10k/25-session provisional native CI qualification exceeded 60s");
 });
+
+
+test("W09a permissioned CSV preview and atomically mapped worker import", async () => {
+  const original = "Name,Quantity,Due,Checked,Extra\n" +
+    "First,20,2026-10-01,true,retained\n" +
+    "Second,0,2026-10-02,false,unused";
+  const route = "/imports/preview";
+  const preview = await ok("POST", route, {
+    parent_id: space.id, content: original,
+  });
+  assert.equal(preview.row_count, 2);
+  assert.deepEqual(preview.mapping.map((v:any)=>v.type),
+    ["title","number","date","checkbox","text"]);
+  assert.equal(preview.sample.length, 2);
+  assert.equal((await req("POST", route, {
+    parent_id: randomUUID(), content: original,
+  })).statusCode, 404, "unknown parent cannot be previewed");
+  assert.notEqual((await req("POST", route, {
+    parent_id: space.id, content: original,
+  }, other)).statusCode, 200, "foreign tenant cannot inspect parent");
+  assert.equal((await req("POST", route, {
+    parent_id: space.id, content: "Name,Name\nA,B",
+  })).statusCode, 400, "duplicate heading fails before queue");
+  const mapping = preview.mapping.map((m: any, i: number) => ({
+    ...m, id: "mapped" + i, skip: i === 4,
+  }));
+  const queued = await ok("POST", "/imports", {
+    parent_id: space.id, name: "W09 typed CSV",
+    format: "csv", content: original, mapping,
+  });
+  assert.equal(queued.status, "pending");
+  await tick(db);
+  const job = await ok("GET", "/jobs/" + queued.id);
+  assert.equal(job.status, "completed", JSON.stringify(job.result));
+  const recordUrl = "/databases/" + job.result.resource_id + "/records";
+  const created = await ok("GET", recordUrl);
+  assert.equal(created.length, 2);
+  assert.deepEqual(created.map((r:any)=>({
+    name:r.values.mapped0, quantity:r.values.mapped1,
+    due:r.values.mapped2, checked:r.values.mapped3,
+  })), [
+    {name:"First",quantity:20,due:"2026-10-01",checked:true},
+    {name:"Second",quantity:0,due:"2026-10-02",checked:false},
+  ]);
+  assert.ok(created.every((r:any)=>r.values.mapped4===undefined),
+    "skipped columns never enter database storage");
+  const copied = await ok("GET", "/databases/" + job.result.resource_id);
+  assert.deepEqual(copied.properties.map((p:any)=>p.type),
+    ["title","number","date","checkbox"]);
+  assert.equal((await req("GET", "/jobs/" + queued.id,undefined,other))
+    .statusCode, 404, "import job remains caller-owned");
+
+  const before = await db.tenant(owner.tenant, q=>q.query(
+    "SELECT count(*)::int n FROM resources WHERE parent_id=$1",
+    [space.id]));
+  const bad = await ok("POST", "/imports", {
+    parent_id: space.id, name: "W09 invalid CSV",
+    format:"csv", content: original.replace("2026-10-02","2026-02-30"),
+    mapping,
+  });
+  await tick(db);
+  const failed = await ok("GET", "/jobs/" + bad.id);
+  assert.equal(failed.status, "failed");
+  assert.match(failed.result.error, /row 2/);
+  const after = await db.tenant(owner.tenant, q=>q.query(
+    "SELECT count(*)::int n FROM resources WHERE parent_id=$1",
+    [space.id]));
+  assert.equal(Number(before.rows[0].n),Number(after.rows[0].n),
+    "invalid late-row value never creates a partially imported resource");
+
+  const invalidMarkdownMap = await req("POST", "/imports", {
+    parent_id:space.id,name:"No mapping on MD",format:"markdown",
+    content:"# Heading", mapping,
+  });
+  assert.equal(invalidMarkdownMap.statusCode,400);
+});
