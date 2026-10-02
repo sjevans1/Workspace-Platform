@@ -1474,3 +1474,44 @@ test("W09 deployed browser: CSV preview suggests types, maps fields, and require
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).not.toBeVisible();
 });
+
+test("W09b deployed browser requires explicit append-only target confirmation", async ({page}) => {
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = {"X-CSRF-Token":me.csrf};
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const stamp=Date.now();
+  const spaceRequest=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W09b CSV space "+stamp},
+  });
+  expect(spaceRequest.ok(),await spaceRequest.text()).toBeTruthy();
+  const space=await spaceRequest.json();
+  const dbRequest=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"database",parent_id:space.id,
+      title:"W09b Existing Target "+stamp},
+  });
+  expect(dbRequest.ok(),await dbRequest.text()).toBeTruthy();
+  const database=await dbRequest.json();
+  await page.getByRole("button",{name:/Import your work/}).click();
+  const dialog=page.getByRole("dialog",{name:"Import your work"});
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Create in").selectOption(space.id);
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name:"mapped-append.csv",mimeType:"text/csv",
+    buffer:Buffer.from("Name\\nNew item"),
+  });
+  const destination=dialog.getByLabel("Import destination mode");
+  await expect(destination.locator(`option[value="${database.id}"]`)).toHaveCount(1);
+  await destination.selectOption(database.id);
+  const action=dialog.getByRole("button",{name:"Import",exact:true});
+  await expect(action).toBeDisabled();
+  await dialog.getByRole("button",{name:"Preview CSV columns"}).click();
+  await expect(dialog.getByText(/1 data rows/)).toBeVisible();
+  await expect(dialog.getByLabel("Target property for Name")).toHaveValue("name");
+  await expect(action).toBeDisabled();
+  await dialog.getByLabel("Confirm append-only import").check();
+  await expect(action).toBeEnabled();
+  await dialog.getByRole("button",{name:"Cancel"}).click();
+  await expect(dialog).not.toBeVisible();
+});
