@@ -3998,7 +3998,9 @@ test("W09a permissioned CSV preview and atomically mapped worker import", async 
   const persistedPayload = await db.tenant(owner.tenant, q =>
     one(q, "SELECT payload FROM jobs WHERE id=$1", [queued.id]));
   assert.deepEqual(persistedPayload.payload.mapping, mapping,
-    "queued mapping must be stored exactly, not silently dropped");
+    "queued mapping must be stored exactly, not silently dropped. Payload keys: " +
+      JSON.stringify(Object.keys(persistedPayload.payload || {})) +
+      " Payload value type: " + typeof persistedPayload.payload);
   const schemaRow = await db.tenant(owner.tenant, q => one(q,
     "SELECT properties FROM databases WHERE resource_id=$1",
     [job.result.resource_id]));
