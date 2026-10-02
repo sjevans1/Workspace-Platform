@@ -1888,3 +1888,71 @@ test("W10c3a browser HTML paste preserves benign text without executable markup"
   await expect(page.locator(".bn-editor [onerror],.bn-editor [onload]"))
     .toHaveCount(0);
 });
+
+
+test("W10c3b quote, code and table are visible in two editors and indexed", async ({page,browser}) => {
+  test.setTimeout(120000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",title:"W10c3b supported Core",
+      parent_id:roots[0].id},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const name="W10c3b reference "+randomUUID();
+  const created=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",title:name,parent_id:space.id},
+  });
+  expect(created.ok(),await created.text()).toBeTruthy();
+  const document=await created.json();
+  const endpoint="/api/v1/pages/"+document.id+"/content";
+  const initial=await (await page.request.get(endpoint)).json();
+  const blocks=[
+    {type:"quote",content:"Audit statements are preserved"},
+    {type:"codeBlock",props:{language:"javascript"},
+      content:"const retained = true;"},
+    {type:"table",content:{type:"tableContent",rows:[
+      {cells:["Product","Quantity"]},
+      {cells:["Blue Mountain","24"]},
+    ]}},
+  ];
+  const saved=await page.request.patch(endpoint,{
+    headers,data:{blocks,expected_revision:initial.revision},
+  });
+  expect(saved.ok(),await saved.text()).toBeTruthy();
+  await expect.poll(async()=>{
+    const result=await page.request.get(endpoint);
+    if(!result.ok())return "";
+    const data=await result.json();
+    if(data.blocks.map((b:any)=>b.type).join(",")!=="quote,codeBlock,table")
+      return "wrong-structure";
+    return data.plain_text||"";
+  },{timeout:30000}).toContain("Blue Mountain");
+  await page.goto("/?page="+document.id);
+  const editor=page.locator(".bn-editor");
+  await expect(editor).toContainText("Audit statements are preserved");
+  await expect(editor).toContainText("const retained = true;");
+  await expect(editor.locator("table")).toContainText("Blue Mountain");
+  const otherContext=await browser.newContext();
+  try {
+    const other=await otherContext.newPage();
+    await login(other,false);
+    await other.goto(page.url());
+    await expect(other.locator(".bn-editor")).toContainText(
+      "Audit statements are preserved");
+    await expect(other.locator(".bn-editor")).toContainText(
+      "const retained = true;");
+    await expect(other.locator(".bn-editor table"))
+      .toContainText("Blue Mountain");
+  }finally {await otherContext.close();}
+  await page.reload();
+  await expect(page.locator(".bn-editor table")).toContainText("Blue Mountain");
+  // Search indexing must include permitted text in tables, rather than only
+  // headings and conventional paragraph nodes.
+  const found=await page.request.get("/api/v1/search",{params:{q:"Blue Mountain"}});
+  expect(found.ok(),await found.text()).toBeTruthy();
+  expect((await found.json()).some((r:any)=>r.id===document.id)).toBe(true);
+});

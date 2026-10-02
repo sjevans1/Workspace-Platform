@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as Y from "yjs";
 import { ServerBlockNoteEditor } from "@blocknote/server-util";
+import { defaultBlockSpecs } from "@blocknote/core";
+import { textOf } from "../packages/contracts/index.ts";
 import {
   blocksToState, project, validateBlocks, markdownToBlocks, blocksToMarkdown,
 } from "../packages/editor/server.ts";
@@ -173,4 +175,78 @@ test("W10c3a link allowlist rejects executable and protocol-relative URLs", () =
       {type:"paragraph",content:[{type:"link",href,content:"Untrusted"}]},
     ]),/Unsafe link/,"unsafe link escaped allowlist: "+href);
   }
+});
+
+
+/**
+ * W10c3b source contract: only the actual pinned Core default block specs
+ * are advertised. The shared extended browser/server schema must serialize
+ * each installed Core block type without silent conversion to paragraphs.
+ * Media URLs are in-memory fixtures, never retrieved by this test.
+ */
+const w10c3bRichCases: { type: string; block: any; text?: string; url?: string }[] = [
+  { type:"quote",block:{type:"quote",content:"W10c3b quoted observation"},text:"W10c3b quoted observation" },
+  { type:"codeBlock",block:{type:"codeBlock",props:{language:"javascript"},
+    content:"const x = 2 + 3;"},text:"const x = 2 + 3;" },
+  { type:"toggleListItem",block:{type:"toggleListItem",
+    content:"W10c3b disclosure",children:[{type:"paragraph",content:"Inner fact"}]},
+    text:"W10c3b disclosure" },
+  { type:"table",block:{type:"table",content:{
+    type:"tableContent",rows:[
+      {cells:["Warehouse","Stock"]},
+      {cells:["Blue Mountain","24"]},
+    ],
+  }},text:"Blue Mountain" },
+  { type:"file",block:{type:"file",props:{
+    name:"attachment.pdf",url:"https://example.org/attachment.pdf",
+  }},url:"https://example.org/attachment.pdf" },
+  { type:"image",block:{type:"image",props:{
+    url:"https://example.org/document.png",caption:"Diagram",
+  }},url:"https://example.org/document.png" },
+  { type:"video",block:{type:"video",props:{
+    url:"https://example.org/demo.mp4",caption:"Demonstration",
+  }},url:"https://example.org/demo.mp4" },
+  { type:"audio",block:{type:"audio",props:{
+    url:"https://example.org/meeting.mp3",caption:"Meeting",
+  }},url:"https://example.org/meeting.mp3" },
+];
+test("W10c3b default Core block inventory is pinned and contains declared rich types", () => {
+  const pinned=Object.keys(defaultBlockSpecs);
+  for(const {type} of w10c3bRichCases)
+    assert.ok(pinned.includes(type),"missing pinned Core default type: "+type);
+  for(const type of ["paragraph","heading","bulletListItem",
+    "numberedListItem","checkListItem"])
+    assert.ok(pinned.includes(type),"missing existing Core block "+type);
+  // Our two app-owned overrides are deliberately distinct from claims about
+  // default blocks; schema compatibility itself is tested via Yjs below.
+  assert.ok(pinned.length >= 13);
+});
+for(const item of w10c3bRichCases) {
+  test("W10c3b Yjs native block contract: "+item.type, () => {
+    const one=new Y.Doc(),two=new Y.Doc();
+    try {
+      Y.applyUpdate(one,blocksToState([item.block]));
+      const first=project(one);
+      assert.equal(first.blocks.length,1,
+        item.type+" must not be dropped on Yjs projection");
+      assert.equal(first.blocks[0].type,item.type,
+        item.type+" must not be converted to another block");
+      if(item.text)assert.ok(textOf(first.blocks).includes(item.text),
+        item.type+" visible text missing from permissioned search projection");
+      if(item.url)assert.equal((first.blocks[0] as any).props.url,item.url,
+        item.type+" media URL lost in native Yjs state");
+      Y.applyUpdate(two,first.state);
+      assert.deepEqual(project(two).blocks,first.blocks,
+        item.type+" must survive canonical Yjs save/reload");
+    } finally {one.destroy();two.destroy();}
+  });
+}
+test("W10c3b table search text is limited to visible cells", () => {
+  const block=w10c3bRichCases.find(x=>x.type==="table")!.block;
+  assert.match(textOf([block]),/Blue Mountain/);
+  assert.match(textOf([block]),/Stock/);
+  assert.doesNotMatch(textOf([{
+    ...block,
+    props:{sensitiveMetadata:"DO-NOT-INDEX",url:"https://private.invalid"},
+  }]),/DO-NOT-INDEX|private\.invalid/);
 });

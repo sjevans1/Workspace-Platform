@@ -21,11 +21,17 @@ export const json = JSON.stringify;
 export function textOf(v: any): string {
   if (typeof v === "string") return v;
   if (Array.isArray(v)) return v.map(textOf).join(" ");
-  if (v && typeof v === "object")
+  if (v && typeof v === "object") {
+    // BlockNote tables keep user-visible text in rows[].cells[] rather
+    // than block.content[]; never indiscriminately index keys such as URL,
+    // user/tenant metadata, styling or IDs.
+    if (v.type === "tableContent") return textOf(v.rows);
+    if (Array.isArray(v.cells)) return textOf(v.cells);
     return [v.text, v.content, v.children]
       .filter(Boolean)
       .map(textOf)
       .join(" ");
+  }
   return "";
 }
 export const propertyTypes = [
