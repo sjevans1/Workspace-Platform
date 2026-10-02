@@ -6,7 +6,7 @@ import { admin } from "../../../packages/auth/index.ts";
 import {
   requireAccess,
   ancestry,
-  visible,
+  visibleDirectRecordChildren,
   directChildCanReadSql,
 } from "../../../packages/permissions/index.ts";
 import {
@@ -293,7 +293,7 @@ export async function records(
   // only the final resource's personal/wildcard ACL can change the inherited
   // effective level. The indexed child ACL probes avoid a recursive
   // workspace_can_read_resource call for every candidate at 10k+ scale.
-  // Tenant RLS and JS visible() rechecks remain in force.
+  // Tenant RLS and a fresh batched JS permission recheck remain in force.
   p.push(a.tenant_id, a.user_id, parent.effective_permission);
   const permission = directChildCanReadSql(
     "r", a.role, p.length - 2, p.length - 1, p.length);
@@ -308,7 +308,8 @@ export async function records(
     (sort.length ? sort.join(",") + "," : "") +
     "r.position,r.id LIMIT $" + String(p.length - 1) +
     " OFFSET $" + String(p.length);
-  const allowedRows = await visible(q, a, (await q.query(sql, p)).rows);
+  const allowedRows = await visibleDirectRecordChildren(
+    q, a, id, (await q.query(sql, p)).rows);
   return Promise.all(allowedRows.map(async (row) => ({
     ...row,
     values: await presentedRecordValues(q, a, d.properties, row.values),
