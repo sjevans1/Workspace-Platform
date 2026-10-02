@@ -78,13 +78,13 @@ test("W10b shared callout and divider survive canonical Yjs reload", () => {
     const projection=project(one);
     assert.deepEqual(projection.blocks.map((v:any)=>v.type),
       ["paragraph","callout","divider","paragraph"]);
-    assert.equal(projection.blocks[1].props.variant,"warning");
+    assert.equal((projection.blocks[1] as any).props.variant,"warning");
     assert.match(projection.plain_text,/Important decision/);
     assert.match(JSON.stringify(projection.blocks[1].content),/"bold":true/);
     Y.applyUpdate(two,projection.state);
     const reloaded=project(two);
     assert.deepEqual(reloaded.blocks,projection.blocks);
-    assert.equal(reloaded.blocks[1].props.variant,"warning");
+    assert.equal((reloaded.blocks[1] as any).props.variant,"warning");
     assert.equal(reloaded.blocks[2].type,"divider");
     assert.throws(()=>validateBlocks([{type:"callout",
       props:{variant:"javascript:alert(1)"},content:"x"}]),
