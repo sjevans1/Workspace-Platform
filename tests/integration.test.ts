@@ -3575,11 +3575,16 @@ test("W08b calendar cursor: month binding, date filtering and custom-sort refusa
       sort: [{ property: "name", direction: "asc" }],
     },
   });
-  assert.equal((await req("GET", dbPath + "/records/page?view=" + sorted.id))
-    .statusCode, 400, "custom sort requires typed cursor comparator");
+  const sortedPage = await ok("GET",
+    dbPath + "/records/page?view=" + sorted.id);
+  assert.deepEqual(sortedPage.items.map((row: any) => row.title),
+    ["April one", "March last", "March one"],
+    "W08c scalar Title sorting is now supported by the encrypted cursor");
+  assert.equal(sortedPage.has_more, false);
   const legacy = await ok("GET", dbPath + "/records?view=" + sorted.id);
-  assert.equal(legacy.length, 3,
-    "legacy bounded offset remains available for custom-sorted views");
+  assert.deepEqual(legacy.map((row: any) => row.id),
+    sortedPage.items.map((row: any) => row.id),
+    "bounded legacy offset and typed cursor sorting must agree");
 });
 
 
