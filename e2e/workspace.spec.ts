@@ -1499,7 +1499,7 @@ test("W09b deployed browser requires explicit append-only target confirmation", 
   await dialog.getByLabel("Create in").selectOption(space.id);
   await dialog.locator('input[type="file"]').setInputFiles({
     name:"mapped-append.csv",mimeType:"text/csv",
-    buffer:Buffer.from("Name\\nNew item"),
+    buffer:Buffer.from(["Name", "New item"].join(String.fromCharCode(10))),
   });
   const destination=dialog.getByLabel("Import destination mode");
   await expect(destination.locator(`option[value="${database.id}"]`)).toHaveCount(1);
