@@ -227,6 +227,10 @@ export default function Database({
     [members, setMembers] = useState<any[]>([]),
     [selected, setSelected] = useState(""),
     [offset, setOffset] = useState(0),
+    [cursor, setCursor] = useState<string | null>(null),
+    [cursorHistory, setCursorHistory] = useState<(string | null)[]>([]),
+    [nextCursor, setNextCursor] = useState<string | null>(null),
+    [pageHasMore, setPageHasMore] = useState(false),
     [month, setMonth] = useState(() => {
       const today = new Date();
       return today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0");
@@ -240,18 +244,30 @@ export default function Database({
     setData(d);
     const v = d.views.find((v: any) => v.id === viewId) || d.views[0];
     setSelected(v?.id || "");
-    setRows(
-      await api(
-        `/databases/${id}/records?limit=${v?.config.type === "calendar" ? 200 : 100}&offset=${offset}${v ? `&view=${v.id}` : ""}${v?.config.type === "calendar" ? `&month=${month}` : ""}`,
-      ),
-    );
+    const size = v?.config.type === "calendar" ? 200 : 100;
+    const argumentsPart = `limit=${size}${v ? `&view=${v.id}` : ""}${v?.config.type === "calendar" ? `&month=${month}` : ""}`;
+    // Saved custom sort semantics require a typed keyset comparator.
+    // Preserve the bounded legacy API for those views until W08 supports it.
+    if (v?.config.sort?.length) {
+      const older = await api(
+        `/databases/${id}/records?${argumentsPart}&offset=${offset}`);
+      setRows(older);
+      setPageHasMore(older.length === size);
+      setNextCursor(null);
+    } else {
+      const page = await api(
+        `/databases/${id}/records/page?${argumentsPart}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+      setRows(page.items);
+      setPageHasMore(page.has_more);
+      setNextCursor(page.next_cursor);
+    }
   }
   useEffect(() => {
     run(async () => {
       await load();
       setMembers(await api("/members"));
     });
-  }, [id, selected, offset, month]);
+  }, [id, selected, offset, month, cursor]);
   if (!data) return <div className="loading">Opening database…</div>;
   const config = current?.config || { type: "table", filters: [], sort: [] };
   const props = (config.order || data.properties.map((p: any) => p.id))
@@ -274,6 +290,9 @@ export default function Database({
     if (v) {
       setSelected(v.id);
       setOffset(0);
+      setCursor(null);
+      setCursorHistory([]);
+      setNextCursor(null);
       return;
     }
     if (!editable) return notify("Only editors can create saved views");
@@ -300,7 +319,10 @@ export default function Database({
       },
     });
     setOffset(0);
-    await load(created.id);
+    setCursor(null);
+    setCursorHistory([]);
+    setNextCursor(null);
+    setSelected(created.id);
   }
   const group = data.properties.find((p: any) => p.id === config.groupBy),
     groups = [...(group?.options || []), ""],
@@ -325,6 +347,9 @@ export default function Database({
         String(shifted.getUTCMonth() + 1).padStart(2, "0"),
     );
     setOffset(0);
+    setCursor(null);
+    setCursorHistory([]);
+    setNextCursor(null);
   }
   return (
     <div className="database">
@@ -359,6 +384,9 @@ export default function Database({
           onChange={(e) => {
             setSelected(e.target.value);
             setOffset(0);
+            setCursor(null);
+            setCursorHistory([]);
+            setNextCursor(null);
           }}
         >
           {data.views.map((v: any) => (
@@ -403,6 +431,9 @@ export default function Database({
                 const now = new Date();
                 setMonth(now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0"));
                 setOffset(0);
+                setCursor(null);
+                setCursorHistory([]);
+                setNextCursor(null);
               }}>Today</button>
               <button className="button" aria-label="Next month" onClick={() => changeMonth(1)}>
                 <ChevronRight size={17} />
@@ -589,17 +620,33 @@ export default function Database({
       )}
       <div className="table-footer">
         <span>
-          {rows.length} records · {offset + 1}–{offset + rows.length}
+          {rows.length} records · {offset + (rows.length ? 1 : 0)}–{offset + rows.length}
         </span>
         <button
-          disabled={!offset}
-          onClick={() => setOffset((v) => Math.max(0, v - (config.type === "calendar" ? 200 : 100)))}
+          disabled={config.sort?.length ? !offset : cursorHistory.length === 0}
+          onClick={() => {
+            if (config.sort?.length) {
+              setOffset((v) => Math.max(0,
+                v - (config.type === "calendar" ? 200 : 100)));
+            } else {
+              setCursor(cursorHistory.at(-1) || null);
+              setCursorHistory((history) => history.slice(0, -1));
+              setOffset((v) => Math.max(0,
+                v - (config.type === "calendar" ? 200 : 100)));
+            }
+          }}
         >
           Previous
         </button>
         <button
-          disabled={rows.length < (config.type === "calendar" ? 200 : 100)}
-          onClick={() => setOffset((v) => v + (config.type === "calendar" ? 200 : 100))}
+          disabled={config.sort?.length ? !pageHasMore : !nextCursor}
+          onClick={() => {
+            if (!config.sort?.length) {
+              setCursorHistory((history) => [...history, cursor]);
+              setCursor(nextCursor);
+            }
+            setOffset((v) => v + (config.type === "calendar" ? 200 : 100));
+          }}
         >
           Next
         </button>
@@ -643,6 +690,11 @@ export default function Database({
           editable={editable}
           close={() => setPanel("")}
           done={async (v) => {
+            setOffset(0);
+            setCursor(null);
+            setCursorHistory([]);
+            setNextCursor(null);
+            setSelected(v);
             await load(v);
             setPanel("");
           }}
