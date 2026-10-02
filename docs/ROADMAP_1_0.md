@@ -2,7 +2,7 @@
 
 **Planning baseline:** 2026-10-01, `main` after merged PR #61 (`8597e404365fea8b4250af0377d5dfb6813c53da`).  
 **Persistent tracker:** [Issue #62](https://github.com/sjevans1/Workspace-Platform/issues/62).  
-**Status:** Planning specification; **no unbuilt feature is claimed implemented**. `W##` identifiers below are *planned work packages*, **not assigned GitHub PR numbers**. When implemented, replace each tracker checkbox with a link to the real PR and its accepted CI run.
+**Status (2026-10-01):** Four registered work packages accepted — W01, W05, W06, W07; W08 is draft PR #70 under verification. Other gates remain pending; the [live tracker](https://github.com/sjevans1/Workspace-Platform/issues/62) is authoritative. **No unbuilt feature is claimed implemented**. `W##` identifiers below are *planned work packages*, **not assigned GitHub PR numbers**. When implemented, replace each tracker checkbox with a link to the real PR and its accepted CI run.
 
 ## 1. What "complete" means
 
@@ -92,7 +92,7 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 | Search/experience | W13 → W14 → W15 → W16 → W17 | Keep user-visible ACL guarantees; avoid conflicting edits to `Workspace.tsx` and navigation until main refreshed. |
 | Platform/release | W20 → W21/W22; W18/W19; W23/W24 → W25–W28 | No live OpenJM Enterprise AI runtime/dependency; use isolated test providers and data. |
 
-**Recommended immediate execution order:** W01 (security exposure noted in #50), W05 (customer-visible Relations, #60) and W02 architecture/fixtures in parallel as *preparation*, then merge W01, W05, W02, W03 in whichever order yields independent green heads. Never conflate product feature work with tenant IdP authentication changes in the same PR. The order should be revisited based on failing tests and dependency drift.
+**Recommended execution order as of 2026-10-01:** finish W08 draft PR #70's permission-first pagination with full CI and benchmark evidence, then coordinate W02 tenant IdP activation (#38) and W09 import mapping preparation in isolated lanes; W03 follows W02 and W10–W17 follow their documented dependencies. Never conflate product feature work with tenant IdP authentication changes in the same PR. The order should be revisited based on failing tests and dependency drift.
 
 ## 6. Mandatory definition of done — every implementation PR
 
@@ -110,7 +110,7 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 
 After every accepted merge, record the **W-ID, actual GitHub PR number, merge SHA, exact-head workflow run, post-merge status, user-visible acceptance evidence, and outstanding risks** in Issue #62 (one checkbox per W-ID). Update this roadmap when dependencies or scope genuinely change. `W##` numbering stays stable even if a package requires multiple real GitHub PRs. No promises based solely on unfinished tool sessions or local uncommitted work.
 
-**Project state (as of plan publication):** 0/28 planned W-items accepted; this is a *new work register*, **not** a statement that earlier completed PRs are unbuilt. Already merged PR #59 and #61 are baseline, not counted as outstanding.
+**Project state (as of 2026-10-01):** 4/28 W-items accepted (W01, W05, W06, W07), each linked to merge SHA and full final-head CI in [Issue #62](https://github.com/sjevans1/Workspace-Platform/issues/62). W08 is actively proposed as draft PR #70; the other 23 W-items remain pending. Earlier baseline PRs #59 and #61 were accepted before this work register and are not double-counted.
 
 ## 8. Post-1.0 optional roadmap — explicitly outside release blocker list
 
