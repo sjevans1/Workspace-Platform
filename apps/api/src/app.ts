@@ -1554,21 +1554,22 @@ function dataRoutes(
         search = String(params.search || "").slice(0, 120).toLowerCase(),
         limit = Math.min(50, Math.max(1, Number(params.limit) || 20)),
         offset = Math.max(0, Math.min(10000, Number(params.offset) || 0));
+      // Execute visibility inside SQL BEFORE sorting and paging; select one
+      // extra permitted row to compute has_more without exposing hidden rows.
       const rows = (await q.query(
         "SELECT id,title FROM resources WHERE kind='database'" +
         " AND deleted_at IS NULL AND id<>$1" +
         " AND position($2 in lower(title))>0" +
-        " ORDER BY lower(title),id",
-        [source.id, search],
+        " AND workspace_can_read_resource(id,$3::uuid,$4::text)" +
+        " ORDER BY lower(title),id LIMIT $5 OFFSET $6",
+        [source.id, search, a.user_id, a.role, limit + 1, offset],
       )).rows;
-      // Pagination is over accessible matches only: never reveal the count
-      // or location of filtered-out target databases through has_more/offset.
       const readable = await visible(q, a, rows);
       return {
-        items: readable.slice(offset, offset + limit).map((item) =>
+        items: readable.slice(0, limit).map((item) =>
           ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
-        has_more: readable.length > offset + limit,
+        has_more: readable.length > limit,
       };
     },
     "databases.read",
@@ -1611,15 +1612,17 @@ function dataRoutes(
         "SELECT id,title FROM resources WHERE kind='record'" +
         " AND parent_id=$1 AND deleted_at IS NULL" +
         " AND position($2 in lower(title))>0" +
-        " ORDER BY lower(title),id",
-        [target.id, search],
+        " AND workspace_can_read_resource(id,$3::uuid,$4::text)" +
+        " ORDER BY lower(title),id LIMIT $5 OFFSET $6",
+        [target.id, search, a.user_id, a.role, limit + 1, offset],
       )).rows;
+      // Defense in depth; visible() must agree with the SQL predicate.
       const readable = await visible(q, a, rows);
       return {
-        items: readable.slice(offset, offset + limit).map((item) =>
+        items: readable.slice(0, limit).map((item) =>
           ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
-        has_more: readable.length > offset + limit,
+        has_more: readable.length > limit,
       };
     },
     "databases.read",
