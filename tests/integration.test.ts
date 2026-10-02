@@ -3385,6 +3385,31 @@ test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => 
     }));
     assert.ok(exportElapsed < 30000,
       "W08 large visible-only export exceeded provisional 30s budget");
+
+    const cursorStarted = Date.now();
+    const gathered: string[] = [];
+    let continuation: string | null = null;
+    const cursorPath = "/databases/" + dataset.id + "/records/page?limit=100";
+    for (let segment = 0; segment < size / 200; segment++) {
+      const response = await ok("GET", cursorPath +
+        (continuation ? "&cursor=" + encodeURIComponent(continuation) : ""),
+        undefined, peer);
+      assert.equal(response.items.length, 100);
+      gathered.push(...response.items.map((item: any) => item.id));
+      continuation = response.next_cursor;
+      assert.equal(response.has_more, segment < size / 200 - 1);
+      if (response.has_more) assert.ok(continuation);
+      else assert.equal(continuation, null);
+    }
+    assert.deepEqual(gathered, ids.slice(size / 2),
+      "keyset traversal includes every readable record exactly once");
+    const cursorMs = Date.now() - cursorStarted;
+    console.info("W08_KEYSET_BENCH " + JSON.stringify({
+      size, hidden: size / 2, visible: gathered.length,
+      pages: size / 200, elapsed_ms: cursorMs,
+    }));
+    assert.ok(cursorMs < 30000,
+      "W08 " + size + "row keyset traversal exceeded provisional CI budget");
   }
 });
 
