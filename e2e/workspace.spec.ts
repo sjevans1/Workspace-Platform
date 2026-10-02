@@ -1443,3 +1443,34 @@ test("W08b deployed browser: encrypted cursor paging and Next/Previous round tri
   await expect(table.first().locator('input[aria-label="Name"]'))
     .toHaveValue("W08b Item 101");
 });
+
+
+test("W09 deployed browser: CSV preview suggests types, maps fields, and requires approval", async ({ page }) => {
+  await login(page);
+  await page.getByRole("button", { name: /Import your work/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Import your work" });
+  await expect(dialog).toBeVisible();
+  const content = "Name,Units,Due,Done,Notes\n" +
+    'First,12,2026-10-01,true,"=HYPERLINK(1,2)"\n' +
+    "Second,0,2026-10-02,false,ordinary\n";
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "preview.csv", mimeType: "text/csv",
+    buffer: Buffer.from(content, "utf8"),
+  });
+  const commit = dialog.getByRole("button", { name: "Import", exact: true });
+  await expect(commit).toBeDisabled();
+  await dialog.getByRole("button", { name: "Preview CSV columns" }).click();
+  await expect(dialog.getByText(/2 data rows/)).toBeVisible();
+  await expect(dialog.getByLabel("Type for Name")).toHaveValue("title");
+  await expect(dialog.getByLabel("Type for Units")).toHaveValue("number");
+  await expect(dialog.getByLabel("Type for Due")).toHaveValue("date");
+  await expect(dialog.getByLabel("Type for Done")).toHaveValue("checkbox");
+  await expect(dialog.getByText(/=HYPERLINK\(1,2\)/)).toBeVisible();
+  await dialog.getByLabel("Import column Notes").uncheck();
+  await dialog.getByLabel("Column name for Units").fill("Quantity");
+  await expect(commit).toBeEnabled();
+  // Changing destination invalidates the old permission-scoped preview.
+  // The "Import" button is never enabled merely by uploading a file.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).not.toBeVisible();
+});
