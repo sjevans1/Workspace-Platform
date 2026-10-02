@@ -294,10 +294,17 @@ export async function records(
   // effective level. The indexed child ACL probes avoid a recursive
   // workspace_can_read_resource call for every candidate at 10k+ scale.
   // Tenant RLS and a fresh batched JS permission recheck remain in force.
-  p.push(a.tenant_id, a.user_id, parent.effective_permission);
-  const permission = directChildCanReadSql(
-    "r", a.role, p.length - 2, p.length - 1, p.length);
-  where.push(permission);
+  // Owner/admin needs no child ACL probes; do not add unused bind
+  // arguments, since PostgreSQL cannot infer types for skipped parameters.
+  // Member/guest binds are consecutive and used by the indexed predicate.
+  if (a.role === "member" || a.role === "guest") {
+    p.push(a.tenant_id, a.user_id, parent.effective_permission);
+    where.push(directChildCanReadSql(
+      "r", a.role, p.length - 2, p.length - 1, p.length));
+  } else {
+    assert(a.role === "owner" || a.role === "admin", 403,
+      "Unknown membership role");
+  }
   p.push(limit, offset);
   // Assemble placeholders as literal "$" + index strings. Do not
   // accidentally interpolate numeric indices into SQL constants: that
