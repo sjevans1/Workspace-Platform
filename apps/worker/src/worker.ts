@@ -1,7 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { randomUUID } from "node:crypto";
-import { parse } from "csv-parse/sync";
+import { prepareCsvImport } from "../../../packages/imports/csv.ts";
 import { Database, one } from "../../../packages/database/index.ts";
 import { decrypt, signature } from "../../../packages/events/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
@@ -227,45 +227,22 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
             blocks: await markdownToBlocks(p.content),
           });
         else {
-          const rows = parse(p.content, {
-            columns: true,
-            bom: true,
-            skip_empty_lines: true,
-            max_record_size: 100000,
-          }) as Record<string, string>[];
-          assert(
-            rows.length > 0 && rows.length <= 2000,
-            400,
-            "CSV requires 1–2000 rows",
-          );
-          const columns = Object.keys(rows[0]);
-          assert(columns.length <= 100, 400, "CSV exceeds 100 columns");
+          // Strict re-parse and whole-file conversion under fresh worker
+          // membership/parent permission. Any invalid cell fails BEFORE
+          // creating the new database. The enclosing savepoint remains the
+          // atomic rollback guard for subsequent DB/storage failures.
+          const prepared = prepareCsvImport(p.content, p.mapping);
           resource = await createResource(q, a, {
             parent_id: p.parent_id,
             kind: "database",
             title: p.name,
           });
-          const props = columns.map((name, i) => ({
-            id: `field${i}`,
-            name,
-            type: i ? "text" : "title",
-          }));
           await q.query(
             "UPDATE databases SET properties=$2 WHERE resource_id=$1",
-            [resource.id, json(props)],
+            [resource.id, json(prepared.properties)],
           );
-          for (const row of rows)
-            await createRecord(
-              q,
-              a,
-              resource.id,
-              Object.fromEntries(
-                columns.map((k, i) => [
-                  `field${i}`,
-                  row[k] || (i ? "" : "Untitled"),
-                ]),
-              ),
-            );
+          for (const values of prepared.rows)
+            await createRecord(q, a, resource.id, values);
         }
         await q.query(
           "UPDATE jobs SET status='completed',result=$2 WHERE id=$1",
