@@ -53,13 +53,16 @@ test("W09 mapped numeric, date, checkbox and excluded columns are typed", () => 
 });
 
 test("W09 mapping/header validation prevents collisions and ambiguous CSV", () => {
-  for (const bad of [
+  const invalidExamples = [
     "Name,Name\nA,B", "Name,name\nA,B", "Name,\nA,B",
     "Name,Count\nA", 'Name\n"unterminated',
     "Name\n", "Name\n" + "x".repeat(100001),
     "Name\n" + Array.from({length:2001}, (_,i)=>String(i)).join("\n"),
     "Name\n" + "x".repeat(2097153),
-  ]) assert.throws(() => readCsvTable(bad));
+  ];
+  invalidExamples.forEach((bad, index) =>
+    assert.throws(() => readCsvTable(bad),
+      "Bad CSV fixture index " + index + " must be rejected"));
   const mapping = previewCsvImport(csv).mapping;
   assert.throws(() => prepareCsvImport(csv,
     mapping.slice(0,4)), /column/);
