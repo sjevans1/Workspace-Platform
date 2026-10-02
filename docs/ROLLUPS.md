@@ -1,6 +1,6 @@
 # W07 — ACL-safe Relation Rollups
 
-**Status:** Experimental implementation on a preparation branch. Not published or accepted until W06 merges, W07's isolated PR runs full exact-head CI, and security acceptance succeeds. Tracking issues: [#67](https://github.com/sjevans1/Workspace-Platform/issues/67) and [#62](https://github.com/sjevans1/Workspace-Platform/issues/62).
+**Status:** Accepted and merged in [PR #69](https://github.com/sjevans1/Workspace-Platform/pull/69) at `9070518b493a3224c56041e5da190ab5bbc2d48f`, after exact-head [Actions run 36942830305](https://github.com/sjevans1/Workspace-Platform/actions/runs/36942830305) passed 78/78 native backend tests plus deployed browser, accessibility, security and HTTPS checks. Tracking issues: [#67](https://github.com/sjevans1/Workspace-Platform/issues/67) (closed), [#62](https://github.com/sjevans1/Workspace-Platform/issues/62) (roadmap).
 
 ## Product behavior
 
