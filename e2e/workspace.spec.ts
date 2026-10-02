@@ -1702,3 +1702,122 @@ test("W10c1 accessible formatting, local undo/redo and phone-sized editor", asyn
   await expect(page.locator(".bn-editor")).toContainText("W10c1 undo proof");
   await expect(page.getByRole("toolbar",{name:"Formatting"})).toBeVisible();
 });
+
+
+test("W10c2 version restore preserves custom rich blocks, marks and identity", async ({page,browser}) => {
+  test.setTimeout(120000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const stamp=randomUUID();
+  const createdSpace=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,title:"W10c2 rich restore "+stamp},
+  });
+  expect(createdSpace.ok(),await createdSpace.text()).toBeTruthy();
+  const space=await createdSpace.json();
+  const createdPage=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,title:"Restore proof "+stamp},
+  });
+  expect(createdPage.ok(),await createdPage.text()).toBeTruthy();
+  const resource=await createdPage.json();
+  const endpoint="/api/v1/pages/"+resource.id;
+  const initialResponse=await page.request.get(endpoint+"/content");
+  expect(initialResponse.ok()).toBeTruthy();
+  const initial=await initialResponse.json();
+  const storedBlocks=[
+    {id:randomUUID(),type:"heading",props:{level:3},content:"Retained section"},
+    {id:randomUUID(),type:"callout",props:{variant:"warning"},content:[
+      {type:"text",text:"Retained important",styles:{bold:true}},
+      {type:"text",text:" evidence",styles:{underline:true}},
+    ]},
+    {id:randomUUID(),type:"divider"},
+    {id:randomUUID(),type:"checkListItem",props:{checked:true},content:"Completed review"},
+  ];
+  const first=await page.request.patch(endpoint+"/content",{
+    headers,data:{blocks:storedBlocks,expected_revision:initial.revision},
+  });
+  expect(first.ok(),await first.text()).toBeTruthy();
+  const rich=await first.json();
+  expect(rich.revision).toBe(initial.revision+1);
+  const savedResponse=await page.request.get(endpoint+"/content");
+  expect(savedResponse.ok()).toBeTruthy();
+  const saved=await savedResponse.json();
+  expect(saved.blocks).toEqual(storedBlocks);
+  // A subsequent replacement records the rich document as the version
+  // to restore. Stale preconditions must not mutate the live document.
+  const second=await page.request.patch(endpoint+"/content",{
+    headers,data:{
+      blocks:[{type:"paragraph",content:"Temporary replacement"}],
+      expected_revision:rich.revision,
+    },
+  });
+  expect(second.ok(),await second.text()).toBeTruthy();
+  const changed=await second.json();
+  const revisions=await page.request.get(endpoint+"/versions");
+  expect(revisions.ok()).toBeTruthy();
+  const history=await revisions.json();
+  const version=history.find((v:any)=>v.revision===rich.revision);
+  expect(version?.id).toBeTruthy();
+  const versionResponse=await page.request.get(endpoint+"/versions/"+version.id);
+  expect(versionResponse.ok()).toBeTruthy();
+  const snapshot=await versionResponse.json();
+  expect(snapshot.blocks).toEqual(storedBlocks);
+  const stale=await page.request.post(
+    endpoint+"/versions/"+version.id+"/restore",{
+      headers,data:{expected_revision:rich.revision},
+    });
+  expect(stale.status()).toBe(409);
+  const unchanged=await (await page.request.get(endpoint+"/content")).json();
+  expect(unchanged.blocks[0].content).toBe("Temporary replacement");
+  expect(unchanged.revision).toBe(changed.revision);
+  const restore=await page.request.post(
+    endpoint+"/versions/"+version.id+"/restore",{
+      headers,data:{expected_revision:changed.revision},
+    });
+  expect(restore.ok(),await restore.text()).toBeTruthy();
+  const restoredVersion=await restore.json();
+  expect(restoredVersion.revision).toBe(changed.revision+1);
+  expect(restoredVersion.epoch).toBeGreaterThan(changed.epoch);
+  const restored=await (await page.request.get(endpoint+"/content")).json();
+  expect(restored.blocks).toEqual(snapshot.blocks);
+  expect(restored.blocks.map((b:any)=>b.id))
+    .toEqual(storedBlocks.map(b=>b.id));
+  expect(JSON.stringify(restored.blocks)).toContain('"bold":true');
+  expect(JSON.stringify(restored.blocks)).toContain('"underline":true');
+  // Three hostile input shapes must be rejected without any mutation.
+  for(const bad of [
+    {type:"paragraph",content:[
+      {type:"link",href:"javascript:alert(1)",content:"unsafe"}]},
+    {type:"callout",props:{variant:"unsafe"},content:"invalid variant"},
+    {type:"divider",content:"non-empty divider"},
+  ]){
+    const invalid=await page.request.patch(endpoint+"/content",{
+      headers,data:{blocks:[bad],expected_revision:restoredVersion.revision},
+    });
+    expect(invalid.status()).toBe(400);
+  }
+  const still=await (await page.request.get(endpoint+"/content")).json();
+  expect(still.revision).toBe(restoredVersion.revision);
+  expect(still.blocks).toEqual(storedBlocks);
+  const afterHistory=await (await page.request.get(endpoint+"/versions")).json();
+  expect(afterHistory.some((v:any)=>v.id===version.id)).toBe(true);
+  await page.goto("/?page="+resource.id);
+  await expect(page.locator(".workspace-callout")).toContainText(
+    "Retained important evidence");
+  await expect(page.locator(".workspace-callout"))
+    .toHaveAttribute("data-workspace-callout","warning");
+  await expect(page.locator(".workspace-divider hr")).toBeVisible();
+  await expect(page.locator(".bn-editor")).toContainText("Completed review");
+  const secondContext=await browser.newContext();
+  try {
+    const other=await secondContext.newPage();
+    await login(other,false);
+    await other.goto(page.url());
+    await expect(other.locator(".workspace-callout")).toContainText(
+      "Retained important evidence");
+    await expect(other.locator(".workspace-divider hr")).toBeVisible();
+  } finally {
+    await secondContext.close();
+  }
+});
