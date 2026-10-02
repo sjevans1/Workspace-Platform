@@ -17,10 +17,11 @@ test("W08b encrypted keyset cursors are scoped, tamper proof and expiring", () =
       type: "table", filters: [{ property: "name", op: "eq", value: "ok" }],
       sort: [],
     });
-    const state = newDatabasePageCursor(tenant, user, database,
+    const state = newDatabasePageCursor(tenant, user, "member", database,
       view, fingerprint, 50, 3.5, linked, now);
     const token = encodeDatabasePageCursor(state);
-    const ctx = { tenant, principal: user, database, view,
+    const ctx = { tenant, principal: user, role: "member" as const,
+      database, view,
       fingerprint, limit: 50 };
     assert.match(token, /^db-page-v1\./);
     assert.ok(!token.includes(linked));
@@ -31,6 +32,7 @@ test("W08b encrypted keyset cursors are scoped, tamper proof and expiring", () =
     for (const change of [
       { tenant: randomUUID() }, { principal: randomUUID() },
       { database: randomUUID() }, { view: randomUUID() },
+      { role: "admin" as const },
       { fingerprint: databasePageFingerprint({ type: "table", filters: [] }) },
       { limit: 20 },
     ])
