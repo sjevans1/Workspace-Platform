@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Home,
   Search,
@@ -857,6 +857,9 @@ function CreateDialog({
     [targetDatabase, setTargetDatabase] = useState(""),
     [appendConfirmed, setAppendConfirmed] = useState(false),
     [busy, setBusy] = useState(false);
+  // Same exact request retains its key across a lost HTTP acknowledgement
+  // or retry in this dialog. Editing any parameter rotates the identity.
+  const retryImport = useRef<{ signature: string; key: string } | null>(null);
   useEffect(() => {
     run(async () => {
       const spaces = await api(`/resources?parent_id=${root}&limit=200`);
@@ -911,7 +914,7 @@ function CreateDialog({
           preview.target.id !== targetDatabase))
           throw Error("Confirm the append-only target import after preview");
         const content = isCsv ? previewContent : await file.text();
-        const j = await api("/imports", "POST", {
+        const request = {
           parent_id: destination,
           name: name || file.name,
           format: isCsv ? "csv" : "markdown",
@@ -922,6 +925,18 @@ function CreateDialog({
             expected_schema_digest: preview.target.schema_digest,
             existing_mode: "append",
           } : {}),
+        };
+        let idempotency_key: string | undefined;
+        if (isCsv) {
+          const signature = JSON.stringify(request);
+          if (retryImport.current?.signature !== signature) {
+            retryImport.current = { signature,
+              key: crypto.randomUUID() };
+          }
+          idempotency_key = retryImport.current.key;
+        }
+        const j = await api("/imports", "POST", {
+          ...request, ...(idempotency_key ? { idempotency_key } : {}),
         });
         notify(
           "Import queued. This window will open the result when it is ready.",

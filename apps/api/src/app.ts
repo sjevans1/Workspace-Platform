@@ -7,7 +7,7 @@ import { normalizedNetworkIdentity } from "../../../packages/security/rate-netwo
 import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
 import Redis from "ioredis";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
 import { stringify } from "csv-stringify/sync";
@@ -3253,39 +3253,81 @@ function dataRoutes(
           target_database_id: uuid.optional(),
           expected_schema_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
           existing_mode: z.literal("append").optional(),
+          idempotency_key: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/).optional(),
         })
         .strict(),
       r,
     );
     scope(a, v.format === "csv" ? "databases.write" : "pages.write");
     assert(v.format === "csv" || (v.mapping === undefined &&
-      v.target_database_id === undefined), 400,
+      v.target_database_id === undefined && v.idempotency_key === undefined), 400,
       "CSV-specific options require CSV format");
     const parent = await requireAccess(q, a, v.parent_id, 3);
+    const { idempotency_key, ...payload } = v;
+    // Bind the replay identity to *all* validated import parameters and the
+    // signed-in principal. CSV bytes are hashed, never logged in a response.
+    const digest = idempotency_key ? createHash("sha256").update(JSON.stringify({
+      operation: "workspace.csv.import.v1",
+      tenant: a.tenant_id, principal: a.user_id, payload,
+    })).digest("hex") : null;
+    // A successful submit may have committed even when its HTTP response was
+    // lost. Recheck current write access first, then return the original job
+    // even if the target's schema changed *after* that original submission.
     if (v.target_database_id) {
       assert(v.format === "csv" && v.mapping &&
         v.existing_mode === "append" && v.expected_schema_digest, 400,
         "Existing imports require explicit append mode, mapping and schema digest");
-      const target = await requireAccess(q,a,v.target_database_id,3);
+      const target = await requireAccess(q, a, v.target_database_id, 3);
       assert(target.kind === "database" && !target.deleted_at &&
         target.parent_id === parent.id, 404, "Import target unavailable");
-      const definition = await one(q,
-        "SELECT properties FROM databases WHERE resource_id=$1",
-        [target.id]);
-      assert(definition && csvSchemaDigest(definition.properties) ===
-        v.expected_schema_digest,409,
-        "Target schema changed; preview again");
     } else {
       assert(v.existing_mode === undefined &&
         v.expected_schema_digest === undefined,400,
         "Existing import controls require a target database");
     }
+    if (idempotency_key) {
+      const previous = await one(q,
+        "SELECT id,status,resource_id,request_digest FROM jobs WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3",
+        [a.tenant_id, a.user_id, idempotency_key]);
+      if (previous) {
+        assert(previous.request_digest === digest, 409,
+          "Import key already belongs to another request");
+        await requireAccess(q, a, previous.resource_id, 3);
+        return { id: previous.id, status: previous.status };
+      }
+    }
+    if (v.target_database_id) {
+      const definition = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1",
+        [v.target_database_id]);
+      assert(definition && csvSchemaDigest(definition.properties) ===
+        v.expected_schema_digest, 409,
+        "Target schema changed; preview again");
+    }
     const jid = randomUUID();
-    await q.query(
-      "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload) VALUES($1,$2,$3,$4,$5)",
-      [jid, a.tenant_id, a.user_id, v.parent_id, json(v)],
-    );
-    return { id: jid, status: "pending" };
+    if (!idempotency_key) {
+      await q.query(
+        "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload) VALUES($1,$2,$3,$4,$5)",
+        [jid, a.tenant_id, a.user_id, v.parent_id, json(payload)]);
+      return { id: jid, status: "pending" };
+    }
+    // Partial unique index serializes concurrent same-key submissions. The
+    // loser sees precisely the first job, never creates a second job/append.
+    const inserted = await one(q,
+      `INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload,idempotency_key,request_digest)
+       VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (tenant_id,user_id,idempotency_key)
+       WHERE idempotency_key IS NOT NULL DO NOTHING
+       RETURNING id,status`,
+      [jid,a.tenant_id,a.user_id,v.parent_id,json(payload),idempotency_key,digest]);
+    if (inserted) return { id: inserted.id, status: inserted.status };
+    const original = await one(q,
+      "SELECT id,status,resource_id,request_digest FROM jobs WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3",
+      [a.tenant_id,a.user_id,idempotency_key]);
+    assert(original && original.request_digest === digest, 409,
+      "Import key already belongs to another request");
+    await requireAccess(q, a, original.resource_id, 3);
+    return { id: original.id, status: original.status };
   });
   route(
     "GET",

@@ -354,6 +354,8 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
         target_database_id: uuid,
         expected_schema_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
         existing_mode: { enum: ["append"] },
+        idempotency_key: { type: "string",
+          pattern: "^[A-Za-z0-9_-]{16,128}$", minLength: 16, maxLength: 128 },
         mapping: { type: "array", minItems: 1, maxItems: 100,
           items: {
             type: "object",
@@ -376,7 +378,7 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
         required: ["id", "status"],
         properties: {
           id: uuid,
-          status: { const: "pending" },
+          status: { enum: ["pending","completed","failed"] },
         },
         additionalProperties: false,
       },
