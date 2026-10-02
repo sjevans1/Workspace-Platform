@@ -1512,6 +1512,14 @@ test("W09b deployed browser requires explicit append-only target confirmation", 
   await expect(action).toBeDisabled();
   await dialog.getByLabel("Confirm append-only import").check();
   await expect(action).toBeEnabled();
-  await dialog.getByRole("button",{name:"Cancel"}).click();
-  await expect(dialog).not.toBeVisible();
+  // Exercise the complete deployed path: confirmed UI submission, queued
+  // worker job, committed rows and navigation back to the existing target.
+  await action.click();
+  await expect(dialog).not.toBeVisible({ timeout: 90000 });
+  const rowsResponse = await page.request.get(
+    `/api/v1/databases/${database.id}/records`);
+  expect(rowsResponse.ok(), await rowsResponse.text()).toBeTruthy();
+  const rows = await rowsResponse.json();
+  expect(rows).toHaveLength(1);
+  expect(rows[0].values.name).toBe("New item");
 });
