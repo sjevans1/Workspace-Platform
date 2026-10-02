@@ -3155,4 +3155,36 @@ test("W08 permission-first pages: accessible records are not lost behind hidden 
     [dataset.id, peerId]));
   assert.equal(foreignTenant.rows[0].allowed, false,
     "SQL access predicate stays restricted to current tenant RLS");
+
+  // Explicitly exercise the unusual early-zero semantics shared with the
+  // existing JS evaluator, including inherited reset and wildcard priority.
+  await db.tenant(owner.tenant, (q) => q.query(
+    "UPDATE resources SET inherit_permissions=false WHERE id=$1",
+    [dataset.id]));
+  const check = (user: string, role: string, id: string) =>
+    db.tenant(owner.tenant, (q) => q.query(
+      "SELECT workspace_can_read_resource($1::uuid,$2::uuid,$3) allowed",
+      [id, user, role]));
+  assert.equal((await check(peerId, "member", resourceIds[3]))
+    .rows[0].allowed, false, "ACL reset without grant denies children");
+  await db.tenant(owner.tenant, (q) => q.query(
+    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+    " VALUES($1,$2,$3,3)", [owner.tenant, dataset.id, peerId]));
+  assert.equal((await check(peerId, "member", resourceIds[3]))
+    .rows[0].allowed, true, "same-node explicit grant restores inheritance");
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("UPDATE acl SET level=0 WHERE tenant_id=$1" +
+      " AND resource_id=$2 AND principal_id=$3",
+      [owner.tenant, dataset.id, peerId]);
+    await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+      " VALUES($1,$2,'*',4)", [owner.tenant, dataset.id]);
+  });
+  assert.equal((await check(peerId, "member", resourceIds[3]))
+    .rows[0].allowed, false,
+    "explicit user-level denial overrides wildcard grant");
+  await db.tenant(owner.tenant, (q) => q.query(
+    "UPDATE resources SET deleted_at=now() WHERE id=$1", [dataset.id]));
+  assert.equal((await check(owner.id, "owner", resourceIds[3]))
+    .rows[0].allowed, false,
+    "even owner read must exclude deleted ancestors");
 });
