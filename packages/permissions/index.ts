@@ -59,3 +59,36 @@ export async function visible(
   }
   return out;
 }
+
+/**
+ * W08: a caller who has already passed requireAccess() on a known parent
+ * can filter its DIRECT children with two indexed ACL probes per resource.
+ * This reproduces evaluate()'s final child step, avoiding 10k individual
+ * recursive ancestry / membership checks in listing and relation pickers.
+ *
+ * SQL RLS remains enforced; the parent level and role MUST come from the
+ * authenticated server actor/requireAccess(), never request parameters.
+ * Use on direct-child queries only (r.parent_id = accepted parent.id),
+ * with the normal JS visible() recheck after LIMIT as defense in depth.
+ */
+export function directChildCanReadSql(
+  resourceAlias: "r",
+  role: Actor["role"],
+  tenantParam: number,
+  userParam: number,
+  parentPermissionParam: number,
+) {
+  if (role === "owner" || role === "admin") return "TRUE";
+  if (role !== "member" && role !== "guest") return "FALSE";
+  const r = resourceAlias;
+  const tenant = "$" + tenantParam;
+  const actor = "$" + userParam + "::text";
+  const base = "$" + parentPermissionParam + "::integer";
+  const grant = (principal: string) =>
+    "(SELECT a.level FROM acl a WHERE a.tenant_id=" + tenant +
+    "::uuid AND a.resource_id=" + r + ".id AND a.principal_id=" +
+    principal + ")";
+  return "(COALESCE(" + grant(actor) + "," + grant("'*'") +
+    ",CASE WHEN " + r + ".inherit_permissions THEN " + base +
+    " ELSE 0 END)>0)";
+}
