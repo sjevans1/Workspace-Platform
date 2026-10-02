@@ -299,10 +299,16 @@ export async function records(
     "r", a.role, p.length - 2, p.length - 1, p.length);
   where.push(permission);
   p.push(limit, offset);
-  const allowedRows = await visible(q, a, (await q.query(
-    `SELECT r.*,v.values,v.revision FROM resources r JOIN database_records v ON v.resource_id=r.id WHERE ${where.join(" AND ")} ORDER BY ${sort.length ? sort.join(",") + "," : ""}r.position,r.id LIMIT ${p.length - 1} OFFSET ${p.length}`,
-    p,
-  )).rows);
+  // Assemble placeholders as literal "$" + index strings. Do not
+  // accidentally interpolate numeric indices into SQL constants: that
+  // would leave the extended-protocol bind array out of alignment.
+  const sql = "SELECT r.*,v.values,v.revision FROM resources r" +
+    " JOIN database_records v ON v.resource_id=r.id WHERE " +
+    where.join(" AND ") + " ORDER BY " +
+    (sort.length ? sort.join(",") + "," : "") +
+    "r.position,r.id LIMIT $" + String(p.length - 1) +
+    " OFFSET $" + String(p.length);
+  const allowedRows = await visible(q, a, (await q.query(sql, p)).rows);
   return Promise.all(allowedRows.map(async (row) => ({
     ...row,
     values: await presentedRecordValues(q, a, d.properties, row.values),
