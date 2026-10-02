@@ -59,3 +59,37 @@ test("W10a Markdown fallback is explicitly lossy; hostile block payloads fail", 
   for(let i=0;i<42;i++)nested={children:[nested]};
   assert.throws(()=>validateBlocks([nested]),/nesting too deep/i);
 });
+
+
+test("W10b shared callout and divider survive canonical Yjs reload", () => {
+  const original: any[]=[
+    {type:"paragraph",content:"Before note"},
+    {type:"callout",props:{variant:"warning"},content:[
+      {type:"text",text:"Important",styles:{bold:true}},
+      {type:"text",text:" decision",styles:{}},
+    ]},
+    {type:"divider"},
+    {type:"paragraph",content:"After divider"},
+  ];
+  const one=new Y.Doc();
+  const two=new Y.Doc();
+  try {
+    Y.applyUpdate(one,blocksToState(original));
+    const projection=project(one);
+    assert.deepEqual(projection.blocks.map((v:any)=>v.type),
+      ["paragraph","callout","divider","paragraph"]);
+    assert.equal((projection.blocks[1] as any).props.variant,"warning");
+    assert.match(projection.plain_text,/Important decision/);
+    assert.match(JSON.stringify(projection.blocks[1].content),/"bold":true/);
+    Y.applyUpdate(two,projection.state);
+    const reloaded=project(two);
+    assert.deepEqual(reloaded.blocks,projection.blocks);
+    assert.equal((reloaded.blocks[1] as any).props.variant,"warning");
+    assert.equal(reloaded.blocks[2].type,"divider");
+    assert.throws(()=>validateBlocks([{type:"callout",
+      props:{variant:"javascript:alert(1)"},content:"x"}]),
+      /Invalid callout variant/);
+    assert.throws(()=>validateBlocks([{type:"divider",content:"invisible text"}]),
+      /Divider cannot contain text/);
+  } finally { one.destroy(); two.destroy(); }
+});

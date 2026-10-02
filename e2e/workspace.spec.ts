@@ -1596,3 +1596,54 @@ test("W10a formatting toolbar creates persistent Core heading", async ({page}) =
   await expect(page.locator(".bn-editor")).toContainText("W10a heading persists");
   await expect(page.locator(".bn-editor h2")).toContainText("W10a heading persists");
 });
+
+
+test("W10b callout and divider sync across two users and survive reload", async ({page,browser}) => {
+  test.setTimeout(90000);
+  await login(page);
+  await page.getByRole("button",{name:"New page",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Create something new"});
+  await dialog.getByLabel("Name",{exact:true}).fill("W10b shared custom blocks");
+  await dialog.getByRole("button",{name:"Create",exact:true}).click();
+  await expect(page.getByLabel("Page title",{exact:true}))
+    .toHaveValue("W10b shared custom blocks");
+  await expect.poll(() => new URL(page.url()).searchParams.get("page"))
+    .not.toBeNull();
+  const docId=new URL(page.url()).searchParams.get("page");
+  expect(docId).toBeTruthy();
+  const toolbar=page.getByRole("toolbar",{name:"Formatting"});
+  await expect(page.locator(".bn-editor")).toBeVisible();
+  await page.locator(".bn-editor").click();
+  await page.keyboard.type("Before special blocks");
+  await toolbar.getByRole("button",{name:"Insert callout"}).click();
+  await expect(page.locator(".workspace-callout")).toBeVisible();
+  await toolbar.getByRole("button",{name:"Insert divider"}).click();
+  const dividerRule=page.locator(".workspace-divider hr");
+  await expect(dividerRule).toBeVisible();
+  const ruleBox=await dividerRule.boundingBox();
+  expect(ruleBox?.width, "Divider must span a meaningful editor width")
+    .toBeGreaterThan(100);
+  expect(ruleBox?.height, "Divider must not collapse to zero height")
+    .toBeGreaterThanOrEqual(1);
+  await expect.poll(async()=>{
+    const response=await page.request.get(`/api/v1/pages/${docId}/content`);
+    if(!response.ok())return [];
+    const v=await response.json();
+    return v.blocks?.filter((b:any)=>["callout","divider"].includes(b.type))
+      .map((b:any)=>b.type) || [];
+  },{timeout:30000}).toEqual(["callout","divider"]);
+
+  const session=await browser.newContext();
+  try{
+    const other=await session.newPage();
+    await login(other,false);
+    await other.goto(page.url());
+    await expect(other.locator(".workspace-callout")).toContainText(
+      "Add a note for your team.");
+    await expect(other.locator(".workspace-divider hr")).toBeVisible();
+  }finally{await session.close();}
+  await page.reload();
+  await expect(page.locator(".workspace-callout")).toContainText(
+    "Add a note for your team.");
+  await expect(page.locator(".workspace-divider hr")).toBeVisible();
+});

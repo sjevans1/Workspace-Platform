@@ -8,6 +8,7 @@ import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { api, notify } from "../lib/api";
 import { workspacePageHref } from "../../../packages/editor/links";
+import { workspaceEditorSchema } from "../../../packages/editor/schema";
 function Body({
   provider,
   doc,
@@ -29,6 +30,7 @@ function Body({
     [searching, setSearching] = useState(false);
   const editor = useCreateBlockNote(
     withCollaboration({
+      schema: workspaceEditorSchema,
       collaboration: {
         provider: { awareness: provider.awareness || undefined },
         fragment: doc.getXmlFragment("document"),
@@ -65,6 +67,23 @@ function Body({
     editor.updateBlock(current, kind === "heading"
       ? { type: "heading", props: { level: 2 } }
       : { type: kind });
+    editor.focus();
+  }
+  function insertRichBlock(type: "callout" | "divider") {
+    if (readOnly) return;
+    const active = editor.getTextCursorPosition().block;
+    if (type === "callout") {
+      const inserted = editor.insertBlocks([{
+        type: "callout", props: { variant: "info" },
+        content: "Add a note for your team.",
+      }], active, "after");
+      // insertBlocks does not automatically move the cursor. Leave it at
+      // the new inline-capable block so the next inserted divider appears
+      // *after* the callout rather than unexpectedly before it.
+      editor.setTextCursorPosition(inserted[0], "end");
+    } else {
+      editor.insertBlocks([{ type: "divider" }], active, "after");
+    }
     editor.focus();
   }
   function toggleMark(mark: "bold" | "italic") {
@@ -111,6 +130,14 @@ function Body({
             aria-label="Paragraph" title="Convert active block to paragraph"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => changeBlock("paragraph")}>Text</button>
+          <button type="button" className="button small-button"
+            aria-label="Insert callout" title="Insert an editable callout"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertRichBlock("callout")}>Callout</button>
+          <button type="button" className="button small-button"
+            aria-label="Insert divider" title="Insert a section divider"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertRichBlock("divider")}>Divider</button>
         </div>
       )}
       {!readOnly && (
