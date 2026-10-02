@@ -1420,12 +1420,16 @@ test("W08b deployed browser: encrypted cursor paging and Next/Previous round tri
   await page.getByRole("combobox", { name: "Saved view" })
     .selectOption(savedSort.id);
   await expect(table).toHaveCount(100);
-  await expect(table.first()).toContainText("W08b Item 101");
+  await expect(table.first().locator('input[aria-label="Name"]'))
+    .toHaveValue("W08b Item 101");
   await forward.click();
   await expect(table).toHaveCount(2);
-  await expect(table.first()).toContainText("W08b Item 001");
-  await expect(table.last()).toContainText("W08b Item 000");
+  await expect(table.first().locator('input[aria-label="Name"]'))
+    .toHaveValue("W08b Item 001");
+  await expect(table.last().locator('input[aria-label="Name"]'))
+    .toHaveValue("W08b Item 000");
   await backward.click();
   await expect(table).toHaveCount(100);
-  await expect(table.first()).toContainText("W08b Item 101");
+  await expect(table.first().locator('input[aria-label="Name"]'))
+    .toHaveValue("W08b Item 101");
 });
