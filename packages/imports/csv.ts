@@ -65,7 +65,7 @@ export function proposeCsvMapping(table: CsvTable): CsvColumnMapping[] {
 function effectiveMapping(columns: string[], mapping?: CsvColumnMapping[]) {
   // Maintain legacy unconfigured import semantics. A proposed mapping is
   // accepted only through an explicit UI choice or API payload.
-  const actual = mapping ? csvMappingSchema.parse(mapping) :
+  const actual: CsvColumnMapping[] = mapping ? csvMappingSchema.parse(mapping) :
     columns.map((source, i) => ({
       source, id: "field" + i, name: source,
       type: (i === 0 ? "title" : "text") as "title" | "text",
