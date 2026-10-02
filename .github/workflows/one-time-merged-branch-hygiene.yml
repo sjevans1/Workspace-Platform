@@ -1,0 +1,141 @@
+name: One-time merged branch hygiene
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/merged-branch-cleanup-2026-10-01.json"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: one-time-merged-branch-hygiene
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.repository == 'sjevans1/Workspace-Platform'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out audited manifest from main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Node.js runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+      - name: Prune only exact-SHA, merged PR branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const manifest = JSON.parse(readFileSync(
+            ".github/merged-branch-cleanup-2026-10-01.json", "utf8"
+          ));
+          const [owner, repo] = process.env.GITHUB_REPOSITORY.split("/");
+          const root = "/repos/" + owner + "/" + repo;
+          if (owner + "/" + repo !== manifest.scope ||
+              process.env.GITHUB_REF !== "refs/heads/main")
+            throw new Error("Unexpected repository/ref; refusing cleanup");
+          if (!Array.isArray(manifest.delete) || manifest.delete.length !== 25)
+            throw new Error("Unreviewed or incomplete allowlist");
+          const preserve = new Set(manifest.preserve);
+          if (!preserve.has("main") ||
+              !preserve.has("feature/w08-visible-page-regression-prep") ||
+              !preserve.has("feature/oidc-tenant-state-provenance"))
+            throw new Error("Expected protected work branches missing");
+          async function request(method, route) {
+            const response = await fetch("https://api.github.com" + route, {
+              method, headers: {
+                "Authorization": "Bearer " + process.env.GH_TOKEN,
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"
+              }
+            });
+            if (response.status === 404) return null;
+            if (!response.ok)
+              throw new Error(method + " " + route + ": HTTP " +
+                response.status + " " + (await response.text()).slice(0, 300));
+            if (response.status === 204) return true;
+            return response.json();
+          }
+          const encodeBranch = name => name.split("/").map(encodeURIComponent).join("/");
+          async function openPulls(branch) {
+            return request("GET", root + "/pulls?state=open&head=" +
+              encodeURIComponent(owner + ":" + branch) + "&per_page=100");
+          }
+          const seen = new Set();
+          const stats = { deleted: [], skipped: [], failed: [] };
+          for (const entry of manifest.delete) {
+            const name = entry.branch;
+            try {
+              if (typeof name !== "string" ||
+                  !/^(docs|feature|fix|hardening|planning|security)\/[a-zA-Z0-9_-]+$/.test(name) ||
+                  !/^[a-f0-9]{40}$/.test(entry.expected_sha) ||
+                  !Number.isInteger(entry.merged_pr) ||
+                  seen.has(name) || preserve.has(name) || name === "main")
+                throw new Error("Unsafe or duplicate manifest entry");
+              seen.add(name);
+              const pr = await request("GET", root + "/pulls/" + entry.merged_pr);
+              if (!pr || !pr.merged_at || pr.head.ref !== name ||
+                  pr.head.sha !== entry.expected_sha ||
+                  pr.head.repo?.full_name !== manifest.scope ||
+                  pr.base.ref !== "main") {
+                stats.skipped.push(name + ": merged-PR/head verification failed");
+                continue;
+              }
+              const ref = await request("GET", root + "/git/ref/heads/" +
+                encodeBranch(name));
+              if (!ref) {
+                stats.skipped.push(name + ": already absent");
+                continue;
+              }
+              if (ref.object?.sha !== entry.expected_sha) {
+                stats.skipped.push(name + ": branch advanced since audit");
+                continue;
+              }
+              const pending = await openPulls(name);
+              if (pending?.length) {
+                stats.skipped.push(name + ": referenced by an open PR");
+                continue;
+              }
+              await request("DELETE", root + "/git/refs/heads/" +
+                encodeBranch(name));
+              stats.deleted.push(name);
+              console.log("DELETED merged PR #" + entry.merged_pr + ": " + name);
+            } catch (error) {
+              stats.failed.push(name + ": " + error.message);
+              console.error("FAILED " + name + ": " + error.message);
+            }
+          }
+          // Clean this maintenance PR's own source branch *only* if it is
+          // fully merged and still points to the exact reviewed PR head.
+          const self = manifest.cleanup_self_if_merged;
+          try {
+            if (self && !preserve.has(self)) {
+              const pulls = await request("GET", root + "/pulls?state=closed&head=" +
+                encodeURIComponent(owner + ":" + self) + "&per_page=100");
+              const merged = pulls?.filter(pr => pr.merged_at &&
+                pr.head.repo?.full_name === manifest.scope &&
+                pr.head.ref === self) ?? [];
+              const ref = await request("GET", root + "/git/ref/heads/" +
+                encodeBranch(self));
+              if (merged.length === 1 && ref?.object.sha === merged[0].head.sha &&
+                  !(await openPulls(self))?.length) {
+                await request("DELETE", root + "/git/refs/heads/" +
+                  encodeBranch(self));
+                stats.deleted.push(self);
+                console.log("DELETED merged cleanup PR branch: " + self);
+              } else stats.skipped.push(self + ": no exact merged-PR match");
+            }
+          } catch (error) {
+            stats.failed.push(self + ": " + error.message);
+          }
+          console.log("BRANCH HYGIENE RESULT " + JSON.stringify(stats, null, 2));
+          if (stats.failed.length) throw new Error(
+            "Branch hygiene incomplete; see per-branch errors (preserved on error)");
+          NODE
