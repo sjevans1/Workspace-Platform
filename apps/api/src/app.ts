@@ -46,6 +46,7 @@ import {
   access,
   visible,
   ancestry,
+  directChildCanReadSql,
 } from "../../../packages/permissions/index.ts";
 import {
   defaultBranding,
@@ -1608,13 +1609,18 @@ function dataRoutes(
         };
       }
       const search = String(params.search || "").slice(0, 120).toLowerCase();
+      // Source target database has been permission checked. Every candidate
+      // record is an immediate child; use indexed personal/wildcard grants
+      // instead of re-running ancestry for all search matches.
+      const gate = directChildCanReadSql("r", a.role, 3, 4, 5);
       const rows = (await q.query(
-        "SELECT id,title FROM resources WHERE kind='record'" +
-        " AND parent_id=$1 AND deleted_at IS NULL" +
-        " AND position($2 in lower(title))>0" +
-        " AND workspace_can_read_resource(id,$3::uuid,$4::text)" +
-        " ORDER BY lower(title),id LIMIT $5 OFFSET $6",
-        [target.id, search, a.user_id, a.role, limit + 1, offset],
+        "SELECT r.id,r.title FROM resources r WHERE r.kind='record'" +
+        " AND r.parent_id=$1 AND r.deleted_at IS NULL" +
+        " AND position($2 in lower(r.title))>0" +
+        " AND " + gate +
+        " ORDER BY lower(r.title),r.id LIMIT $6 OFFSET $7",
+        [target.id, search, a.tenant_id, a.user_id,
+          target.effective_permission, limit + 1, offset],
       )).rows;
       // Defense in depth; visible() must agree with the SQL predicate.
       const readable = await visible(q, a, rows);
