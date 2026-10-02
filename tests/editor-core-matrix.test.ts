@@ -44,7 +44,7 @@ test("W10a installed BlockNote Core server schema retains basic rich blocks", ()
 });
 
 test("W10a Markdown fallback is explicitly lossy; hostile block payloads fail", async () => {
-  const parsed=await markdownToBlocks("## Brief\\n\\n- Item A\\n- Item B\\n");
+  const parsed=await markdownToBlocks("## Brief\n\n- Item A\n- Item B\n");
   assert.equal(parsed[0].type,"heading");
   assert.ok(parsed.some((block:any)=>block.type==="bulletListItem"));
   const output=await blocksToMarkdown(parsed);
