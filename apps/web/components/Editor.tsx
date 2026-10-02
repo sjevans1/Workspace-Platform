@@ -69,7 +69,8 @@ function Body({
   }
   function toggleMark(mark: "bold" | "italic") {
     if (readOnly) return;
-    editor.toggleStyles({ [mark]: true });
+    if (mark === "bold") editor.toggleStyles({ bold: true });
+    else editor.toggleStyles({ italic: true });
     editor.focus();
   }
   function insertPageLink(page: any) {
