@@ -4155,3 +4155,103 @@ test("W09b existing-database CSV append checks schema, ACL and atomicity", async
   assert.equal((await ok("GET", path + "/records")).length, 3,
     "revoked membership must not append any records");
 });
+
+
+test("W09c CSV submission retries are principal-bound, atomic and schema-aware", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W09c idempotency target",
+  });
+  const url = "/databases/" + target.id;
+  const content = "Name\nCreated once\n";
+  const preview = await ok("POST", "/imports/preview", {
+    parent_id:space.id,target_database_id:target.id,content,
+  });
+  const key = randomUUID();
+  const request = {
+    parent_id:space.id, target_database_id:target.id, format:"csv",
+    name:"Idempotent append",content, mapping:preview.mapping,
+    expected_schema_digest:preview.target.schema_digest,
+    existing_mode:"append",idempotency_key:key,
+  };
+  const [first, simultaneous] = await Promise.all([
+    ok("POST", "/imports", request),
+    ok("POST", "/imports", request),
+  ]);
+  assert.equal(first.id,simultaneous.id,
+    "concurrent same-key requests enqueue one logical job");
+  assert.equal(first.status,"pending");
+  const queued = await db.tenant(owner.tenant,q=>q.query(
+    "SELECT id,request_digest,payload FROM jobs WHERE user_id=$1 AND idempotency_key=$2",
+    [owner.id,key]));
+  assert.equal(queued.rowCount,1);
+  assert.match(queued.rows[0].request_digest,/^[a-f0-9]{64}$/);
+  assert.equal(queued.rows[0].payload.idempotency_key,undefined,
+    "worker payload must not persist the client replay secret");
+  assert.equal((await req("POST","/imports", {
+    ...request,content:"Name\nDifferent content\n",
+  })).statusCode,409,"same key cannot silently mean another request");
+  assert.equal((await req("POST","/imports", {
+    ...request,idempotency_key:"bad",
+  })).statusCode,400);
+  assert.equal((await req("POST","/imports", {
+    parent_id:space.id,name:"Plain page",format:"markdown",
+    content:"# Page",idempotency_key:randomUUID(),
+  })).statusCode,400,"idempotency key is currently CSV-only");
+  assert.notEqual((await req("POST","/imports",request,other)).statusCode,200,
+    "foreign tenant must not resolve the first actor's key");
+  await tick(db);
+  await tick(db);
+  assert.equal((await ok("GET",url+"/records")).length,1,
+    "worker retry must not append already completed job");
+  const after = await ok("POST","/imports",request);
+  assert.equal(after.id,first.id);
+  assert.equal(after.status,"completed");
+  // A successful job can be retrieved by its key after a schema revision:
+  // current write ACL still applies, but the original job is not requeued.
+  await ok("PATCH",url,{properties:[
+    {id:"name",name:"Name",type:"title"},
+    {id:"note",name:"Note",type:"text"},
+  ]});
+  const completedAgain = await ok("POST","/imports",request);
+  assert.equal(completedAgain.id,first.id);
+  assert.equal(completedAgain.status,"completed");
+  assert.equal((await req("POST","/imports",{
+    ...request,idempotency_key:randomUUID(),
+  })).statusCode,409,
+    "fresh jobs cannot use obsolete schema digest");
+  assert.equal((await ok("GET",url+"/records")).length,1);
+  // Failed original jobs are also stable: same-key retries return failure,
+  // not a second append attempt, even when schema drift caused the failure.
+  const refreshed = await ok("POST", "/imports/preview", {
+    parent_id:space.id,target_database_id:target.id,content,
+  });
+  const failedRequest = {
+    ...request,idempotency_key:randomUUID(),
+    expected_schema_digest:refreshed.target.schema_digest,
+  };
+  const pending = await ok("POST","/imports",failedRequest);
+  await ok("PATCH",url,{properties:[
+    {id:"name",name:"Name",type:"title"},
+    {id:"note",name:"Note",type:"text"},
+    {id:"extra",name:"Extra",type:"text"},
+  ]});
+  await tick(db);
+  const failed = await ok("GET","/jobs/"+pending.id);
+  assert.equal(failed.status,"failed");
+  const failedReplay = await ok("POST","/imports",failedRequest);
+  assert.deepEqual(failedReplay,{id:pending.id,status:"failed"});
+  await tick(db);
+  assert.equal((await ok("GET",url+"/records")).length,1,
+    "failed stale-schema job and retry must never append rows");
+  // Previous callers that send no key retain legacy append-only semantics.
+  const finalPreview = await ok("POST", "/imports/preview", {
+    parent_id:space.id,target_database_id:target.id,content,
+  });
+  const legacy = await ok("POST","/imports",{
+    ...request,idempotency_key:undefined,
+    expected_schema_digest:finalPreview.target.schema_digest,
+  });
+  assert.notEqual(legacy.id,first.id);
+  await tick(db);
+  assert.equal((await ok("GET",url+"/records")).length,2);
+});
