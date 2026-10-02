@@ -1,7 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { randomUUID } from "node:crypto";
-import { prepareCsvImport } from "../../../packages/imports/csv.ts";
+import { prepareCsvImport, prepareCsvIntoExisting, csvSchemaDigest } from "../../../packages/imports/csv.ts";
 import { Database, one } from "../../../packages/database/index.ts";
 import { decrypt, signature } from "../../../packages/events/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
@@ -231,18 +231,45 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
           // membership/parent permission. Any invalid cell fails BEFORE
           // creating the new database. The enclosing savepoint remains the
           // atomic rollback guard for subsequent DB/storage failures.
-          const prepared = prepareCsvImport(p.content, p.mapping);
-          resource = await createResource(q, a, {
-            parent_id: p.parent_id,
-            kind: "database",
-            title: p.name,
-          });
-          await q.query(
-            "UPDATE databases SET properties=$2 WHERE resource_id=$1",
-            [resource.id, json(prepared.properties)],
-          );
-          for (const values of prepared.rows)
-            await createRecord(q, a, resource.id, values);
+          if (p.target_database_id) {
+            // APPEND ONLY: no duplicate probing against hidden records and no
+            // SQL UPDATE. Recheck parent/target membership and hold schema
+            // row lock until all records are inserted and job completes.
+            assert(p.existing_mode === "append" &&
+              typeof p.expected_schema_digest === "string" &&
+              Array.isArray(p.mapping),400,
+              "Existing import requires an explicit mapping and append mode");
+            const target = await requireAccess(q, a, p.target_database_id,3);
+            assert(target.kind === "database" && !target.deleted_at &&
+              target.parent_id === p.parent_id,404,
+              "Import target unavailable");
+            const definition = await one(q,
+              "SELECT properties FROM databases WHERE resource_id=$1 FOR UPDATE",
+              [target.id]);
+            assert(definition && csvSchemaDigest(definition.properties) ===
+              p.expected_schema_digest,409,
+              "Target schema changed; preview again");
+            const prepared = prepareCsvIntoExisting(
+              p.content,p.mapping,definition.properties);
+            for (const values of prepared.rows)
+              await createRecord(q,a,target.id,values);
+            resource = target;
+          } else {
+            assert(!p.existing_mode && !p.expected_schema_digest,400,
+              "Target options require a database");
+            const prepared = prepareCsvImport(p.content, p.mapping);
+            resource = await createResource(q, a, {
+              parent_id: p.parent_id,
+              kind: "database",
+              title: p.name,
+            });
+            await q.query(
+              "UPDATE databases SET properties=$2 WHERE resource_id=$1",
+              [resource.id, json(prepared.properties)],
+            );
+            for (const values of prepared.rows)
+              await createRecord(q, a, resource.id, values);
+          }
         }
         await q.query(
           "UPDATE jobs SET status='completed',result=$2 WHERE id=$1",

@@ -853,6 +853,9 @@ function CreateDialog({
     [preview, setPreview] = useState<any>(),
     [mapping, setMapping] = useState<any[]>([]),
     [previewContent, setPreviewContent] = useState(""),
+    [databaseChoices, setDatabaseChoices] = useState<any[]>([]),
+    [targetDatabase, setTargetDatabase] = useState(""),
+    [appendConfirmed, setAppendConfirmed] = useState(false),
     [busy, setBusy] = useState(false);
   useEffect(() => {
     run(async () => {
@@ -865,6 +868,15 @@ function CreateDialog({
         setDestination(spaces.find((n: any) => n.kind === "space")?.id || root);
     });
   }, []);
+  useEffect(() => {
+    if (!importing) return;
+    run(async () => {
+      const siblings = await api(
+        `/resources?parent_id=${destination}&limit=200`);
+      setDatabaseChoices(siblings.filter((r: any) =>
+        r.kind === "database" && !r.deleted_at));
+    });
+  }, [destination, importing]);
   async function previewFile() {
     if (!file || !file.name.toLowerCase().endsWith(".csv"))
       return notify("Choose a CSV file to preview its column mapping");
@@ -876,6 +888,7 @@ function CreateDialog({
         const content = await file.text();
         const proposal = await api("/imports/preview", "POST", {
           parent_id: destination, content,
+          ...(targetDatabase ? { target_database_id: targetDatabase } : {}),
         });
         setPreviewContent(content);
         setPreview(proposal);
@@ -894,6 +907,9 @@ function CreateDialog({
         const isCsv = file.name.toLowerCase().endsWith(".csv");
         if (isCsv && !preview)
           throw Error("Preview the CSV and review its column mapping before import");
+        if (isCsv && targetDatabase && (!appendConfirmed || !preview.target ||
+          preview.target.id !== targetDatabase))
+          throw Error("Confirm the append-only target import after preview");
         const content = isCsv ? previewContent : await file.text();
         const j = await api("/imports", "POST", {
           parent_id: destination,
@@ -901,6 +917,11 @@ function CreateDialog({
           format: isCsv ? "csv" : "markdown",
           content,
           ...(isCsv ? { mapping } : {}),
+          ...(isCsv && targetDatabase ? {
+            target_database_id: targetDatabase,
+            expected_schema_digest: preview.target.schema_digest,
+            existing_mode: "append",
+          } : {}),
         });
         notify(
           "Import queued. This window will open the result when it is ready.",
@@ -972,6 +993,8 @@ function CreateDialog({
               setPreview(undefined);
               setMapping([]);
               setPreviewContent("");
+              setTargetDatabase("");
+              setAppendConfirmed(false);
             }}
           >
             {!parents.some((n) => n.id === parent) && (
@@ -1001,11 +1024,32 @@ function CreateDialog({
                   setPreview(undefined);
                   setMapping([]);
                   setPreviewContent("");
+                  setAppendConfirmed(false);
                 }}
               />
             </Field>
             {file?.name.toLowerCase().endsWith(".csv") && (
               <>
+                <Field label="Import destination mode">
+                  <select
+                    aria-label="Import destination mode"
+                    value={targetDatabase}
+                    onChange={(e) => {
+                      setTargetDatabase(e.target.value);
+                      setPreview(undefined);
+                      setMapping([]);
+                      setPreviewContent("");
+                      setAppendConfirmed(false);
+                    }}
+                  >
+                    <option value="">Create a new database</option>
+                    {databaseChoices.map((db: any) => (
+                      <option key={db.id} value={db.id}>
+                        Append records to {db.title}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
                 <button type="button" className="button" disabled={busy}
                   onClick={() => void previewFile()}>
                   Preview CSV columns
@@ -1027,10 +1071,40 @@ function CreateDialog({
                           </label>
                           <small>{preview.sample.slice(0, 2).map(
                             (r: string[]) => r[index]).join(" · ").slice(0, 120)}</small>
+                          {targetDatabase && preview.target && (
+                            <label>
+                              Existing database property
+                              <select
+                                aria-label={`Target property for ${item.source}`}
+                                disabled={item.skip}
+                                value={preview.target.properties.some(
+                                  (p: any) => p.id === item.id) ?
+                                  item.id : ""}
+                                onChange={(e) => {
+                                  const property = preview.target.properties.find(
+                                    (p: any) => p.id === e.target.value);
+                                  if (!property) return;
+                                  setMapping((old) => old.map(
+                                    (v: any, i: number) => i === index ?
+                                      { ...v, id: property.id,
+                                        name: property.name,
+                                        type: property.type } : v));
+                                }}
+                              >
+                                <option value="">Select a property</option>
+                                {preview.target.properties.map((p: any) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.name} ({p.type})
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
                           <label>
                             Field type
                             <select aria-label={`Type for ${item.source}`}
-                              value={item.type} disabled={item.skip}
+                              value={item.type}
+                              disabled={item.skip || !!targetDatabase}
                               onChange={(e) => setMapping((old) => old.map(
                                 (v: any, i: number) => i === index ?
                                   { ...v, type: e.target.value } : v))}>
@@ -1043,7 +1117,8 @@ function CreateDialog({
                           <label>
                             Column name
                             <input aria-label={`Column name for ${item.source}`}
-                              maxLength={120} disabled={item.skip}
+                              maxLength={120}
+                              disabled={item.skip || !!targetDatabase}
                               value={item.name}
                               onChange={(e) => setMapping((old) => old.map(
                                 (v: any, i: number) => i === index ?
@@ -1053,6 +1128,16 @@ function CreateDialog({
                       ))}
                     </div>
                     <small>{preview.warnings[0]}</small>
+                    {targetDatabase && (
+                      <label className="import-append-confirmation">
+                        <input type="checkbox"
+                          aria-label="Confirm append-only import"
+                          checked={appendConfirmed}
+                          onChange={(e) => setAppendConfirmed(e.target.checked)} />
+                        Append new records to this database without updating,
+                        replacing or deduplicating existing records.
+                      </label>
+                    )}
                   </div>
                 )}
               </>
@@ -1064,7 +1149,8 @@ function CreateDialog({
             Cancel
           </button>
           <button disabled={busy || (importing &&
-            !!file?.name.toLowerCase().endsWith(".csv") && !preview)}
+            !!file?.name.toLowerCase().endsWith(".csv") &&
+            (!preview || !!targetDatabase && !appendConfirmed))}
             className="button primary">
             {busy ? "Working…" : importing ? "Import" : "Create"}
           </button>

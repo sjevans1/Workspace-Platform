@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   readCsvTable, prepareCsvImport, previewCsvImport,
-  type CsvColumnMapping,
+  prepareCsvIntoExisting, csvSchemaDigest, type CsvColumnMapping,
 } from "../packages/imports/csv.ts";
 
 const csv = "Name,Units,Due,Done,Note\n" +
@@ -76,4 +76,38 @@ test("W09 mapping/header validation prevents collisions and ambiguous CSV", () =
   assert.throws(() => prepareCsvImport(csv,[
     {...mapping[0],type:"text",skip:true}, ...mapping.slice(1)]),
     /title/);
+});
+
+test("W09b existing-database mapping requires exact target schema and types", () => {
+  const target = [
+    {id:"name",name:"Name",type:"title"},
+    {id:"quantity",name:"Units",type:"number"},
+    {id:"due",name:"Due",type:"date"},
+    {id:"done",name:"Done",type:"checkbox"},
+  ] as any;
+  const digest = csvSchemaDigest(target);
+  assert.match(digest,/^[a-f0-9]{64}$/);
+  assert.equal(digest,csvSchemaDigest(target));
+  assert.notEqual(digest,csvSchemaDigest(target.slice(0,3)));
+  const mapping: CsvColumnMapping[] = [
+    {source:"Name",id:"name",name:"Name",type:"title"},
+    {source:"Units",id:"quantity",name:"Units",type:"number"},
+    {source:"Due",id:"due",name:"Due",type:"date"},
+    {source:"Done",id:"done",name:"Done",type:"checkbox"},
+    {source:"Note",id:"unused",name:"Skip",type:"text",skip:true},
+  ];
+  const rows = prepareCsvIntoExisting(csv,mapping,target).rows;
+  assert.deepEqual(rows[0],{name:"Alpha",quantity:12,
+    due:"2026-10-01",done:true});
+  assert.deepEqual(rows[1],{name:"Beta",quantity:0,
+    due:"2026-10-02",done:false});
+  assert.throws(()=>prepareCsvIntoExisting(csv,[
+    {...mapping[0],id:"notTheTitle"},...mapping.slice(1)],target),/schema/);
+  assert.throws(()=>prepareCsvIntoExisting(csv,[
+    {...mapping[0],type:"text"},...mapping.slice(1)],target),/title/);
+  assert.throws(()=>prepareCsvIntoExisting(csv,[
+    mapping[0],{...mapping[1],type:"text"},...mapping.slice(2)],
+    target),/schema/);
+  assert.throws(()=>prepareCsvIntoExisting(
+    csv.replace("2026-10-02","2026-02-30"),mapping,target),/row 2/);
 });

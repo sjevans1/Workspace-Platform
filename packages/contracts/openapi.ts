@@ -287,6 +287,7 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
       properties: {
         parent_id: uuid,
         content: { type: "string", maxLength: 2097152 },
+        target_database_id: uuid,
       },
       additionalProperties: false,
     },
@@ -315,6 +316,26 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
             items: { type: "array", maxItems: 100,
               items: { type: "string" } } },
           warnings: { type: "array", items: { type: "string" } },
+          target: {
+            type: "object",
+            required: ["id","schema_digest","properties"],
+            properties: {
+              id: uuid,
+              schema_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+              properties: { type: "array", maxItems: 100,
+                items: {
+                  type: "object", required: ["id","name","type"],
+                  properties: {
+                    id: { type: "string" },
+                    name: { type: "string" },
+                    type: { enum: ["title","text","number","date","checkbox"] },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -330,6 +351,9 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
         format: { enum: ["markdown", "csv"] },
         name: { type: "string", minLength: 1, maxLength: 500 },
         content: { type: "string", maxLength: 2097152 },
+        target_database_id: uuid,
+        expected_schema_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        existing_mode: { enum: ["append"] },
         mapping: { type: "array", minItems: 1, maxItems: 100,
           items: {
             type: "object",

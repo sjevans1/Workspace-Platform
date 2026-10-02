@@ -4049,3 +4049,109 @@ test("W09a permissioned CSV preview and atomically mapped worker import", async 
   });
   assert.equal(invalidMarkdownMap.statusCode,400);
 });
+
+test("W09b existing-database CSV append checks schema, ACL and atomicity", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "database", parent_id: space.id, title: "W09b target",
+  });
+  const path = "/databases/" + target.id;
+  await ok("PATCH", path, { properties: [
+    { id:"name", name:"Name", type:"title" },
+    { id:"quantity", name:"Quantity", type:"number" },
+    { id:"due", name:"Due", type:"date" },
+    { id:"done", name:"Done", type:"checkbox" },
+  ] });
+  await ok("POST", path + "/records", {
+    values:{ name:"Original", quantity:99 },
+  });
+  const content = "Name,Quantity,Due,Done\n" +
+    "First,2,2026-10-01,true\n" +
+    "Second,0,2026-10-02,false";
+  const args={ parent_id:space.id, target_database_id:target.id, content };
+  const preview = await ok("POST", "/imports/preview",args);
+  assert.equal(preview.row_count,2);
+  assert.deepEqual(preview.mapping.map((m:any)=>m.id),
+    ["name","quantity","due","done"]);
+  assert.match(preview.target.schema_digest,/^[a-f0-9]{64}$/);
+  assert.equal(preview.target.id,target.id);
+  assert.equal((await req("POST", "/imports/preview", {
+    ...args, target_database_id:randomUUID(),
+  })).statusCode,404);
+  assert.notEqual((await req("POST","/imports/preview",
+    args,other)).statusCode,200);
+  const payload = {
+    ...args, name:"Explicit append",format:"csv",mapping:preview.mapping,
+    expected_schema_digest:preview.target.schema_digest,
+    existing_mode:"append",
+  };
+  assert.equal((await req("POST","/imports",{
+    ...payload, existing_mode:undefined,
+  })).statusCode,400);
+  assert.equal((await req("POST","/imports",{
+    ...payload, expected_schema_digest:"a".repeat(64),
+  })).statusCode,409);
+  const first = await ok("POST","/imports",payload);
+  await tick(db);
+  const completed=await ok("GET","/jobs/"+first.id);
+  assert.equal(completed.status,"completed",JSON.stringify(completed.result));
+  assert.equal(completed.result.resource_id,target.id);
+  const records=await ok("GET",path+"/records");
+  assert.equal(records.length,3);
+  const byName=new Map(records.map((r:any)=>[r.values.name,r.values]));
+  assert.equal((byName.get("Original") as any).quantity,99);
+  assert.deepEqual(["First","Second"].map(name=>{
+    const v=byName.get(name) as any;
+    return {name,quantity:v.quantity,due:v.due,done:v.done};
+  }),[
+    {name:"First",quantity:2,due:"2026-10-01",done:true},
+    {name:"Second",quantity:0,due:"2026-10-02",done:false},
+  ]);
+  assert.equal((await req("GET","/jobs/"+first.id,undefined,other))
+    .statusCode,404);
+  const invalid = await ok("POST","/imports",{
+    ...payload, content:content.replace("2026-10-02","2026-02-30"),
+  });
+  await tick(db);
+  const failed=await ok("GET","/jobs/"+invalid.id);
+  assert.equal(failed.status,"failed");
+  assert.match(failed.result.error,/row 2/);
+  assert.equal((await ok("GET",path+"/records")).length,3,
+    "late invalid row must roll back all appended rows");
+
+  const changed = await ok("POST","/imports",payload);
+  await ok("PATCH",path,{properties:[
+    {id:"name",name:"Name",type:"title"},
+    {id:"quantity",name:"Quantity",type:"number"},
+    {id:"due",name:"Due",type:"date"},
+    {id:"done",name:"Done",type:"checkbox"},
+    {id:"note",name:"Note",type:"text"},
+  ]});
+  await tick(db);
+  const stale=await ok("GET","/jobs/"+changed.id);
+  assert.equal(stale.status,"failed");
+  assert.match(stale.result.error,/schema changed/i);
+  assert.equal((await ok("GET",path+"/records")).length,3,
+    "schema revision after queue must fail closed before appending");
+
+  // Execution-time authorization is separate from the enqueue decision.
+  // Disabling membership after queue must prevent all appended rows.
+  const refreshed = await ok("POST", "/imports/preview", args);
+  const revoked = await ok("POST", "/imports", {
+    ...payload, expected_schema_digest: refreshed.target.schema_digest,
+  });
+  await db.tenant(owner.tenant, q => q.query(
+    "UPDATE memberships SET active=false WHERE tenant_id=$1 AND user_id=$2",
+    [owner.tenant, owner.id]));
+  try {
+    await tick(db);
+  } finally {
+    await db.tenant(owner.tenant, q => q.query(
+      "UPDATE memberships SET active=true WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, owner.id]));
+  }
+  const revokedJob = await ok("GET", "/jobs/" + revoked.id);
+  assert.equal(revokedJob.status, "failed");
+  assert.match(revokedJob.result.error, /membership revoked/i);
+  assert.equal((await ok("GET", path + "/records")).length, 3,
+    "revoked membership must not append any records");
+});
