@@ -78,8 +78,16 @@ export function directChildCanReadSql(
   userParam: number,
   parentPermissionParam: number,
 ) {
-  if (role === "owner" || role === "admin") return "TRUE";
-  if (role !== "member" && role !== "guest") return "FALSE";
+  // All callers bind tenant, principal and inherited permission slots.
+  // Even privileged roles must reference all three placeholders; returning
+  // bare TRUE would leave untyped gaps in PostgreSQL's prepared parameters.
+  const verifiedParent =
+    "(" + resourceAlias + ".tenant_id=$" + tenantParam +
+    "::uuid AND $" + userParam + "::uuid IS NOT NULL AND $" +
+    parentPermissionParam + "::integer>0)";
+  if (role === "owner" || role === "admin") return verifiedParent;
+  if (role !== "member" && role !== "guest")
+    return "(" + verifiedParent + " AND FALSE)";
   const r = resourceAlias;
   const tenant = "$" + tenantParam;
   const actor = "$" + userParam + "::text";
