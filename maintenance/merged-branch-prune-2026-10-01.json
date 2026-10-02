@@ -1,0 +1,137 @@
+{
+  "repository": "sjevans1/Workspace-Platform",
+  "audited_at": "2026-10-01",
+  "baseline_main_sha": "9070518b493a3224c56041e5da190ab5bbc2d48f",
+  "protected_branches": [
+    "main",
+    "feature/w08-visible-page-regression-prep",
+    "feature/oidc-tenant-state-provenance"
+  ],
+  "candidates": [
+    {
+      "branch": "docs/move-on-baseline-reconciliation",
+      "merged_pr": 54,
+      "expected_sha": "cd0adde7d66557f42a10e3f76d0cc7f26468c2c2"
+    },
+    {
+      "branch": "feature/database-calendar-view",
+      "merged_pr": 44,
+      "expected_sha": "5e87555f576715e8955ff3c763cb2f57080799b5"
+    },
+    {
+      "branch": "feature/editor-page-links-backlinks",
+      "merged_pr": 61,
+      "expected_sha": "2ef9940cf849208bb8bd900d95159529788709d7"
+    },
+    {
+      "branch": "feature/integration-event-cursor",
+      "merged_pr": 43,
+      "expected_sha": "0ee449f5fe266da281ad0a0a2c121097bdc6ae91"
+    },
+    {
+      "branch": "feature/intelligence-resource-reconciliation",
+      "merged_pr": 57,
+      "expected_sha": "d244ee299ce317bb9ad61bed1c764e1445ea6a7a"
+    },
+    {
+      "branch": "feature/keyboard-search-palette",
+      "merged_pr": 45,
+      "expected_sha": "de207042d3bdac7df5eb58f589a136fbffd22cfb"
+    },
+    {
+      "branch": "feature/personal-recently-viewed",
+      "merged_pr": 59,
+      "expected_sha": "2202e8fe97212d29c80d97d5789e1095c506bc49"
+    },
+    {
+      "branch": "feature/staged-webhook-secret-rotation",
+      "merged_pr": 52,
+      "expected_sha": "6714cfc0062f09215eb5cff1355cf6105736a75c"
+    },
+    {
+      "branch": "feature/standalone-appearance-mode",
+      "merged_pr": 58,
+      "expected_sha": "5d4ad4ccb1a96bed8130ff6761929457f5e7e924"
+    },
+    {
+      "branch": "feature/tenant-idp-settings-ui",
+      "merged_pr": 46,
+      "expected_sha": "9e16f62f2c9bed061568d0a34720d59c005c18b1"
+    },
+    {
+      "branch": "feature/tenant-oidc-bound-login-state",
+      "merged_pr": 41,
+      "expected_sha": "c9fa67bb59d9f8a96591254578fa1f7c9af7f50e"
+    },
+    {
+      "branch": "feature/tenant-oidc-provider-foundation",
+      "merged_pr": 37,
+      "expected_sha": "7e7f8cef262b46265f92915a32495b0bab4fcccc"
+    },
+    {
+      "branch": "feature/tenant-oidc-provider-registry",
+      "merged_pr": 39,
+      "expected_sha": "3adc31f3e62f5b5db247b8520842e232ee061087"
+    },
+    {
+      "branch": "feature/w05-relation-foundation-prep",
+      "merged_pr": 65,
+      "expected_sha": "450a7f6298b50613d8008af5a470d3f312ea08ec"
+    },
+    {
+      "branch": "feature/w06-safe-number-formulas",
+      "merged_pr": 66,
+      "expected_sha": "678b88ec1de0605f1f4af9cc8eef446d8dd3d57e"
+    },
+    {
+      "branch": "feature/w07-acl-safe-rollups-prep",
+      "merged_pr": 69,
+      "expected_sha": "3f233b89f810666d46b29d7d4a96c27717286aa0"
+    },
+    {
+      "branch": "feature/webhook-dead-delivery-replay",
+      "merged_pr": 48,
+      "expected_sha": "5ceff2274f233a9974cff9c678ed60ada9cffc56"
+    },
+    {
+      "branch": "feature/webhook-delivery-replay-ui",
+      "merged_pr": 51,
+      "expected_sha": "c06d34f9acbf832e65e1a06392f241448aa406e4"
+    },
+    {
+      "branch": "fix/bootstrap-auth-resource-isolation",
+      "merged_pr": 49,
+      "expected_sha": "61d87efd971ec2d93190fdbaf91cc43d25c842e1"
+    },
+    {
+      "branch": "fix/oidc-switch-issuer-binding",
+      "merged_pr": 40,
+      "expected_sha": "804f62701b68c895af1185de3a5663efb12f1681"
+    },
+    {
+      "branch": "hardening/file-antivirus",
+      "merged_pr": 35,
+      "expected_sha": "0f51599962d0fe41e04d5a10d7cf057abe3de47c"
+    },
+    {
+      "branch": "hardening/oidc-provider-compatibility",
+      "merged_pr": 36,
+      "expected_sha": "d054bd8ea832092a726ebb4b5e656ae35c8a0ef9"
+    },
+    {
+      "branch": "planning/workspace-1-0-delivery-roadmap",
+      "merged_pr": 63,
+      "expected_sha": "6ba5c980cd74997c1914efb084fcc6d72afa5d48"
+    },
+    {
+      "branch": "security/oidc-id-token-signature-verification",
+      "merged_pr": 55,
+      "expected_sha": "058e13baecf68b889d13f682b6de18b1ad3de2a6"
+    },
+    {
+      "branch": "security/w01-trusted-proxy-principal-limits",
+      "merged_pr": 64,
+      "expected_sha": "d83168dcc6e06619a3304716ff1fb318ddde6815"
+    }
+  ]
+}
