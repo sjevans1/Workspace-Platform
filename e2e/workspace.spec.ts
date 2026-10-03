@@ -2549,3 +2549,126 @@ test("W10c5c emulated touch edits rich blocks at phone and tablet widths", async
     await tabletContext.close();
   }
 });
+
+
+test("W10c4c overlapping edits to the same quote converge with scoped undo", async ({page,browser}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const createdSpace=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W10c4c same-block merge "+randomUUID()},
+  });
+  expect(createdSpace.ok(),await createdSpace.text()).toBeTruthy();
+  const space=await createdSpace.json();
+  const created=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,
+      title:"Concurrent quote "+randomUUID()},
+  });
+  expect(created.ok(),await created.text()).toBeTruthy();
+  const resource=await created.json();
+  const endpoint="/api/v1/pages/"+resource.id+"/content";
+  const initial=await (await page.request.get(endpoint)).json();
+  const ids=[randomUUID(),randomUUID(),randomUUID()];
+  const original=[
+    {id:ids[0],type:"heading",props:{level:2},content:"Concurrent quote proof"},
+    {id:ids[1],type:"quote",content:"Shared quote baseline"},
+    {id:ids[2],type:"callout",props:{variant:"warning"},
+      content:"Unaffected evidence"},
+  ];
+  const seed=await page.request.patch(endpoint,{
+    headers,data:{blocks:original,expected_revision:initial.revision},
+  });
+  expect(seed.ok(),await seed.text()).toBeTruthy();
+  const url="/?page="+resource.id;
+  await page.goto(url);
+  const peerContext=await browser.newContext();
+  try {
+    const peer=await peerContext.newPage();
+    await login(peer,false);
+    await peer.goto(url);
+    const quote=(client:typeof page)=>client.locator(".bn-editor")
+      .getByText("Shared quote baseline",{exact:true});
+    await expect(quote(page)).toBeVisible();
+    await expect(quote(peer)).toBeVisible();
+    // Place two independent carets in the *same* ProseMirror quote
+    // before either browser types. Home/End are within the single line.
+    await Promise.all([
+      (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
+      (async()=>{await quote(peer).click();await peer.keyboard.press("End")})(),
+    ]);
+    const caretText=async(client:typeof page)=>client.evaluate(()=>{
+      const n=window.getSelection()?.anchorNode;
+      return n?.nodeType===Node.TEXT_NODE?n.textContent||"":"";
+    });
+    for(const client of [page,peer])
+      expect(await caretText(client)).toContain("Shared quote baseline");
+    const fromOne="ONE_BEGIN ";
+    const fromTwo=" TWO_END";
+    await Promise.all([
+      page.keyboard.insertText(fromOne),
+      peer.keyboard.insertText(fromTwo),
+    ]);
+    const canonical=async()=>{
+      const response=await page.request.get(endpoint);
+      expect(response.ok(),await response.text()).toBeTruthy();
+      return response.json();
+    };
+    for(const client of [page,peer]){
+      await expect(client.locator(".bn-editor")).toContainText(fromOne);
+      await expect(client.locator(".bn-editor")).toContainText(fromTwo);
+      await expect(client.locator(".workspace-callout")).toContainText(
+        "Unaffected evidence");
+    }
+    await expect.poll(async()=>{
+      const c=await canonical();
+      return c.plain_text.includes(fromOne)&&c.plain_text.includes(fromTwo);
+    },{timeout:30000}).toBe(true);
+    const merged=await canonical();
+    expect(merged.blocks.map((b:any)=>b.id)).toEqual(ids);
+    expect(merged.blocks[1].type).toBe("quote");
+    const mergedText=JSON.stringify(merged.blocks[1].content);
+    expect(mergedText).toContain(fromOne.trim());
+    expect(mergedText).toContain(fromTwo.trim());
+    expect(mergedText.split("ONE_BEGIN").length-1).toBe(1);
+    expect(mergedText.split("TWO_END").length-1).toBe(1);
+    // Undo is origin-scoped: removing editor one's insertion must *never*
+    // rewind the other browser's concurrent contribution to this block.
+    await page.getByRole("toolbar",{name:"Formatting"})
+      .getByRole("button",{name:"Undo last edit"}).click();
+    for(const client of [page,peer]){
+      await expect(client.locator(".bn-editor")).not.toContainText(fromOne);
+      await expect(client.locator(".bn-editor")).toContainText(fromTwo);
+    }
+    await expect.poll(async()=>{
+      const c=await canonical();
+      return !c.plain_text.includes(fromOne)&&c.plain_text.includes(fromTwo);
+    },{timeout:30000}).toBe(true);
+    await page.getByRole("toolbar",{name:"Formatting"})
+      .getByRole("button",{name:"Redo last edit"}).click();
+    for(const client of [page,peer]){
+      await expect(client.locator(".bn-editor")).toContainText(fromOne);
+      await expect(client.locator(".bn-editor")).toContainText(fromTwo);
+    }
+    await expect.poll(async()=>{
+      const c=await canonical();
+      return c.plain_text.includes(fromOne)&&c.plain_text.includes(fromTwo);
+    },{timeout:30000}).toBe(true);
+    await page.reload();
+    await peer.reload();
+    for(const client of [page,peer]){
+      await expect(client.locator(".bn-editor")).toContainText(fromOne);
+      await expect(client.locator(".bn-editor")).toContainText(fromTwo);
+      await expect(client.locator(".workspace-callout")).toContainText(
+        "Unaffected evidence");
+    }
+    const reloaded=await canonical();
+    expect(reloaded.blocks.map((b:any)=>b.id)).toEqual(ids);
+    expect(reloaded.blocks.map((b:any)=>b.type))
+      .toEqual(["heading","quote","callout"]);
+  } finally {
+    await peerContext.close();
+  }
+});
