@@ -2313,3 +2313,95 @@ test("W10c5a private PNG upload renders in two editors and revokes on delete", a
     "/api/v1/resources/"+resource.id+"/files")).json();
   expect(finalFiles.some((f:any)=>f.id===file.id)).toBe(false);
 });
+
+
+test("W10c5b private text attachment uses Core file block without inline execution", async ({page,browser}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W10c5b local attachment "+randomUUID()},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const created=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,
+      title:"Private text file block "+randomUUID()},
+  });
+  expect(created.ok(),await created.text()).toBeTruthy();
+  const resource=await created.json();
+  const endpoint="/api/v1/pages/"+resource.id+"/content";
+  const filename="local-audit-"+randomUUID()+".txt";
+  const evidence=Buffer.from("Private W10c5b attachment bytes, never inline script.\n");
+  const uploaded=await page.request.post(
+    "/api/v1/resources/"+resource.id+"/files",{
+      headers,multipart:{file:{
+        name:filename,mimeType:"text/plain",buffer:evidence,
+      }},
+    });
+  expect(uploaded.ok(),await uploaded.text()).toBeTruthy();
+  const file=await uploaded.json();
+  expect(file.url).toMatch(/^\/api\/v1\/files\/[a-f0-9-]+\/content$/);
+  const read=await page.request.get(file.url);
+  expect(read.ok(),await read.text()).toBeTruthy();
+  expect(Buffer.from(await read.body())).toEqual(evidence);
+  expect(read.headers()["content-type"]).toContain("text/plain");
+  expect(read.headers()["content-disposition"]).toContain("attachment");
+  expect(read.headers()["x-content-type-options"]).toBe("nosniff");
+  expect(read.headers()["cache-control"]).toBe("no-store");
+
+  const before=await (await page.request.get(endpoint)).json();
+  const blocks=[
+    {id:randomUUID(),type:"heading",props:{level:2},
+      content:"Private downloadable source"},
+    {id:randomUUID(),type:"file",props:{name:filename,url:file.url}},
+    {id:randomUUID(),type:"paragraph",
+      content:"The attachment is permission-checked at download."},
+  ];
+  const saved=await page.request.patch(endpoint,{
+    headers,data:{blocks,expected_revision:before.revision},
+  });
+  expect(saved.ok(),await saved.text()).toBeTruthy();
+  const canonical=await (await page.request.get(endpoint)).json();
+  expect(canonical.blocks.map((b:any)=>b.type))
+    .toEqual(["heading","file","paragraph"]);
+  expect(canonical.blocks[1].props.url).toBe(file.url);
+  expect(canonical.blocks[1].props.name).toBe(filename);
+  // The file name is document metadata, not a remote fetch, and the
+  // private file bytes must not be indexed as document text.
+  expect(canonical.plain_text).not.toContain("Private W10c5b attachment bytes");
+
+  await page.goto("/?page="+resource.id);
+  await expect(page.locator(".bn-editor")).toContainText(
+    "Private downloadable source");
+  await expect(page.locator(".bn-editor")).toContainText(filename);
+  const secondContext=await browser.newContext();
+  try {
+    const other=await secondContext.newPage();
+    await login(other,false);
+    await other.goto(page.url());
+    await expect(other.locator(".bn-editor")).toContainText(filename);
+    const otherRead=await other.request.get(file.url);
+    expect(otherRead.ok(),await otherRead.text()).toBeTruthy();
+    expect(otherRead.headers()["content-disposition"])
+      .toContain("attachment");
+    expect(Buffer.from(await otherRead.body())).toEqual(evidence);
+    await page.reload();
+    await other.reload();
+    for(const client of [page,other])
+      await expect(client.locator(".bn-editor")).toContainText(filename);
+  }finally{await secondContext.close();}
+  const after=await (await page.request.get(endpoint)).json();
+  expect(after.blocks.map((b:any)=>b.id))
+    .toEqual(blocks.map(b=>b.id));
+  expect(after.blocks[1].props.url).toBe(file.url);
+  const deleted=await page.request.delete("/api/v1/files/"+file.id,{headers});
+  expect(deleted.ok(),await deleted.text()).toBeTruthy();
+  expect((await page.request.get(file.url)).status()).toBe(404);
+  // Deletion revokes bytes even if historical block metadata retains URL:
+  // old state must not make the attachment accessible again.
+  expect((await page.request.get(endpoint)).ok()).toBe(true);
+});
