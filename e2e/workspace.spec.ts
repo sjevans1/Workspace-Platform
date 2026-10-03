@@ -2672,3 +2672,160 @@ test("W10c4c overlapping edits to the same quote converge with scoped undo", asy
     await peerContext.close();
   }
 });
+
+
+test("W10c4d distinct principals merge same quote and honor live ACL changes",async ({page,browser})=>{
+  test.setTimeout(180000);
+  await login(page);
+  const owner=await (await page.request.get("/api/v1/me")).json();
+  const ownerHeaders={"X-CSRF-Token":owner.csrf};
+  const invitation=await page.request.post("/api/v1/members/invite",{
+    headers:ownerHeaders,
+    data:{name:"Concurrency Partner",
+      email:"collab-"+randomUUID()+"@example.test",role:"member"},
+  });
+  expect(invitation.ok(),await invitation.text()).toBeTruthy();
+
+  const partnerContext=await browser.newContext();
+  try {
+    const partner=await partnerContext.newPage();
+    await partner.goto((await invitation.json()).url);
+    await expect(partner.getByRole("heading",{name:"Join your team."})).toBeVisible();
+    await expect.poll(()=>new URL(partner.url()).search).toBe("");
+    await partner.getByLabel("Password",{exact:true})
+      .fill("partner-test-password-123");
+    await partner.getByRole("button",{name:"Accept invitation",exact:true}).click();
+    await expect(partner.getByRole("heading",{name:"Welcome back, Concurrency."}))
+      .toBeVisible();
+    const member=await (await partner.request.get("/api/v1/me")).json();
+    expect(member.user.id).not.toBe(owner.user.id);
+    expect(member.user.role).toBe("member");
+
+    const roots=await (await page.request.get("/api/v1/resources")).json();
+    const createdSpace=await page.request.post("/api/v1/resources",{
+      headers:ownerHeaders,
+      data:{kind:"space",parent_id:roots[0].id,
+        title:"Cross-principal collaboration "+randomUUID()},
+    });
+    expect(createdSpace.ok(),await createdSpace.text()).toBeTruthy();
+    const space=await createdSpace.json();
+    const created=await page.request.post("/api/v1/resources",{
+      headers:ownerHeaders,
+      data:{kind:"page",parent_id:space.id,
+        title:"Cross-principal quote "+randomUUID()},
+    });
+    expect(created.ok(),await created.text()).toBeTruthy();
+    const document=await created.json();
+    const endpoint="/api/v1/pages/"+document.id+"/content";
+    const baseline=await (await page.request.get(endpoint)).json();
+    const ids=[randomUUID(),randomUUID(),randomUUID()];
+    const blocks=[
+      {id:ids[0],type:"heading",props:{level:2},
+        content:"Private collaborative evidence"},
+      {id:ids[1],type:"quote",content:"Shared quote baseline"},
+      {id:ids[2],type:"callout",props:{variant:"warning"},
+        content:"Intact access boundary"},
+    ];
+    const seeded=await page.request.patch(endpoint,{
+      headers:ownerHeaders,
+      data:{blocks,expected_revision:baseline.revision},
+    });
+    expect(seeded.ok(),await seeded.text()).toBeTruthy();
+
+    const url="/?page="+document.id;
+    await page.goto(url);
+    await partner.goto(url);
+    const ownerEditor=page.locator(".bn-editor"),
+      memberEditor=partner.locator(".bn-editor");
+    const quote=(p:typeof page)=>p.locator(".bn-editor")
+      .getByText("Shared quote baseline",{exact:true});
+    await expect(quote(page)).toBeVisible();
+    await expect(quote(partner)).toBeVisible();
+    await Promise.all([
+      (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
+      (async()=>{await quote(partner).click();await partner.keyboard.press("End")})(),
+    ]);
+    const fromOwner="OWNER_BEGIN ";
+    const fromMember=" MEMBER_END";
+    await Promise.all([
+      page.keyboard.insertText(fromOwner),
+      partner.keyboard.insertText(fromMember),
+    ]);
+    const canonical=async()=>{
+      const res=await page.request.get(endpoint);
+      expect(res.ok(),await res.text()).toBeTruthy();
+      return res.json();
+    };
+    for(const editor of [ownerEditor,memberEditor]){
+      await expect(editor).toContainText(fromOwner);
+      await expect(editor).toContainText(fromMember);
+      await expect(editor).toContainText("Intact access boundary");
+    }
+    await expect.poll(async()=>{
+      const c=await canonical();
+      return c.plain_text.includes(fromOwner)&&c.plain_text.includes(fromMember);
+    },{timeout:30000}).toBe(true);
+    const merged=await canonical();
+    expect(merged.blocks.map((b:any)=>b.id)).toEqual(ids);
+    const text=JSON.stringify(merged.blocks[1].content);
+    expect(text.split("OWNER_BEGIN").length-1).toBe(1);
+    expect(text.split("MEMBER_END").length-1).toBe(1);
+    expect(merged.blocks[2].props.variant).toBe("warning");
+
+    // Use the actual owner Manage access UI while both Yjs rooms remain open.
+    await page.getByRole("button",{name:"Page actions"}).click();
+    await page.getByRole("button",{name:"Manage access",exact:true}).click();
+    const access=page.getByRole("dialog",{name:"Manage access"});
+    await access.getByRole("button",{name:"Add person or integration"}).click();
+    await access.getByLabel("Principal",{exact:true}).selectOption(member.user.id);
+    await access.getByLabel("Access level",{exact:true}).selectOption("1");
+    await access.getByRole("button",{name:"Save access",exact:true}).click();
+    await expect(access).toBeHidden();
+    await expect(memberEditor).toHaveAttribute("contenteditable","false");
+    await expect(partner.getByRole("toolbar",{name:"Formatting"})).toHaveCount(0);
+    // The downgraded user cannot mutate the canonical document via typing.
+    await memberEditor.click();
+    await partner.keyboard.insertText("FORBIDDEN_AFTER_DOWNGRADE");
+    await expect(memberEditor).not.toContainText("FORBIDDEN_AFTER_DOWNGRADE");
+    expect((await canonical()).plain_text).not.toContain("FORBIDDEN_AFTER_DOWNGRADE");
+
+    await ownerEditor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.insertText(" OWNER_CONTINUES");
+    await expect(memberEditor).toContainText("OWNER_CONTINUES");
+    await expect.poll(async()=>(await canonical()).plain_text.includes("OWNER_CONTINUES"),
+      {timeout:30000}).toBe(true);
+
+    await page.getByRole("button",{name:"Page actions"}).click();
+    await page.getByRole("button",{name:"Manage access",exact:true}).click();
+    await expect(access.getByLabel("Access level",{exact:true})).toHaveValue("1");
+    await access.getByRole("button",{name:"Remove grant"}).click();
+    await access.getByLabel("Inherit access from parent").uncheck();
+    await access.getByRole("button",{name:"Save access",exact:true}).click();
+    await expect(access).toBeHidden();
+    await expect(memberEditor).toHaveCount(0);
+    await expect(partner.getByText("Private collaborative evidence",
+      {exact:false})).toHaveCount(0);
+    await expect(partner.getByText("OWNER_CONTINUES",
+      {exact:false})).toHaveCount(0);
+    await expect(partner.getByRole("toolbar",{name:"Formatting"})).toHaveCount(0);
+    for(const route of [
+      "/resources/"+document.id,
+      "/pages/"+document.id+"/content",
+      "/pages/"+document.id+"/versions",
+    ]){
+      expect((await partner.request.get("/api/v1"+route)).status()).toBe(404);
+    }
+    const staleTicket=await partner.request.post(
+      "/api/v1/pages/"+document.id+"/collab",{
+        headers:{"X-CSRF-Token":member.csrf},data:{},
+      });
+    expect(staleTicket.status()).toBe(404);
+    const surviving=await canonical();
+    expect(surviving.blocks.map((b:any)=>b.id)).toEqual(ids);
+    expect(surviving.plain_text).toContain("OWNER_CONTINUES");
+    expect(surviving.plain_text).not.toContain("FORBIDDEN_AFTER_DOWNGRADE");
+  }finally{
+    await partnerContext.close();
+  }
+});
