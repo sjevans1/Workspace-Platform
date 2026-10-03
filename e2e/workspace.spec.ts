@@ -2067,3 +2067,135 @@ test("W10c4a live two-editor restore reissues rooms without manual reload", asyn
     expect(canonical.blocks.some((b:any)=>b.type==="callout")).toBe(true);
   } finally {await secondSession.close();}
 });
+
+
+test("W10c4b two live editors merge rich edits and isolate local undo/redo", async ({page,browser}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W10c4b simultaneous editors "+randomUUID()},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const pageResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,
+      title:"Concurrent rich edit "+randomUUID()},
+  });
+  expect(pageResponse.ok(),await pageResponse.text()).toBeTruthy();
+  const resource=await pageResponse.json();
+  const endpoint="/api/v1/pages/"+resource.id+"/content";
+  const initial=await (await page.request.get(endpoint)).json();
+  const stableBlocks=[
+    {id:randomUUID(),type:"heading",props:{level:2},
+      content:"Concurrent editor evidence"},
+    {id:randomUUID(),type:"callout",props:{variant:"warning"},
+      content:"Alpha baseline"},
+    {id:randomUUID(),type:"quote",content:"Beta baseline"},
+    {id:randomUUID(),type:"divider"},
+    {id:randomUUID(),type:"paragraph",content:"Untouched evidence"},
+  ];
+  const seed=await page.request.patch(endpoint,{
+    headers,data:{blocks:stableBlocks,expected_revision:initial.revision},
+  });
+  expect(seed.ok(),await seed.text()).toBeTruthy();
+
+  const url="/?page="+resource.id;
+  await page.goto(url);
+  await expect(page.locator(".workspace-callout")).toContainText("Alpha baseline");
+  await expect(page.locator(".bn-editor")).toContainText("Beta baseline");
+  const secondContext=await browser.newContext();
+  try {
+    const other=await secondContext.newPage();
+    await login(other,false);
+    await other.goto(url);
+    await expect(other.locator(".workspace-callout"))
+      .toContainText("Alpha baseline");
+    await expect(other.locator(".bn-editor")).toContainText("Beta baseline");
+    const alphaEdit=" Alpha from editor one";
+    const betaEdit=" Beta from editor two";
+    // Both editors are connected *before* either edit. They independently
+    // write different rich blocks without touching the revision-check API.
+    await Promise.all([
+      (async()=>{
+        await page.locator(".workspace-callout-content").click();
+        await page.keyboard.press("End");
+        await page.keyboard.insertText(alphaEdit);
+      })(),
+      (async()=>{
+        await other.locator(".bn-editor")
+          .getByText("Beta baseline",{exact:true}).click();
+        await other.keyboard.press("End");
+        await other.keyboard.insertText(betaEdit);
+      })(),
+    ]);
+    for(const client of [page,other]) {
+      await expect(client.locator(".workspace-callout"))
+        .toContainText("Alpha baseline"+alphaEdit);
+      await expect(client.locator(".bn-editor"))
+        .toContainText("Beta baseline"+betaEdit);
+    }
+    const canonical=async()=>{
+      const response=await page.request.get(endpoint);
+      expect(response.ok(),await response.text()).toBeTruthy();
+      return await response.json();
+    };
+    await expect.poll(async()=>{
+      const doc=await canonical();
+      return doc.blocks.map((b:any)=>b.type+":"+JSON.stringify(b.content)).join("|");
+    },{timeout:30000}).toContain(betaEdit);
+    let persisted=await canonical();
+    expect(persisted.plain_text).toContain(alphaEdit);
+    expect(persisted.plain_text).toContain(betaEdit);
+    expect(persisted.blocks.map((b:any)=>b.id))
+      .toEqual(stableBlocks.map(b=>b.id));
+    expect(persisted.blocks.map((b:any)=>b.type))
+      .toEqual(stableBlocks.map(b=>b.type));
+    expect(persisted.blocks[1].props.variant).toBe("warning");
+
+    // This local editor's undo may erase only its own change, never a
+    // different session's committed quote edit or the other rich blocks.
+    await page.getByRole("toolbar",{name:"Formatting"})
+      .getByRole("button",{name:"Undo last edit"}).click();
+    for(const client of [page,other]){
+      await expect(client.locator(".workspace-callout"))
+        .not.toContainText(alphaEdit);
+      await expect(client.locator(".bn-editor"))
+        .toContainText("Beta baseline"+betaEdit);
+    }
+    await expect.poll(async()=>{
+      const doc=await canonical();
+      return doc.plain_text.includes(alphaEdit)
+        ? "alpha-still-there"
+        : doc.plain_text.includes(betaEdit) ? "peer-survived" : "peer-missing";
+    },{timeout:30000}).toBe("peer-survived");
+    await page.getByRole("toolbar",{name:"Formatting"})
+      .getByRole("button",{name:"Redo last edit"}).click();
+    for(const client of [page,other]){
+      await expect(client.locator(".workspace-callout"))
+        .toContainText("Alpha baseline"+alphaEdit);
+      await expect(client.locator(".bn-editor"))
+        .toContainText("Beta baseline"+betaEdit);
+    }
+    await expect.poll(async()=>{
+      const doc=await canonical();
+      return doc.plain_text.includes(alphaEdit) &&
+        doc.plain_text.includes(betaEdit);
+    },{timeout:30000}).toBe(true);
+    persisted=await canonical();
+    expect(persisted.blocks.map((b:any)=>b.id))
+      .toEqual(stableBlocks.map(b=>b.id));
+    await page.reload();
+    await other.reload();
+    for(const client of [page,other]){
+      await expect(client.locator(".workspace-callout"))
+        .toContainText("Alpha baseline"+alphaEdit);
+      await expect(client.locator(".bn-editor"))
+        .toContainText("Beta baseline"+betaEdit);
+      await expect(client.locator(".workspace-divider hr")).toBeVisible();
+    }
+  }finally{await secondContext.close();}
+});
