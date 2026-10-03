@@ -2119,18 +2119,33 @@ test("W10c4b two live editors merge rich edits and isolate local undo/redo", asy
     const betaEdit=" Beta from editor two";
     // Both editors are connected *before* either edit. They independently
     // write different rich blocks without touching the revision-check API.
+    // Set and verify both caret targets before either session writes.
+    // Otherwise a remotely delivered Yjs edit can race with the other
+    // browser's focus/click and test keyboard input lands in a heading,
+    // falsely appearing as a lost quote edit. Once both carets are set,
+    // typing still happens concurrently over real Hocuspocus/Yjs.
     await Promise.all([
       (async()=>{
         await page.locator(".workspace-callout-content").click();
         await page.keyboard.press("End");
-        await page.keyboard.insertText(alphaEdit);
       })(),
       (async()=>{
         await other.locator(".bn-editor")
           .getByText("Beta baseline",{exact:true}).click();
         await other.keyboard.press("End");
-        await other.keyboard.insertText(betaEdit);
       })(),
+    ]);
+    const caretText=async(client:typeof page)=>client.evaluate(()=>{
+      const node=window.getSelection()?.anchorNode;
+      return node?.nodeType===Node.TEXT_NODE ? node.textContent||"" : "";
+    });
+    expect(await caretText(page),"owner caret must target the callout")
+      .toContain("Alpha baseline");
+    expect(await caretText(other),"peer caret must target the quote")
+      .toContain("Beta baseline");
+    await Promise.all([
+      page.keyboard.insertText(alphaEdit),
+      other.keyboard.insertText(betaEdit),
     ]);
     for(const client of [page,other]) {
       await expect(client.locator(".workspace-callout"))

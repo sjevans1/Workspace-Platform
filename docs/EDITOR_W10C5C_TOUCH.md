@@ -12,3 +12,7 @@
 ## Limits, deliberately explicit
 
 Playwright keyboard.insertText after `tap()` models text composition after touch focus, **not** a native Android or iOS IME. No claim of physical device accessibility, native pinch/drag-reorder or arbitrary screen readers. Native iOS Safari/WebKit and mobile OS interactions remain W25/field gates. Audio/video playback, encrypted binary backup/restore and same-block structural collaboration conflicts remain W10/W19/W23. Workspace standalone; no OpenJM Enterprise AI changes.
+
+## Follow-up from first exact-head CI
+
+The first run #37142245479 passed the new touch test but revealed a flaky older W10c4b concurrent-editor acceptance: one peer's text landed in the heading when its text-click raced with another editor's remote update. The correction retains **concurrent typing and exact-block assertions**, but first prepares and checks both text-node carets before releasing concurrent input. A new exact-head full run is required. No bypass, skip, or reduced expectation.
