@@ -2599,12 +2599,16 @@ test("W10c4c overlapping edits to the same quote converge with scoped undo", asy
       (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
       (async()=>{await quote(peer).click();await peer.keyboard.press("End")})(),
     ]);
-    const caretText=async(client:typeof page)=>client.evaluate(()=>{
-      const n=window.getSelection()?.anchorNode;
-      return n?.nodeType===Node.TEXT_NODE?n.textContent||"":"";
-    });
+    // ProseMirror/Yjs can split quote text across inline DOM text nodes
+    // while two live carets are present; check selection containment instead
+    // of assuming the entire paragraph occupies one DOM Text node.
+    const caretInsideQuote=async(client:typeof page)=>quote(client)
+      .evaluate(el=>{
+        const anchor=window.getSelection()?.anchorNode;
+        return Boolean(anchor && el.contains(anchor));
+      });
     for(const client of [page,peer])
-      expect(await caretText(client)).toContain("Shared quote baseline");
+      expect(await caretInsideQuote(client)).toBe(true);
     const fromOne="ONE_BEGIN ";
     const fromTwo=" TWO_END";
     await Promise.all([
@@ -2789,8 +2793,11 @@ test("W10c4d distinct principals merge same quote and honor live ACL changes",as
     await expect(memberEditor).not.toContainText("FORBIDDEN_AFTER_DOWNGRADE");
     expect((await canonical()).plain_text).not.toContain("FORBIDDEN_AFTER_DOWNGRADE");
 
-    await ownerEditor.click();
-    await page.keyboard.press("ControlOrMeta+End");
+    // Continue inside an existing block rather than clicking the editor's
+    // blank trailing area, which creates a legitimate fourth paragraph.
+    await page.locator(".workspace-callout")
+      .getByText("Intact access boundary",{exact:true}).click();
+    await page.keyboard.press("End");
     await page.keyboard.insertText(" OWNER_CONTINUES");
     await expect(memberEditor).toContainText("OWNER_CONTINUES");
     await expect.poll(async()=>(await canonical()).plain_text.includes("OWNER_CONTINUES"),
