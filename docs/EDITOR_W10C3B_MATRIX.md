@@ -1,6 +1,6 @@
 # W10c3b — Pinned Core rich-block compatibility and table text indexing
 
-**Candidate (not accepted until exact-head CI).** Parent W10c3 issue #97 and W10 #74. Starts at merge PR #98 (`c65b8e9`).
+**Accepted:** [PR #99](https://github.com/sjevans1/Workspace-Platform/pull/99) merged `a00eab0` after exact-head [CI #37071568337](https://github.com/sjevans1/Workspace-Platform/actions/runs/37071568337): 110/110 native, 24 deployed-browser pass / 1 skipped, security/HTTPS-WSS PASS. Parent W10c issue #97 and W10 #74 remain open for later W10c acceptance.
 
 ## Changes
 - Query the installed **public `defaultBlockSpecs`** (BlockNote 0.55.0), not undocumented editor internals, and verify eight rich Core types are actually installed.

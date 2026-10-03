@@ -1,6 +1,6 @@
 # W10c4b — Concurrent rich edits and local history isolation
 
-**Candidate until full exact-head release CI.** Starts at merged W10c4a PR #101 (`24034c3`), parent [Issue #100](https://github.com/sjevans1/Workspace-Platform/issues/100).
+**Accepted:** [PR #103](https://github.com/sjevans1/Workspace-Platform/pull/103) merged `f5f7e6a` after exact-head [CI #37138988506](https://github.com/sjevans1/Workspace-Platform/actions/runs/37138988506): 110/110 native, 26 deployed-browser pass / 1 skipped, all release gates PASS. Parent [Issue #100](https://github.com/sjevans1/Workspace-Platform/issues/100) remains open for same-block/structural conflict gates.
 
 ## Acceptance slice
 

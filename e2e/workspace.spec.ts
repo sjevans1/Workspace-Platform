@@ -2199,3 +2199,117 @@ test("W10c4b two live editors merge rich edits and isolate local undo/redo", asy
     }
   }finally{await secondContext.close();}
 });
+
+
+test("W10c5a private PNG upload renders in two editors and revokes on delete", async ({page,browser}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W10c5a local image "+randomUUID()},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const created=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,
+      title:"Local image proof "+randomUUID()},
+  });
+  expect(created.ok(),await created.text()).toBeTruthy();
+  const resource=await created.json();
+  const endpoint="/api/v1/pages/"+resource.id+"/content";
+  // A decodable 1x1 PNG fixture: no third-party network, hotlink or
+  // client-inaccessible external CDN is involved.
+  const png=Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRwwAAAAASUVORK5CYII=",
+    "base64");
+  expect(png.subarray(0,8).toString("hex"))
+    .toBe("89504e470d0a1a0a");
+  const beforeFiles=await page.request.get(
+    "/api/v1/resources/"+resource.id+"/files");
+  expect(beforeFiles.ok()).toBeTruthy();
+  const initialFiles=await beforeFiles.json();
+  // Wrong magic bytes must be rejected *before* object persistence even
+  // if the filename and caller-provided MIME both claim image/png.
+  const invalid=await page.request.post(
+    "/api/v1/resources/"+resource.id+"/files",{
+      headers,multipart:{file:{
+        name:"fake.png",mimeType:"image/png",
+        buffer:Buffer.from("This is not image bytes."),
+      }},
+    });
+  expect(invalid.status(),await invalid.text()).toBe(400);
+  const afterInvalid=await (await page.request.get(
+    "/api/v1/resources/"+resource.id+"/files")).json();
+  expect(afterInvalid.length).toBe(initialFiles.length);
+
+  const upload=await page.request.post(
+    "/api/v1/resources/"+resource.id+"/files",{
+      headers,multipart:{file:{
+        name:"private-1x1.png",mimeType:"image/png",buffer:png,
+      }},
+    });
+  expect(upload.ok(),await upload.text()).toBeTruthy();
+  const file=await upload.json();
+  expect(file.url).toMatch(/^\/api\/v1\/files\/[a-f0-9-]+\/content$/);
+  const fetched=await page.request.get(file.url);
+  expect(fetched.ok(),await fetched.text()).toBeTruthy();
+  expect(fetched.headers()["content-type"]).toContain("image/png");
+  expect(fetched.headers()["content-disposition"]).toContain("inline");
+  expect(fetched.headers()["x-content-type-options"]).toBe("nosniff");
+  expect(Buffer.from(await fetched.body())).toEqual(png);
+
+  const initial=await (await page.request.get(endpoint)).json();
+  const storedBlocks=[
+    {id:randomUUID(),type:"heading",props:{level:2},
+      content:"Local, permissioned image evidence"},
+    {id:randomUUID(),type:"image",props:{
+      url:file.url,caption:"Local proof",name:"private-1x1.png",
+    }},
+    {id:randomUUID(),type:"callout",props:{variant:"info"},
+      content:"No remote image host"},
+  ];
+  const seed=await page.request.patch(endpoint,{
+    headers,data:{blocks:storedBlocks,expected_revision:initial.revision},
+  });
+  expect(seed.ok(),await seed.text()).toBeTruthy();
+  const doc=await (await page.request.get(endpoint)).json();
+  expect(doc.blocks.map((b:any)=>b.type))
+    .toEqual(["heading","image","callout"]);
+  expect(doc.blocks[1].props.url).toBe(file.url);
+
+  const url="/?page="+resource.id;
+  await page.goto(url);
+  const naturalWidth=async(client:typeof page)=>
+    await client.locator(".bn-editor img").first().evaluate(
+      (element)=> (element as HTMLImageElement).naturalWidth);
+  await expect.poll(()=>naturalWidth(page),{timeout:30000}).toBe(1);
+  const second=await browser.newContext();
+  try {
+    const other=await second.newPage();
+    await login(other,false);
+    await other.goto(url);
+    await expect(other.locator(".workspace-callout"))
+      .toContainText("No remote image host");
+    await expect.poll(()=>naturalWidth(other),{timeout:30000}).toBe(1);
+    const otherBytes=await other.request.get(file.url);
+    expect(otherBytes.ok(),await otherBytes.text()).toBeTruthy();
+    expect(Buffer.from(await otherBytes.body())).toEqual(png);
+    await page.reload();
+    await other.reload();
+    for(const client of [page,other]){
+      await expect.poll(()=>naturalWidth(client),{timeout:30000}).toBe(1);
+      await expect(client.locator(".workspace-callout"))
+        .toContainText("No remote image host");
+    }
+  }finally{await second.close();}
+
+  const deleted=await page.request.delete("/api/v1/files/"+file.id,{headers});
+  expect(deleted.ok(),await deleted.text()).toBeTruthy();
+  expect((await page.request.get(file.url)).status()).toBe(404);
+  const finalFiles=await (await page.request.get(
+    "/api/v1/resources/"+resource.id+"/files")).json();
+  expect(finalFiles.some((f:any)=>f.id===file.id)).toBe(false);
+});
