@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import * as Y from "yjs";
 import { testPostgres } from "../scripts/test-postgres.ts";
 import { migrate } from "../packages/database/migrate.ts";
 import { Database } from "../packages/database/index.ts";
@@ -11,7 +12,7 @@ import {
   decodeBackup,
 } from "../scripts/backup.ts";
 import type { Storage } from "../packages/storage/index.ts";
-import { blocksToState } from "../packages/editor/server.ts";
+import { blocksToState, project } from "../packages/editor/server.ts";
 import { sealTenantOidcSecret, openTenantOidcSecret } from "../packages/auth/tenant-provider.ts";
 import { encrypt, decrypt } from "../packages/events/index.ts";
 function memory() {
@@ -32,7 +33,7 @@ function memory() {
   };
   return { data, storage };
 }
-test("backup round-trip restores metadata, canonical Yjs bytes and private objects; corrupt and nonempty restores fail", async () => {
+test("backup restores rich Yjs blocks, table and private media bytes atomically", async () => {
   process.env.ENCRYPTION_KEY = "a".repeat(64);
   const pg = await testPostgres(55434),
     source = memory(),
@@ -44,15 +45,48 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     space = randomUUID(),
     page = randomUUID(),
     file = randomUUID(),
+    imageFile = randomUUID(),
     user = randomUUID(),
     connector = randomUUID(),
     webhook = randomUUID(),
     scimUser = randomUUID(),
     scimGroup = randomUUID(),
-    key = `${tenant}/${page}/${file}`;
-  const state = blocksToState([
-    { type: "paragraph", content: "Backup evidence" },
-  ]);
+    key = `${tenant}/${page}/${file}`,
+    imageKey = `${tenant}/${page}/${imageFile}`;
+  // The native backup must retain both the Yjs document *and* the actual
+  // private storage objects referenced by installed BlockNote Core blocks.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRwwAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const richBlocks: any[] = [
+    { id: randomUUID(), type: "heading", props: { level: 2 },
+      content: "Backup evidence" },
+    { id: randomUUID(), type: "callout", props: { variant: "warning" },
+      content: [{type:"text",text:"Review before recovery",styles:{bold:true}}] },
+    { id: randomUUID(), type: "table", content: {
+      type: "tableContent", rows: [
+        { cells: ["Warehouse", "Stock"] },
+        { cells: ["Blue Mountain", "24"] },
+      ],
+    }},
+    { id: randomUUID(), type: "image", props: {
+      name: "private-1x1.png", caption: "Source diagram",
+      url: `/api/v1/files/${imageFile}/content`,
+    }},
+    { id: randomUUID(), type: "file", props: {
+      name: "evidence.txt", url: `/api/v1/files/${file}/content`,
+    }},
+  ];
+  const state = blocksToState(richBlocks);
+  const document = new Y.Doc();
+  let original: ReturnType<typeof project>;
+  try {
+    Y.applyUpdate(document, state);
+    original = project(document);
+  } finally { document.destroy(); }
+  assert.match(original.plain_text, /Blue Mountain/);
+  assert.equal(original.plain_text.includes("/api/v1/files"), false);
   try {
     await db.tenant(tenant, async (q) => {
       await q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [
@@ -72,12 +106,16 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
         [page, tenant, space],
       );
       await q.query(
-        "INSERT INTO page_documents(tenant_id,resource_id,y_state,plain_text) VALUES($1,$2,$3,$4)",
-        [tenant, page, state, "Backup evidence"],
+        "INSERT INTO page_documents(tenant_id,resource_id,y_state,blocks,plain_text) VALUES($1,$2,$3,$4,$5)",
+        [tenant, page, state, JSON.stringify(original.blocks), original.plain_text],
       );
       await q.query(
         "INSERT INTO files(id,tenant_id,resource_id,object_key,name,mime,size) VALUES($1,$2,$3,$4,'evidence.txt','text/plain',13)",
         [file, tenant, page, key],
+      );
+      await q.query(
+        "INSERT INTO files(id,tenant_id,resource_id,object_key,name,mime,size) VALUES($1,$2,$3,$4,'private-1x1.png','image/png',$5)",
+        [imageFile, tenant, page, imageKey, png.length],
       );
       await q.query(
         "INSERT INTO users(id,email,name,password_hash) VALUES($1,'directory@example.test','Directory User',NULL)",
@@ -134,7 +172,10 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
       );
     });
     await source.storage.put(key, Buffer.from("Private bytes"), "text/plain");
+    await source.storage.put(imageKey, png, "image/png");
     const archive = await backup(pg.url, source.storage);
+    assert.deepEqual(Object.keys(archive.objects).sort(), [key, imageKey].sort());
+    assert.equal(archive.objects[imageKey].mime, "image/png");
     const encodedArchive = encodeBackup(archive);
     assert.match(encodedArchive, /openjm-backup-encrypted-v1/);
     assert.doesNotMatch(encodedArchive, /Backup evidence|Private bytes/);
@@ -165,16 +206,48 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
       restore(pg.url, archive, target.storage),
       /empty database/,
     );
-    const corrupt = structuredClone(archive);
-    corrupt.objects[key].data = Buffer.from("corrupt").toString("base64");
-    await assert.rejects(restore(pg.url, corrupt, target.storage), /checksum/);
+    for (const damaged of [key, imageKey]) {
+      const corrupt = structuredClone(archive);
+      corrupt.objects[damaged].data = Buffer.from("corrupt").toString("base64");
+      await assert.rejects(
+        restore(pg.url, corrupt, target.storage), /checksum/,
+        "tampered objects must fail *before* writing any restore bytes",
+      );
+      assert.equal(target.data.size, 0, "corrupt archive must not write objects");
+    }
     await db.system((q) => q.query("TRUNCATE organisations,users CASCADE"));
     await restore(pg.url, archive, target.storage);
     const rows = await db.tenant(tenant, (q) =>
       q.query("SELECT * FROM page_documents WHERE resource_id=$1", [page]),
     );
-    assert.equal(rows.rows[0].plain_text, "Backup evidence");
+    assert.equal(rows.rows[0].plain_text, original.plain_text);
     assert(Buffer.from(rows.rows[0].y_state).equals(state));
+    // JSONB discards undefined object properties and converts undefined
+    // array slots to null (such as unset Core table column widths).
+    // Compare the canonical JSON representation, while the separate
+    // raw Yjs check verifies the exact native document bytes.
+    assert.deepEqual(rows.rows[0].blocks,
+      JSON.parse(JSON.stringify(original.blocks)));
+    const restoredDocument = new Y.Doc();
+    try {
+      Y.applyUpdate(restoredDocument, Buffer.from(rows.rows[0].y_state));
+      const restoredRich = project(restoredDocument);
+      assert.deepEqual(restoredRich.blocks, original.blocks,
+        "rich table/callout/media schema must survive encrypted archive round trip");
+      assert.deepEqual(
+        restoredRich.blocks.map((block:any)=>block.id),
+        richBlocks.map(block=>block.id),
+        "block identities must be preserved");
+      assert.deepEqual(
+        restoredRich.blocks.map((block:any)=>block.type),
+        ["heading","callout","table","image","file"]);
+      assert.equal((restoredRich.blocks[1] as any).props.variant, "warning");
+      assert.match(JSON.stringify(restoredRich.blocks[2]), /Blue Mountain/);
+      assert.equal((restoredRich.blocks[3] as any).props.url,
+        `/api/v1/files/${imageFile}/content`);
+      assert.equal((restoredRich.blocks[4] as any).props.url,
+        `/api/v1/files/${file}/content`);
+    } finally { restoredDocument.destroy(); }
     const directory = await db.tenant(tenant, async (q) => ({
       user: await q.query(
         "SELECT base_role FROM scim_users WHERE id=$1",
@@ -229,6 +302,13 @@ test("backup round-trip restores metadata, canonical Yjs bytes and private objec
     assert.equal(directory.mapping.rows[0].role, "member");
     assert.equal(directory.members.rows[0].scim_user_id, scimUser);
     assert.equal((await target.storage.get(key)).toString(), "Private bytes");
+    assert.deepEqual(await target.storage.get(imageKey), png,
+      "private linked image must be byte-for-byte restored");
+    const linkedFiles=await db.tenant(tenant,(q)=>
+      q.query("SELECT id,mime,object_key FROM files WHERE resource_id=$1 ORDER BY mime", [page]));
+    assert.equal(linkedFiles.rows.length,2);
+    assert.deepEqual(linkedFiles.rows.map((row:any)=>row.object_key).sort(),
+      [key,imageKey].sort());
   } finally {
     await db.close();
     await pg.close();
