@@ -86,7 +86,7 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
     original = project(document);
   } finally { document.destroy(); }
   assert.match(original.plain_text, /Blue Mountain/);
-  assert.doesNotMatch(original.plain_text, /api\\/v1\\/files/);
+  assert.equal(original.plain_text.includes("/api/v1/files"), false);
   try {
     await db.tenant(tenant, async (q) => {
       await q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [
