@@ -2119,18 +2119,33 @@ test("W10c4b two live editors merge rich edits and isolate local undo/redo", asy
     const betaEdit=" Beta from editor two";
     // Both editors are connected *before* either edit. They independently
     // write different rich blocks without touching the revision-check API.
+    // Set and verify both caret targets before either session writes.
+    // Otherwise a remotely delivered Yjs edit can race with the other
+    // browser's focus/click and test keyboard input lands in a heading,
+    // falsely appearing as a lost quote edit. Once both carets are set,
+    // typing still happens concurrently over real Hocuspocus/Yjs.
     await Promise.all([
       (async()=>{
         await page.locator(".workspace-callout-content").click();
         await page.keyboard.press("End");
-        await page.keyboard.insertText(alphaEdit);
       })(),
       (async()=>{
         await other.locator(".bn-editor")
           .getByText("Beta baseline",{exact:true}).click();
         await other.keyboard.press("End");
-        await other.keyboard.insertText(betaEdit);
       })(),
+    ]);
+    const caretText=async(client:typeof page)=>client.evaluate(()=>{
+      const node=window.getSelection()?.anchorNode;
+      return node?.nodeType===Node.TEXT_NODE ? node.textContent||"" : "";
+    });
+    expect(await caretText(page),"owner caret must target the callout")
+      .toContain("Alpha baseline");
+    expect(await caretText(other),"peer caret must target the quote")
+      .toContain("Beta baseline");
+    await Promise.all([
+      page.keyboard.insertText(alphaEdit),
+      other.keyboard.insertText(betaEdit),
     ]);
     for(const client of [page,other]) {
       await expect(client.locator(".workspace-callout"))
@@ -2404,4 +2419,133 @@ test("W10c5b private text attachment uses Core file block without inline executi
   // Deletion revokes bytes even if historical block metadata retains URL:
   // old state must not make the attachment accessible again.
   expect((await page.request.get(endpoint)).ok()).toBe(true);
+});
+
+
+test("W10c5c emulated touch edits rich blocks at phone and tablet widths", async ({page,browser}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W10c5c touch acceptance "+randomUUID()},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const create=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,
+      title:"Mobile touch edit "+randomUUID()},
+  });
+  expect(create.ok(),await create.text()).toBeTruthy();
+  const resource=await create.json();
+  const endpoint="/api/v1/pages/"+resource.id+"/content";
+  const initial=await (await page.request.get(endpoint)).json();
+  const seeded=[
+    {id:randomUUID(),type:"paragraph",content:"Touch paragraph"},
+    {id:randomUUID(),type:"callout",props:{variant:"warning"},
+      content:"Touch callout"},
+    {id:randomUUID(),type:"divider"},
+  ];
+  const seed=await page.request.patch(endpoint,{
+    headers,data:{blocks:seeded,expected_revision:initial.revision},
+  });
+  expect(seed.ok(),await seed.text()).toBeTruthy();
+  // Real Chromium device emulation (hasTouch/isMobile) rather than merely
+  // resizing a desktop Playwright page to 390px. The actual editor and its
+  // toolbar are activated through touch-driven locator.tap().
+  const phoneContext=await browser.newContext({
+    viewport:{width:390,height:844},isMobile:true,
+    hasTouch:true,deviceScaleFactor:2,
+  });
+  const tabletContext=await browser.newContext({
+    viewport:{width:820,height:1180},isMobile:true,
+    hasTouch:true,deviceScaleFactor:2,
+  });
+  try {
+    // Copy the genuine login session. Don't flood the production auth
+    // limiter with two redundant logins for one three-device test.
+    const cookies=await page.context().cookies();
+    await phoneContext.addCookies(cookies);
+    await tabletContext.addCookies(cookies);
+    const phone=await phoneContext.newPage();
+    const tablet=await tabletContext.newPage();
+    const url="/?page="+resource.id;
+    await phone.goto(url);
+    await expect(phone.locator(".bn-editor")).toContainText("Touch paragraph");
+    await expect(phone.locator(".workspace-callout"))
+      .toContainText("Touch callout");
+    const phoneTools=phone.getByRole("toolbar",{name:"Formatting"});
+    await expect(phoneTools.getByRole("button",{name:"Heading 3"})).toBeVisible();
+    await expect(phoneTools.getByRole("button",{name:"Insert divider"}))
+      .toBeVisible();
+    await phone.locator(".bn-editor")
+      .getByText("Touch paragraph",{exact:true}).tap();
+    await phone.keyboard.press("End");
+    await phone.keyboard.insertText(" edited by phone");
+    await expect(phone.locator(".bn-editor"))
+      .toContainText("Touch paragraph edited by phone");
+    // Direct touch of the actual formatting control must preserve the
+    // cursor's block and update the canonical schema.
+    await phoneTools.getByRole("button",{name:"Heading 3"}).tap();
+    await expect(phone.locator(".bn-editor h3"))
+      .toContainText("Touch paragraph edited by phone");
+    await expect.poll(async()=>{
+      const r=await page.request.get(endpoint);
+      if(!r.ok())return "";
+      const doc=await r.json();
+      return doc.blocks[0]?.type+":"+doc.blocks[0]?.props?.level;
+    },{timeout:30000}).toBe("heading:3");
+
+    await tablet.goto(url);
+    await expect(tablet.locator(".bn-editor h3"))
+      .toContainText("Touch paragraph edited by phone");
+    await expect(tablet.locator(".workspace-callout"))
+      .toContainText("Touch callout");
+    await tablet.locator(".workspace-callout-content").tap();
+    await tablet.keyboard.press("End");
+    await tablet.keyboard.insertText(" edited by tablet");
+    for(const client of [phone,tablet]){
+      await expect(client.locator(".workspace-callout"))
+        .toContainText("Touch callout edited by tablet");
+      await expect(client.locator(".bn-editor h3"))
+        .toContainText("Touch paragraph edited by phone");
+    }
+
+    // Touch-activate a structural insert after rich content, and confirm
+    // both clients converge without losing the original divider or IDs.
+    await tablet.getByRole("toolbar",{name:"Formatting"})
+      .getByRole("button",{name:"Insert divider"}).tap();
+    await expect(tablet.locator(".workspace-divider hr")).toHaveCount(2);
+    await expect(phone.locator(".workspace-divider hr")).toHaveCount(2);
+    await expect.poll(async()=>{
+      const response=await page.request.get(endpoint);
+      if(!response.ok())return "";
+      const doc=await response.json();
+      return [doc.plain_text.includes("edited by phone"),
+        doc.plain_text.includes("edited by tablet"),
+        doc.blocks.filter((b:any)=>b.type==="divider").length].join(":");
+    },{timeout:30000}).toBe("true:true:2");
+    const canonical=await (await page.request.get(endpoint)).json();
+    for(const seedBlock of seeded)
+      expect(canonical.blocks.filter((b:any)=>b.id===seedBlock.id))
+        .toHaveLength(1);
+    expect(canonical.blocks.find((b:any)=>b.id===seeded[1].id)?.props.variant)
+      .toBe("warning");
+    for(const device of [phone,tablet]){
+      expect(await device.evaluate(()=>
+        document.documentElement.scrollWidth<=window.innerWidth))
+        .toBe(true);
+      await device.reload();
+      await expect(device.locator(".bn-editor h3"))
+        .toContainText("Touch paragraph edited by phone");
+      await expect(device.locator(".workspace-callout"))
+        .toContainText("Touch callout edited by tablet");
+      await expect(device.locator(".workspace-divider hr")).toHaveCount(2);
+    }
+  } finally {
+    await phoneContext.close();
+    await tabletContext.close();
+  }
 });
