@@ -222,7 +222,12 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
     );
     assert.equal(rows.rows[0].plain_text, original.plain_text);
     assert(Buffer.from(rows.rows[0].y_state).equals(state));
-    assert.deepEqual(rows.rows[0].blocks, original.blocks);
+    // JSONB discards undefined object properties and converts undefined
+    // array slots to null (such as unset Core table column widths).
+    // Compare the canonical JSON representation, while the separate
+    // raw Yjs check verifies the exact native document bytes.
+    assert.deepEqual(rows.rows[0].blocks,
+      JSON.parse(JSON.stringify(original.blocks)));
     const restoredDocument = new Y.Doc();
     try {
       Y.applyUpdate(restoredDocument, Buffer.from(rows.rows[0].y_state));
