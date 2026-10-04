@@ -3138,3 +3138,84 @@ test("W10c4f distinct principals: same block move versus delete never leaves gho
     await context.close();
   }
 });
+
+
+test("W11b browser: anchored comment, orphan badge and preserved stale draft", async ({page}) => {
+  test.setTimeout(180000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceReq=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,title:"Anchored discussions "+randomUUID()},
+  });
+  expect(spaceReq.ok(),await spaceReq.text()).toBeTruthy();
+  const space=await spaceReq.json();
+  const pageReq=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,title:"Block comments "+randomUUID()},
+  });
+  expect(pageReq.ok(),await pageReq.text()).toBeTruthy();
+  const resource=await pageReq.json();
+  const url="/api/v1/pages/"+resource.id+"/content";
+  const original=await (await page.request.get(url)).json();
+  const firstId=randomUUID(),secondId=randomUUID(),thirdId=randomUUID();
+  const seed=await page.request.patch(url,{headers,data:{
+    expected_revision:original.revision,blocks:[
+      {id:firstId,type:"heading",props:{level:2},content:"Anchor heading"},
+      {id:secondId,type:"quote",content:"Still present"},
+    ],
+  }});
+  expect(seed.ok(),await seed.text()).toBeTruthy();
+  await page.goto("/?page="+resource.id);
+  const heading=page.locator('.bn-block[data-id="'+firstId+'"]');
+  await expect(heading).toBeVisible();
+  await heading.click();
+  await page.getByRole("button",{name:"Comment on selected block"}).click();
+  const dialog=page.getByRole("dialog",{name:"Discussion"});
+  await expect(dialog).toContainText("Commenting on selected heading");
+  await dialog.locator("textarea").fill("This heading needs review");
+  await dialog.getByRole("button",{name:"Post comment"}).click();
+  await expect(dialog).toContainText("This heading needs review");
+  await expect(dialog).toContainText("On heading");
+  const comments=await (await page.request.get("/api/v1/resources/"+resource.id+"/comments")).json();
+  const anchored=comments.find((comment:any)=>comment.body==="This heading needs review");
+  expect(anchored?.block_id).toBe(firstId);
+  await dialog.getByRole("button",{name:/close/i}).click();
+
+  const current=await (await page.request.get(url)).json();
+  const remove=await page.request.patch(url,{headers,data:{
+    expected_revision:current.revision,blocks:[
+      {id:secondId,type:"quote",content:"Still present"},
+    ],
+  }});
+  expect(remove.ok(),await remove.text()).toBeTruthy();
+  await page.getByRole("button",{name:"Comments",exact:true}).click();
+  const orphan=page.getByRole("dialog",{name:"Discussion"});
+  await expect(orphan).toContainText("Original block removed");
+  await expect(orphan).toContainText("This heading needs review");
+  await orphan.getByRole("button",{name:/close/i}).click();
+
+  await page.reload();
+  const quote=page.locator('.bn-block[data-id="'+secondId+'"]');
+  await expect(quote).toBeVisible();
+  await quote.click();
+  await page.getByRole("button",{name:"Comment on selected block"}).click();
+  const stale=page.getByRole("dialog",{name:"Discussion"});
+  await stale.locator("textarea").fill("Retain my unsent draft");
+  const before=await (await page.request.get(url)).json();
+  const deleteTarget=await page.request.patch(url,{headers,data:{
+    expected_revision:before.revision,blocks:[
+      {id:thirdId,type:"paragraph",content:"Replacement body"},
+    ],
+  }});
+  expect(deleteTarget.ok(),await deleteTarget.text()).toBeTruthy();
+  await stale.getByRole("button",{name:"Post comment"}).click();
+  await expect(stale.locator("textarea")).toHaveValue("Retain my unsent draft");
+  await expect(stale).toContainText("Selected block removed");
+  await stale.getByRole("button",{name:"Switch to page comment"}).click();
+  await stale.getByRole("button",{name:"Post comment"}).click();
+  await expect(stale).toContainText("Retain my unsent draft");
+  const final=(await (await page.request.get("/api/v1/resources/"+resource.id+"/comments")).json())
+    .find((c:any)=>c.body==="Retain my unsent draft");
+  expect(final?.block_id).toBeNull();
+});
