@@ -101,7 +101,17 @@ const req = async (
   });
 };
 const ok = async (method: string, path: string, data?: any, actor = owner) => {
-  const r = await req(method, path, data, actor);
+  let r = await req(method, path, data, actor);
+  if (r.statusCode === 429) {
+    // Integration tests share one real server-side request budget. Exercise
+    // the real limit, honor Retry-After, and retry once; never weaken or
+    // disable the production limiter to make the acceptance suite green.
+    const retry=Number(r.headers["retry-after"]);
+    assert.ok(Number.isFinite(retry) && retry>=0 && retry<=60,
+      "Rate-limit response must provide a bounded Retry-After");
+    await new Promise<void>((resolve)=>setTimeout(resolve,(retry+1)*1000));
+    r=await req(method,path,data,actor);
+  }
   assert.ok(r.statusCode < 300, `${method} ${path}: ${r.statusCode} ${r.body}`);
   return r.json();
 };
@@ -1971,8 +1981,17 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
       );
     };
     // Preparing must not change the signature of subsequent delivery.
-    await tick(db);
-    assert.ok(received.length > 0);
+    // Earlier tests may leave older outbox jobs ahead of this event. Keep
+    // draining bounded worker batches until the exact signed event arrives.
+    // An unrelated HTTP request cannot satisfy this assertion.
+    for (let attempt=0;attempt<12 &&
+      !received.some((entry)=>entry.headers["x-workspace-event"]===eventId);
+      attempt++)
+      await tick(db);
+    assert.ok(
+      received.some((entry)=>entry.headers["x-workspace-event"]===eventId),
+      "The rotation test event must actually be delivered",
+    );
     verify(subscription.secret);
     const activate = endpoint + "/activate";
     assert.equal((await req("POST", activate, precondition)).statusCode, 409);
