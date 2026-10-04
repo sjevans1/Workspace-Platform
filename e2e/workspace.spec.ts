@@ -116,6 +116,36 @@ async function typeAtQuoteEdge(page: Page, edge: "start" | "end", token: string)
   await page.keyboard.insertText(token);
 }
 
+// Anchor a rich-block caret immediately before typing to avoid Yjs awareness
+// rebasing the ProseMirror selection between separate click/End calls.
+async function typeAtRichBlockEnd(page: Page, selector: string, token: string) {
+  const target=page.locator(selector);
+  await expect(target).toBeVisible();
+  await target.evaluate((node)=>{
+    const element=node as HTMLElement;
+    const root=element.closest<HTMLElement>(".bn-editor");
+    if(!root)throw Error("Block is outside editor");
+    root.focus();
+    const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+    const texts:Text[]=[];
+    while(walker.nextNode()){
+      const t=walker.currentNode as Text;
+      if(t.textContent?.trim())texts.push(t);
+    }
+    if(!texts.length)throw Error("Rich block has no text");
+    const last=texts[texts.length-1],range=document.createRange();
+    range.setStart(last,last.length);
+    range.collapse(true);
+    const selection=window.getSelection();
+    if(!selection)throw Error("Selection unavailable");
+    selection.removeAllRanges();
+    selection.addRange(range);
+    if(!element.contains(selection.anchorNode))
+      throw Error("Caret escaped intended rich block");
+  });
+  await page.keyboard.insertText(token);
+}
+
 test("Caddy strips spoofed forwarding headers before API rate limiting", async ({ request }) => {
   const first = await request.get("/api/v1/auth/methods", {
     headers: { "X-Forwarded-For": "203.0.113.17",
@@ -2152,35 +2182,12 @@ test("W10c4b two live editors merge rich edits and isolate local undo/redo", asy
     await expect(other.locator(".bn-editor")).toContainText("Beta baseline");
     const alphaEdit=" Alpha from editor one";
     const betaEdit=" Beta from editor two";
-    // Both editors are connected *before* either edit. They independently
-    // write different rich blocks without touching the revision-check API.
-    // Set and verify both caret targets before either session writes.
-    // Otherwise a remotely delivered Yjs edit can race with the other
-    // browser's focus/click and test keyboard input lands in a heading,
-    // falsely appearing as a lost quote edit. Once both carets are set,
-    // typing still happens concurrently over real Hocuspocus/Yjs.
+    // Place each caret at the exact named block edge directly before its
+    // concurrent input, not before an intervening cross-window focus event.
+    // Keep all canonical block identity and scoped undo checks unchanged.
     await Promise.all([
-      (async()=>{
-        await page.locator(".workspace-callout-content").click();
-        await page.keyboard.press("End");
-      })(),
-      (async()=>{
-        await other.locator(".bn-editor")
-          .getByText("Beta baseline",{exact:true}).click();
-        await other.keyboard.press("End");
-      })(),
-    ]);
-    const caretText=async(client:typeof page)=>client.evaluate(()=>{
-      const node=window.getSelection()?.anchorNode;
-      return node?.nodeType===Node.TEXT_NODE ? node.textContent||"" : "";
-    });
-    expect(await caretText(page),"owner caret must target the callout")
-      .toContain("Alpha baseline");
-    expect(await caretText(other),"peer caret must target the quote")
-      .toContain("Beta baseline");
-    await Promise.all([
-      page.keyboard.insertText(alphaEdit),
-      other.keyboard.insertText(betaEdit),
+      typeAtRichBlockEnd(page,".workspace-callout-content",alphaEdit),
+      typeAtQuoteEdge(other,"end",betaEdit),
     ]);
     for(const client of [page,other]) {
       await expect(client.locator(".workspace-callout"))
