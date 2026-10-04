@@ -21,6 +21,11 @@ export async function createCollab(db: Database, port = 1234) {
     owner: Connection<Context>; expiresAt: number; sawUpdate: boolean;
     documentName: string;
   }>();
+  function pruneExpiredStructuralLeases() {
+    const now = Date.now();
+    for (const [key, lease] of structuralLeases)
+      if (lease.expiresAt <= now) structuralLeases.delete(key);
+  }
   let closing = false;
   const lease = await db.pool.connect();
   if (
@@ -120,8 +125,14 @@ export async function createCollab(db: Database, port = 1234) {
     async beforeHandleMessage({ context, documentName, update, connection }) {
       assert(update.byteLength <= 1048576, 413, "Update too large");
       await recheck(connection, documentName);
+    },
+    // Count only actual canonical Yjs mutations, never stateless negotiation
+    // or awareness messages. Otherwise another principal's persistence can
+    // accidentally release a reservation the owner has not yet exercised.
+    async onChange({ connection, documentName }) {
       for (const lease of structuralLeases.values())
-        if (lease.owner === connection && lease.documentName === documentName)
+        if (connection && lease.owner === connection &&
+            lease.documentName === documentName)
           lease.sawUpdate = true;
     },
     async beforeSync({ document, connection, type, payload }) {
@@ -242,7 +253,9 @@ export async function createCollab(db: Database, port = 1234) {
           if (connection.readOnly) { answer(false, "read-only"); return; }
           if (typeof msg.blockId !== "string" ||
               !/^[0-9a-f-]{36}$/i.test(msg.blockId) ||
-              typeof msg.vector !== "string" || msg.vector.length > 4096) {
+              typeof msg.vector !== "string" ||
+              !/^[a-zA-Z0-9+/]+={0,2}$/.test(msg.vector) ||
+              msg.vector.length > 4096) {
             answer(false, "invalid-target"); return;
           }
           const authoritative = Y.encodeStateVector(connection.document);
@@ -254,6 +267,13 @@ export async function createCollab(db: Database, port = 1234) {
               containsBlock(Array.isArray(block.children) ? block.children : []));
           if (!containsBlock(project(connection.document).blocks)) {
             answer(false, "missing-block"); return;
+          }
+          pruneExpiredStructuralLeases();
+          // Explicitly bound the in-memory reservation table. An authenticated
+          // editor may not reserve arbitrary thousands of distinct blocks.
+          if (structuralLeases.size >= 128 ||
+              [...structuralLeases.values()].some((l) => l.owner === connection)) {
+            answer(false, "concurrent-edit"); return;
           }
           const key = connection.document.name + "/" + msg.blockId;
           const existing = structuralLeases.get(key);
@@ -302,6 +322,7 @@ export async function createCollab(db: Database, port = 1234) {
   await server.listen();
   let checking = false;
   const timer = setInterval(async () => {
+    pruneExpiredStructuralLeases();
     if (checking) return;
     checking = true;
     try {
