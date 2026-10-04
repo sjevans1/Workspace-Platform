@@ -2599,21 +2599,13 @@ test("W10c4c overlapping edits to the same quote converge with scoped undo", asy
       (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
       (async()=>{await quote(peer).click();await peer.keyboard.press("End")})(),
     ]);
-    // ProseMirror/Yjs can split quote text across inline DOM text nodes
-    // while two live carets are present; check selection containment instead
-    // of assuming the entire paragraph occupies one DOM Text node.
-    // Cursor awareness decorates/splits the quote's text after both
-    // selections land. The earlier exact-text locator can then wait for
-    // 150s even though the quotation itself remains mounted. Resolve the
-    // stable semantic blockquote, not a mutable decorated text node.
-    const caretInsideQuote=async(client:typeof page)=>client
-      .locator(".bn-editor blockquote")
-      .evaluate(el=>{
-        const anchor=window.getSelection()?.anchorNode;
-        return Boolean(anchor && el.contains(anchor));
-      });
+    // Do not assert the transient DOM selection: collaborative cursor
+    // decorations can move/split selection anchors while awareness syncs.
+    // The stronger assertions below inspect BOTH inserted tokens in the
+    // canonical quote block, exact-once, after undo/redo and both reloads.
     for(const client of [page,peer])
-      expect(await caretInsideQuote(client)).toBe(true);
+      await expect(client.locator(".bn-editor blockquote"))
+        .toContainText("Shared quote baseline");
     const fromOne="ONE_BEGIN ";
     const fromTwo=" TWO_END";
     await Promise.all([
