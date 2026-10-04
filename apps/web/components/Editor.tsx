@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
 import { useCreateBlockNote } from "@blocknote/react";
@@ -89,14 +89,33 @@ function Body({
     }
     editor.focus();
   }
+  // Pointer activation is a two-stage operation: an incoming peer edit may
+  // remap the ProseMirror selection between mouse-down and click. Preserve
+  // the exact block the user chose, never a different live cursor neighbor.
+  const structuralTarget = useRef<string | null>(null);
+  const pointedBlock = useRef<string | null>(null);
+  function rememberStructuralTarget() {
+    // The editor pointer event happens when the user actually picks the
+    // block. A remote Yjs update may rebase the live cursor before the
+    // formatting-toolbar mouse-down, so prefer this earlier, stable ID.
+    structuralTarget.current =
+      pointedBlock.current || editor.getTextCursorPosition().block.id;
+  }
   function structuralAction(action: "up" | "down" | "delete") {
     if (readOnly) return;
-    // Use the installed BlockNote Core transactions instead of rebuilding
-    // rich blocks from JSON. Moving must preserve each block's Yjs identity.
-    const current = editor.getTextCursorPosition().block;
-    if (action === "up") editor.moveBlocksUp();
-    else if (action === "down") editor.moveBlocksDown();
-    else editor.removeBlocks([current.id]);
+    const target =
+      structuralTarget.current || editor.getTextCursorPosition().block.id;
+    structuralTarget.current = null;
+    pointedBlock.current = null;
+    if (!editor.getBlock(target)) {
+      notify("This block changed in another session. Select it again.");
+      return;
+    }
+    // Core APIs take an explicit identifier: selection may be remapped by a
+    // concurrent Yjs transaction. Never move/delete its new neighbor.
+    if (action === "up") editor.moveBlocksUp(target);
+    else if (action === "down") editor.moveBlocksDown(target);
+    else editor.removeBlocks([target]);
     editor.focus();
   }
   function toggleMark(mark: "bold" | "italic" | "underline") {
@@ -178,15 +197,15 @@ function Body({
             onClick={() => insertRichBlock("divider")}>Divider</button>
           <button type="button" className="button small-button"
             aria-label="Move current block up" title="Move selected block up"
-            onMouseDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => { e.preventDefault(); rememberStructuralTarget(); }}
             onClick={() => structuralAction("up")}>Move up</button>
           <button type="button" className="button small-button"
             aria-label="Move current block down" title="Move selected block down"
-            onMouseDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => { e.preventDefault(); rememberStructuralTarget(); }}
             onClick={() => structuralAction("down")}>Move down</button>
           <button type="button" className="button small-button"
             aria-label="Delete current block" title="Delete selected block (Undo restores)"
-            onMouseDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => { e.preventDefault(); rememberStructuralTarget(); }}
             onClick={() => structuralAction("delete")}>Delete block</button>
           <button type="button" className="button small-button"
             aria-label="Undo last edit" title="Undo recent local change"
@@ -233,7 +252,20 @@ function Body({
           )}
         </div>
       )}
-      <BlockNoteView editor={editor} editable={!readOnly} theme={theme} />
+      <div
+        onPointerDownCapture={(event) => {
+          if (!(event.target instanceof Element)) return;
+          const block = event.target.closest<HTMLElement>(".bn-block[data-id]");
+          pointedBlock.current = block?.dataset.id || null;
+        }}
+        onKeyDownCapture={() => {
+          // Keyboard navigation, including Arrow keys, supersedes the last
+          // pointer selection. The toolbar then uses the live cursor.
+          pointedBlock.current = null;
+        }}
+      >
+        <BlockNoteView editor={editor} editable={!readOnly} theme={theme} />
+      </div>
     </>
   );
 }

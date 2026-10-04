@@ -1,0 +1,7 @@
+# W10c4f — conflicting move versus delete on the same block
+
+**Draft acceptance candidate** for [Issue #111](https://github.com/sjevans1/Workspace-Platform/issues/111); no acceptance claim until exact-head production CI is green.
+
+Two *distinct* authenticated principals share a canonical page, both select the same warning callout, then one moves it and the other deletes it using the actual BlockNote UI. The experiment runs in **both role assignments**, each with a fresh page/room. Success requires no resurrected callout, exactly one instance each of the remaining three unchanged block identities (regardless of order), both editors displaying surviving quote and tail, a later peer quote write persisting without reintroducing the callout, and two reloads yielding the same canonical document revision epoch. The delete operation is never silently undone in this test.
+
+The test uses two browser click promises rather than a network-level synchronization barrier; it exercises competing user actions, **not a proof of perfectly simultaneous WebSocket packet arrival, offline partitions or a strict Yjs last-writer-wins policy**. Those cases remain W10c4/W18/W19 release risk until deterministic lower-level stress and reconnect tests. Undo/redo behavior for the exact same-block conflict is deliberately unclaimed. No Enterprise AI integration, new dependencies or paid block editor components.
