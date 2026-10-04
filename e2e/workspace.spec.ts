@@ -3226,3 +3226,47 @@ test("W11b browser: anchored comment, orphan badge and preserved stale draft", a
     .find((c:any)=>c.body==="Retain my unsent draft");
   expect(final?.block_id).toBeNull();
 });
+
+
+test("W12a browser: new notification inbox filters mentions and rechecks destination",async ({page})=>{
+  test.setTimeout(90000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"Inbox space "+randomUUID()},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const title="Mention inbox "+randomUUID();
+  const create=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,title},
+  });
+  expect(create.ok(),await create.text()).toBeTruthy();
+  const resource=await create.json();
+  const mention=await page.request.post("/api/v1/resources/"+resource.id+"/comments",{
+    headers,data:{body:"Please review @{"+me.user.id+"}"},
+  });
+  expect(mention.ok(),await mention.text()).toBeTruthy();
+  await page.goto("/");
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Inbox"})).toBeVisible();
+  const filter=page.getByRole("textbox",{name:"Filter notifications"});
+  const item=page.getByRole("button",{name:/Open notification:.*mentioned you/}).filter({
+    hasText:title,
+  });
+  await expect(item).toBeVisible();
+  await filter.fill("Definitely no such message "+randomUUID());
+  await expect(item).toHaveCount(0);
+  await expect(page.getByText("No notifications match your filter.")).toBeVisible();
+  await filter.fill(title);
+  await expect(item).toBeVisible();
+  await page.getByRole("button",{name:"Refresh",exact:true}).click();
+  await expect(item).toBeVisible();
+  await item.click();
+  await expect(page.getByText(title,{exact:true}).first()).toBeVisible();
+  const seen=await (await page.request.get("/api/v1/notifications")).json();
+  expect(seen.some((notice:any)=>notice.resource_id===resource.id)).toBe(true);
+});
