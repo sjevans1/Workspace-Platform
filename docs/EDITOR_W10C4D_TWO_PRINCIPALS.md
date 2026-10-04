@@ -1,6 +1,6 @@
 # W10c4d — distinct-principal live collaboration and ACL changes
 
-**DRAFT: do not accept until exact-head full CI.** Parents [W10c4 #100](https://github.com/sjevans1/Workspace-Platform/issues/100), [W10 #74](https://github.com/sjevans1/Workspace-Platform/issues/74).
+**ACCEPTED:** [PR #109](https://github.com/sjevans1/Workspace-Platform/pull/109) merged `8f263d7cb241b363660693a49b439596a436a000` after exact-head [CI #37168602528](https://github.com/sjevans1/Workspace-Platform/actions/runs/37168602528): native 110/110; deployed 31 passed/1 skipped; Firefox/Chromium a11y + trusted HTTPS/WSS; release SBOM/Trivy/ClamAV passed. Parents [W10c4 #100](https://github.com/sjevans1/Workspace-Platform/issues/100), [W10 #74](https://github.com/sjevans1/Workspace-Platform/issues/74).
 
 ## Acceptance under test
 One actual invited **member** account and a separate owner account (distinct session, identity and browser context) open the same page with canonical heading, quote and warning callout. Both editors put carets at opposite ends of the **same quote** and insert different tokens concurrently over Yjs/Hocuspocus. Both browsers and server projection must contain both once with the same three block IDs, order and unchanged callout variant.
