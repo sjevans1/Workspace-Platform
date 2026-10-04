@@ -14,6 +14,18 @@ import { emit } from "../../../packages/events/index.ts";
 type Context = { ticket: Ticket; actor: Actor };
 export async function createCollab(db: Database, port = 1234) {
   const documents = new Set<Document>();
+  // Same-block structural operations are not safely commutative through the
+  // ProseMirror/Yjs bridge. Coordinate these intents in the single writer;
+  // ordinary collaborative text edits are still permitted.
+  const structuralLeases = new Map<string, {
+    owner: Connection<Context>; expiresAt: number; sawUpdate: boolean;
+    documentName: string;
+  }>();
+  function pruneExpiredStructuralLeases() {
+    const now = Date.now();
+    for (const [key, lease] of structuralLeases)
+      if (lease.expiresAt <= now) structuralLeases.delete(key);
+  }
   let closing = false;
   const lease = await db.pool.connect();
   if (
@@ -114,6 +126,15 @@ export async function createCollab(db: Database, port = 1234) {
       assert(update.byteLength <= 1048576, 413, "Update too large");
       await recheck(connection, documentName);
     },
+    // Count only actual canonical Yjs mutations, never stateless negotiation
+    // or awareness messages. Otherwise another principal's persistence can
+    // accidentally release a reservation the owner has not yet exercised.
+    async onChange({ connection, documentName }) {
+      for (const lease of structuralLeases.values())
+        if (connection && lease.owner === connection &&
+            lease.documentName === documentName)
+          lease.sawUpdate = true;
+    },
     async beforeSync({ document, connection, type, payload }) {
       await prune(document);
       await recheck(connection, document.name);
@@ -201,6 +222,9 @@ export async function createCollab(db: Database, port = 1234) {
           await prune(document);
           return;
         }
+        for (const [key, lease] of structuralLeases)
+          if (lease.documentName === documentName && lease.sawUpdate)
+            structuralLeases.delete(key);
         document.broadcastStateless(
           JSON.stringify({ type: "persisted", snapshot, revision }),
         );
@@ -212,6 +236,60 @@ export async function createCollab(db: Database, port = 1234) {
       }
     },
     async onStateless({ connection, payload }) {
+      if (payload.length > 8192) return;
+      if (payload.startsWith('{"type":"structural.acquire"')) {
+        let msg: { type?: string; requestId?: string; blockId?: string; vector?: string };
+        try { msg = JSON.parse(payload); } catch { return; }
+        const requestId = msg.requestId;
+        if (typeof requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(requestId))
+          return;
+        const answer = (granted: boolean, reason?: string) =>
+          connection.sendStateless(JSON.stringify({
+            type: granted ? "structural.granted" : "structural.denied",
+            requestId, reason,
+          }));
+        try {
+          await recheck(connection, connection.document.name);
+          if (connection.readOnly) { answer(false, "read-only"); return; }
+          if (typeof msg.blockId !== "string" ||
+              !/^[0-9a-f-]{36}$/i.test(msg.blockId) ||
+              typeof msg.vector !== "string" ||
+              !/^[a-zA-Z0-9+/]+={0,2}$/.test(msg.vector) ||
+              msg.vector.length > 4096) {
+            answer(false, "invalid-target"); return;
+          }
+          const authoritative = Y.encodeStateVector(connection.document);
+          if (!Buffer.from(msg.vector, "base64").equals(Buffer.from(authoritative))) {
+            answer(false, "document-changed"); return;
+          }
+          const containsBlock = (blocks: any[]): boolean =>
+            blocks.some((block) => block.id === msg.blockId ||
+              containsBlock(Array.isArray(block.children) ? block.children : []));
+          if (!containsBlock(project(connection.document).blocks)) {
+            answer(false, "missing-block"); return;
+          }
+          pruneExpiredStructuralLeases();
+          // Explicitly bound the in-memory reservation table. An authenticated
+          // editor may not reserve arbitrary thousands of distinct blocks.
+          if (structuralLeases.size >= 128 ||
+              [...structuralLeases.values()].some((l) => l.owner === connection)) {
+            answer(false, "concurrent-edit"); return;
+          }
+          const key = connection.document.name + "/" + msg.blockId;
+          const existing = structuralLeases.get(key);
+          if (existing && existing.expiresAt > Date.now()) {
+            answer(false, "concurrent-edit"); return;
+          }
+          structuralLeases.set(key, {
+            owner: connection, documentName: connection.document.name,
+            expiresAt: Date.now() + 8000, sawUpdate: false,
+          });
+          answer(true);
+        } catch {
+          answer(false, "access-changed");
+        }
+        return;
+      }
       if (payload !== "status") return;
       const t = (connection.context as Context).ticket;
       await authorize(t, connection.document.name);
@@ -244,6 +322,7 @@ export async function createCollab(db: Database, port = 1234) {
   await server.listen();
   let checking = false;
   const timer = setInterval(async () => {
+    pruneExpiredStructuralLeases();
     if (checking) return;
     checking = true;
     try {
@@ -278,6 +357,7 @@ export async function createCollab(db: Database, port = 1234) {
     },
     close: async () => {
       closing = true;
+      structuralLeases.clear();
       clearInterval(timer);
       await Promise.allSettled(server.hocuspocus.loadingDocuments.values());
       await server.destroy();
