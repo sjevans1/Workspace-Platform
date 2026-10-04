@@ -1,5 +1,5 @@
 "use client";
-import {useCallback,useEffect,useState} from "react";
+import {useCallback,useEffect,useRef,useState} from "react";
 import {ArrowRight,Bell,RefreshCw} from "lucide-react";
 import {api,date,go,notify} from "../lib/api";
 import {Empty} from "./common";
@@ -19,37 +19,51 @@ export default function NotificationInbox(){
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState(false);
   const [opening,setOpening]=useState("");
+  const requestGeneration=useRef(0);
   const refresh=useCallback(async()=>{
+    const generation=++requestGeneration.current;
+    // Never keep showing a previous ACL snapshot while current authority
+    // is being rechecked or a newer focus-refresh is still in flight.
+    setRows([]);
     setLoading(true);
     try {
       // Server filters against CURRENT tenant membership and resource ACL.
       // Never persist previously visible notifications in local storage.
       const current=await api("/notifications");
+      if(generation!==requestGeneration.current)return;
       setRows(current);
       setError(false);
     } catch {
-      setRows([]); // Do not retain restricted text after a failed recheck.
+      if(generation!==requestGeneration.current)return;
+      setRows([]);
       setError(true);
-    } finally {setLoading(false);}
+    } finally {
+      if(generation===requestGeneration.current)setLoading(false);
+    }
   },[]);
   useEffect(()=>{
     void refresh();
     const onFocus=()=>{void refresh();};
     window.addEventListener("focus",onFocus);
-    return ()=>window.removeEventListener("focus",onFocus);
+    return ()=>{
+      window.removeEventListener("focus",onFocus);
+      requestGeneration.current++;
+    };
   },[refresh]);
   const unreadCount=rows.filter(item=>!item.read_at).length;
   const visible=rows.filter(item=>
     item.message.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) &&
       (!onlyUnread || !item.read_at));
-  async function setRead(item:Notice,read:boolean){
+  async function setRead(item:Notice,read:boolean):Promise<boolean>{
     try{
       const result=await api("/notifications/"+item.id,"PATCH",{read});
       setRows(previous=>previous.map(x=>
         x.id===item.id?{...x,read_at:result.read_at}:x));
+      return true;
     }catch{
       notify("Read state could not be saved. Checking access again.");
       await refresh();
+      return false;
     }
   }
   async function open(item:Notice){
@@ -58,7 +72,7 @@ export default function NotificationInbox(){
     try {
       // Enforce a fresh authority check before navigating an old inbox item.
       await api("/resources/"+item.resource_id);
-      await setRead(item,true);
+      if(!(await setRead(item,true)))return;
       go(item.resource_id);
     }catch{
       notify("This item is no longer available to your account.");
