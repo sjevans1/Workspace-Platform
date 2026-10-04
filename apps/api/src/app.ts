@@ -2043,11 +2043,23 @@ function dataRoutes(
               body: z.string().trim().min(1).max(10000),
               block_id: uuid.optional(),
               expected_revision: z.number().int().nonnegative().optional(),
+              reply_to: uuid.optional(),
             })
             .strict(),
           r,
         ),
         cid = randomUUID();
+      const parent=v.reply_to?await one(q,
+        "SELECT id,block_id,parent_comment_id,resolved FROM comments WHERE tenant_id=$1 AND resource_id=$2 AND id=$3 FOR KEY SHARE",
+        [a.tenant_id,n.id,v.reply_to]):null;
+      if(v.reply_to){
+        assert(parent,404,"Comment not found");
+        assert(parent.parent_comment_id===null,400,
+          "Reply to a root discussion, not another reply");
+        assert(!parent.resolved,409,"Discussion resolved");
+        assert(!v.block_id && v.expected_revision===undefined,400,
+          "Replies inherit their parent anchor");
+      }
       // A supplied block anchor is a resource-owned *canonical Yjs block ID*.
       // Never accept an arbitrary or neighbouring DOM selector: a guessed
       // UUID can otherwise misdirect discussion into a different page.
@@ -2077,9 +2089,11 @@ function dataRoutes(
         assert(v.expected_revision === undefined,400,
           "A revision is only valid with a block anchor");
       }
+      const inheritedAnchor=parent?.block_id ?? v.block_id ?? null;
       await q.query(
-        "INSERT INTO comments(id,tenant_id,resource_id,author_id,body,block_id) VALUES($1,$2,$3,$4,$5,$6)",
-        [cid, a.tenant_id, n.id, a.user_id, v.body, v.block_id || null],
+        "INSERT INTO comments(id,tenant_id,resource_id,author_id,body,block_id,parent_comment_id) VALUES($1,$2,$3,$4,$5,$6,$7)",
+        [cid, a.tenant_id, n.id, a.user_id, v.body,
+          inheritedAnchor,parent?.id ?? null],
       );
       for (const m of v.body.matchAll(/@\{([0-9a-f-]{36})\}/g)) {
         const member = await one(
@@ -2103,7 +2117,13 @@ function dataRoutes(
           );
       }
       await emit(q, a, "comment.created", n.id);
-      return { id: cid, ...v };
+      // Preserve W11a's legacy response contract: no new block_id key for
+      // unanchored root comments. A reply explicitly carries its inherited
+      // anchor and parent ID, even when that anchor was later orphaned.
+      return { id: cid, ...v,
+        ...(parent ? { block_id: inheritedAnchor, parent_comment_id: parent.id }
+          : { parent_comment_id: null }),
+      };
     },
   );
   route(

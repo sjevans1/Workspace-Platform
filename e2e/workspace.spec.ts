@@ -3227,6 +3227,103 @@ test("W11b browser: anchored comment, orphan badge and preserved stale draft", a
   expect(final?.block_id).toBeNull();
 });
 
+test("W11d browser: two principals reply, resolve and revoke thread access",async ({page,browser})=>{
+  test.setTimeout(180000);
+  await login(page);
+  const owner=await (await page.request.get("/api/v1/me")).json();
+  const ownerHeaders={"X-CSRF-Token":owner.csrf};
+  const invitation=await page.request.post("/api/v1/members/invite",{
+    headers:ownerHeaders,
+    data:{name:"Discussion Partner",email:"threads-"+randomUUID()+"@example.test",role:"member"},
+  });
+  expect(invitation.ok(),await invitation.text()).toBeTruthy();
+  const context=await browser.newContext();
+  try {
+    const memberPage=await context.newPage();
+    await memberPage.goto((await invitation.json()).url);
+    await expect(memberPage.getByRole("heading",{name:"Join your team."})).toBeVisible();
+    await memberPage.getByLabel("Password",{exact:true}).fill("member-thread-test-password-123");
+    await memberPage.getByRole("button",{name:"Accept invitation",exact:true}).click();
+    await expect(memberPage.getByRole("heading",{name:"Welcome back, Discussion."})).toBeVisible();
+    const member=await (await memberPage.request.get("/api/v1/me")).json();
+    const roots=await (await page.request.get("/api/v1/resources")).json();
+    const createdSpace=await page.request.post("/api/v1/resources",{
+      headers:ownerHeaders,data:{kind:"space",parent_id:roots[0].id,
+        title:"W11d shared discussions "+randomUUID()},
+    });
+    expect(createdSpace.ok(),await createdSpace.text()).toBeTruthy();
+    const space=await createdSpace.json();
+    const created=await page.request.post("/api/v1/resources",{
+      headers:ownerHeaders,data:{kind:"page",parent_id:space.id,
+        title:"W11d comment thread "+randomUUID()},
+    });
+    expect(created.ok(),await created.text()).toBeTruthy();
+    const resource=await created.json();
+    const url="/?page="+resource.id;
+    const commentsApi="/api/v1/resources/"+resource.id+"/comments";
+    await page.goto(url);
+    await memberPage.goto(url);
+    await page.getByRole("button",{name:"Comments",exact:true}).click();
+    const ownerDialog=page.getByRole("dialog",{name:"Discussion"});
+    await ownerDialog.getByRole("textbox",{name:"New comment text"})
+      .fill("W11D_ROOT_KEEP_EXACT");
+    await ownerDialog.getByRole("button",{name:"Post comment"}).click();
+    await expect(ownerDialog).toContainText("W11D_ROOT_KEEP_EXACT");
+    const rootList=await (await page.request.get(commentsApi)).json();
+    const root=rootList.find((c:any)=>c.body==="W11D_ROOT_KEEP_EXACT");
+    expect(root?.id).toBeTruthy();
+    await ownerDialog.getByRole("button",{name:"Close dialog"}).click();
+    await memberPage.getByRole("button",{name:"Comments",exact:true}).click();
+    const peerDialog=memberPage.getByRole("dialog",{name:"Discussion"});
+    await expect(peerDialog).toContainText("W11D_ROOT_KEEP_EXACT");
+    await peerDialog.getByRole("button",{name:"Reply to "+root.author}).click();
+    await expect(peerDialog).toContainText("Replying to "+root.author);
+    await peerDialog.getByRole("textbox",{name:"Reply text"})
+      .fill("W11D_PEER_REPLY_KEEP_EXACT");
+    await peerDialog.getByRole("button",{name:"Post reply"}).click();
+    await expect(peerDialog).toContainText("W11D_PEER_REPLY_KEEP_EXACT");
+    const list=await (await page.request.get(commentsApi)).json();
+    const reply=list.find((c:any)=>c.body==="W11D_PEER_REPLY_KEEP_EXACT");
+    expect(reply?.parent_comment_id).toBe(root.id);
+    await expect(peerDialog.locator('[data-parent-comment-id="'+root.id+'"]'))
+      .toContainText("W11D_PEER_REPLY_KEEP_EXACT");
+    await peerDialog.getByRole("button",{name:"Close dialog"}).click();
+    await page.getByRole("button",{name:"Comments",exact:true}).click();
+    const ownerAgain=page.getByRole("dialog",{name:"Discussion"});
+    await expect(ownerAgain).toContainText("W11D_PEER_REPLY_KEEP_EXACT");
+    const rootCard=ownerAgain.locator('[data-comment-id="'+root.id+'"]');
+    await rootCard.getByRole("button",{name:"Resolve",exact:true}).click();
+    await expect(rootCard).toContainText("Resolved");
+    await expect(rootCard.getByRole("button",{name:"Reply to "+root.author})).toHaveCount(0);
+    const resolvedAttempt=await memberPage.request.post(commentsApi,{
+      headers:{"X-CSRF-Token":member.csrf},
+      data:{body:"W11D_NO_REPLY_AFTER_RESOLVE",reply_to:root.id},
+    });
+    expect(resolvedAttempt.status()).toBe(409);
+    await ownerAgain.getByRole("button",{name:"Close dialog"}).click();
+    // Remove the explicit grant, disable inheritance: revoked actor must not
+    // see either root/reply via API, even with known thread and resource IDs.
+    await page.getByRole("button",{name:"Page actions"}).click();
+    await page.getByRole("button",{name:"Manage access",exact:true}).click();
+    const access=page.getByRole("dialog",{name:"Manage access"});
+    await access.getByRole("button",{name:"Add person or integration"}).click();
+    await access.getByLabel("Principal",{exact:true}).selectOption(member.user.id);
+    await access.getByLabel("Access level",{exact:true}).selectOption("1");
+    await access.getByRole("button",{name:"Save access",exact:true}).click();
+    await page.getByRole("button",{name:"Page actions"}).click();
+    await page.getByRole("button",{name:"Manage access",exact:true}).click();
+    await access.getByRole("button",{name:"Remove grant"}).click();
+    await access.getByLabel("Inherit access from parent").uncheck();
+    await access.getByRole("button",{name:"Save access",exact:true}).click();
+    expect((await memberPage.request.get(commentsApi)).status()).toBe(404);
+    expect((await memberPage.request.get("/api/v1/notifications")).ok()).toBeTruthy();
+    const notification=await (await memberPage.request.get("/api/v1/notifications")).json();
+    expect(notification.some((n:any)=>n.resource_id===resource.id)).toBe(false);
+    const retained=await (await page.request.get(commentsApi)).json();
+    expect(retained.some((c:any)=>c.id===reply.id&&c.body==="W11D_PEER_REPLY_KEEP_EXACT"))
+      .toBe(true);
+  }finally{await context.close();}
+});
 
 test("W12a browser: new notification inbox filters mentions and rechecks destination",async ({page})=>{
   test.setTimeout(90000);

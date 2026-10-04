@@ -1515,6 +1515,88 @@ test("W11a comment anchors require canonical same-page Yjs ID and current revisi
   assert.equal((await ok("GET",url)).length,3);
 });
 
+test("W11c native replies stay on the same resource and revoked mentions vanish", async () => {
+  const target=await ok("POST","/resources",{
+    kind:"page",parent_id:space.id,title:"W11c reply scope",
+  });
+  const foreign=await ok("POST","/resources",{
+    kind:"page",parent_id:space.id,title:"W11c unrelated thread",
+  });
+  const targetUrl="/resources/"+target.id+"/comments";
+  const otherUrl="/resources/"+foreign.id+"/comments";
+  const otherRoot=await ok("POST",otherUrl,{body:"Other resource root"});
+  const initial=await ok("GET","/pages/"+target.id+"/content");
+  const anchoredId=randomUUID();
+  const seeded=await ok("PATCH","/pages/"+target.id+"/content",{
+    expected_revision:initial.revision,
+    blocks:[{id:anchoredId,type:"quote",content:"Thread target"}],
+  });
+  const root=await ok("POST",targetUrl,{
+    body:"Discuss this quote @{"+member.id+"}",
+    block_id:anchoredId,expected_revision:seeded.revision,
+  });
+  assert.equal(root.parent_comment_id,null);
+  const first=await ok("POST",targetUrl,{
+    body:"Answer without a stale anchor precondition",reply_to:root.id,
+  },member);
+  assert.equal(first.parent_comment_id,root.id);
+  assert.equal(first.block_id,anchoredId);
+  const second=await ok("POST",targetUrl,{
+    body:"Another participant",reply_to:root.id,
+  });
+  assert.equal(second.parent_comment_id,root.id);
+  const listed=await ok("GET",targetUrl);
+  assert.deepEqual(
+    listed.filter((comment:any)=>comment.parent_comment_id===root.id)
+      .map((comment:any)=>comment.id).sort(),
+    [first.id,second.id].sort(),
+  );
+  assert.equal((await req("POST",targetUrl,{
+    body:"Foreign root",reply_to:otherRoot.id,
+  })).statusCode,404);
+  assert.equal((await req("POST",targetUrl,{
+    body:"Nested reply",reply_to:first.id,
+  })).statusCode,400);
+  assert.equal((await req("POST",targetUrl,{
+    body:"Malformed reply",reply_to:"not-a-uuid",
+  })).statusCode,400);
+  assert.equal((await req("POST",targetUrl,{
+    body:"Reply may not replace its inherited anchor",reply_to:root.id,
+    block_id:randomUUID(),expected_revision:seeded.revision,
+  })).statusCode,400);
+  assert.equal((await req("POST",targetUrl,{
+    body:"Cross tenant",reply_to:root.id,
+  },other)).statusCode,404);
+  // The composite database FK must also reject bypassing the API to
+  // manufacture a cross-page link within a tenant.
+  await assert.rejects(db.tenant(owner.tenant,(q)=>
+    q.query(
+      "INSERT INTO comments(id,tenant_id,resource_id,author_id,body,parent_comment_id) VALUES($1,$2,$3,$4,'forged',$5)",
+      [randomUUID(),owner.tenant,target.id,owner.id,otherRoot.id],
+    )),/foreign key|violates|constraint/i);
+  await ok("PATCH",targetUrl+"/"+root.id,{resolved:true});
+  assert.equal((await req("POST",targetUrl,{
+    body:"Cannot reply to a resolved root",reply_to:root.id,
+  })).statusCode,409);
+  // Mentions are read-time permission-scoped, not a durable disclosure.
+  const initialNotifications=await ok("GET","/notifications",undefined,member);
+  assert.ok(initialNotifications.some((entry:any)=>entry.resource_id===target.id));
+  await permissionPatch("/resources/"+target.id+"/permissions",{
+    inherit:true,grants:[{principal_id:member.id,level:0}],
+  });
+  const after=await ok("GET","/notifications",undefined,member);
+  assert.ok(!after.some((entry:any)=>entry.resource_id===target.id),
+    "Revoked member must not read the old notification text or page ID");
+  assert.equal((await req("GET",targetUrl,undefined,member)).statusCode,404);
+  assert.equal((await req("POST",targetUrl,{
+    body:"No post after revocation",reply_to:root.id,
+  },member)).statusCode,404);
+  await ok("DELETE",targetUrl+"/"+root.id);
+  const afterDelete=await ok("GET",targetUrl);
+  assert.equal(afterDelete.filter((c:any)=>c.parent_comment_id===root.id).length,0,
+    "Deleting the parent must remove dependent replies via database constraint");
+});
+
 test("comments create mentions and block unauthorized moderation", async () => {
   const c = await ok("POST", `/resources/${page.id}/comments`, {
     body: `Please review @{${member.id}}`,
