@@ -2951,3 +2951,135 @@ test("W10c4e structural move/delete and peer edit converge with scoped history",
     await peerContext.close();
   }
 });
+
+
+test("W10c4f distinct principals: same block move versus delete never leaves ghost content",async ({page,browser})=>{
+  test.setTimeout(240000);
+  await login(page);
+  const owner=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":owner.csrf};
+  const invite=await page.request.post("/api/v1/members/invite",{
+    headers,
+    data:{name:"Structural Conflict Partner",
+      email:"collision-"+randomUUID()+"@example.test",role:"member"},
+  });
+  expect(invite.ok(),await invite.text()).toBeTruthy();
+  const context=await browser.newContext();
+  try{
+    const partner=await context.newPage();
+    await partner.goto((await invite.json()).url);
+    await expect(partner.getByRole("heading",{name:"Join your team."})).toBeVisible();
+    await expect.poll(()=>new URL(partner.url()).search).toBe("");
+    await partner.getByLabel("Password",{exact:true})
+      .fill("partner-test-password-123");
+    await partner.getByRole("button",{name:"Accept invitation",exact:true}).click();
+    await expect(partner.getByRole("heading",{name:"Welcome back, Structural."}))
+      .toBeVisible();
+    const member=await (await partner.request.get("/api/v1/me")).json();
+    expect(member.user.id).not.toBe(owner.user.id);
+    expect(member.user.role).toBe("member");
+    const roots=await (await page.request.get("/api/v1/resources")).json();
+    const spaceResponse=await page.request.post("/api/v1/resources",{
+      headers,data:{kind:"space",parent_id:roots[0].id,
+        title:"Same block collision "+randomUUID()},
+    });
+    expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+    const space=await spaceResponse.json();
+
+    // Repeat against fresh, distinct canonical Yjs rooms. Each user has
+    // the *same* callout selected before triggering a competing operation.
+    for(const moveOwner of [true,false]){
+      const phase=moveOwner?"owner-moves":"member-moves";
+      const created=await page.request.post("/api/v1/resources",{
+        headers,data:{kind:"page",parent_id:space.id,
+          title:"Live collision "+phase+" "+randomUUID()},
+      });
+      expect(created.ok(),await created.text()).toBeTruthy();
+      const resource=await created.json();
+      const endpoint="/api/v1/pages/"+resource.id+"/content";
+      const initial=await (await page.request.get(endpoint)).json();
+      const ids=[randomUUID(),randomUUID(),randomUUID(),randomUUID()];
+      const seed=await page.request.patch(endpoint,{
+        headers,data:{expected_revision:initial.revision,blocks:[
+          {id:ids[0],type:"heading",props:{level:2},
+            content:"Collision regression "+phase},
+          {id:ids[1],type:"callout",props:{variant:"warning"},
+            content:"SAME_TARGET_SHOULD_BE_REMOVED"},
+          {id:ids[2],type:"quote",content:"Unrelated quote survives"},
+          {id:ids[3],type:"paragraph",content:"Preserved tail"},
+        ]},
+      });
+      expect(seed.ok(),await seed.text()).toBeTruthy();
+      const start=await seed.json();
+      await page.goto("/?page="+resource.id);
+      await partner.goto("/?page="+resource.id);
+      for(const client of [page,partner]){
+        await expect(client.locator(".workspace-callout[data-workspace-callout='warning']")).toBeVisible();
+        await expect(client.locator(".bn-editor blockquote")).toContainText("Unrelated quote survives");
+        await expect(client.getByRole("toolbar",{name:"Formatting"})).toBeVisible();
+      }
+      const ownerToolbar=page.getByRole("toolbar",{name:"Formatting"}),
+        memberToolbar=partner.getByRole("toolbar",{name:"Formatting"});
+      const current=(p:typeof page)=>p.locator(".workspace-callout-content");
+      await current(page).click();
+      await current(partner).click();
+      const moving=moveOwner?page:partner;
+      const deleting=moveOwner?partner:page;
+      const moveToolbar=moveOwner?ownerToolbar:memberToolbar;
+      const deleteToolbar=moveOwner?memberToolbar:ownerToolbar;
+      // Both clicks are dispatched from independent browsers against the
+      // same original block. We intentionally do not claim strict network
+      // simultaneity or a deterministic position for surviving neighbors.
+      await Promise.all([
+        moveToolbar.getByRole("button",{name:"Move current block down"}).click(),
+        deleteToolbar.getByRole("button",{name:"Delete current block"}).click(),
+      ]);
+      const canonical=async()=>{
+        const result=await page.request.get(endpoint);
+        expect(result.ok(),await result.text()).toBeTruthy();
+        return result.json();
+      };
+      const remainingIds=[ids[0],ids[2],ids[3]].sort();
+      await expect.poll(async()=>{
+        const snap=await canonical();
+        return snap.blocks.map((b:any)=>b.id).sort();
+      },{timeout:30000}).toEqual(remainingIds);
+      for(const client of [page,partner]){
+        await expect(client.locator(".workspace-callout")).toHaveCount(0);
+        await expect(client.locator(".bn-editor blockquote"))
+          .toContainText("Unrelated quote survives");
+      }
+      const beforePeer=await canonical();
+      expect(beforePeer.plain_text).not.toContain("SAME_TARGET_SHOULD_BE_REMOVED");
+      expect(beforePeer.blocks.filter((b:any)=>b.id===ids[1])).toHaveLength(0);
+      expect(beforePeer.epoch).toBe(start.epoch);
+      expect(beforePeer.revision).toBeGreaterThan(start.revision);
+
+      // Force one later, acknowledged unrelated Yjs write after the
+      // structural conflict. It must not reactivate the removed callout.
+      const token=moveOwner?" PEER_AFTER_OWNER_MOVE":" PEER_AFTER_MEMBER_MOVE";
+      await partner.locator(".bn-editor blockquote").click();
+      await partner.keyboard.press("End");
+      await partner.keyboard.insertText(token);
+      await expect.poll(async()=>{
+        const snap=await canonical();
+        return snap.plain_text.includes(token)
+          && snap.blocks.filter((b:any)=>b.id===ids[1]).length===0;
+      },{timeout:30000}).toBe(true);
+      await Promise.all([page.reload(),partner.reload()]);
+      for(const client of [page,partner]){
+        await expect(client.locator(".bn-editor blockquote")).toContainText(token);
+        await expect(client.locator(".workspace-callout")).toHaveCount(0);
+        await expect(client.locator(".bn-editor")).toContainText("Preserved tail");
+      }
+      const final=await canonical();
+      expect(final.blocks.map((b:any)=>b.id).sort()).toEqual(remainingIds);
+      expect(final.plain_text).not.toContain("SAME_TARGET_SHOULD_BE_REMOVED");
+      expect(final.blocks.find((b:any)=>b.id===ids[2])?.type).toBe("quote");
+      expect(final.epoch).toBe(start.epoch);
+      expect(final.revision).toBeGreaterThan(beforePeer.revision);
+    }
+  }finally{
+    await context.close();
+  }
+});

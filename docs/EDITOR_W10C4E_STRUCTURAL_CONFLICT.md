@@ -1,6 +1,6 @@
 # W10c4e — accessible structural changes under live collaboration
 
-**Candidate; do not accept before exact-head CI and code review.** Parent [W10c4 #100](https://github.com/sjevans1/Workspace-Platform/issues/100), [W10c #92](https://github.com/sjevans1/Workspace-Platform/issues/92), [W10 #74](https://github.com/sjevans1/Workspace-Platform/issues/74).
+**ACCEPTED:** [PR #110](https://github.com/sjevans1/Workspace-Platform/pull/110) merged `a4372a27a672147471ea4c0406b2777b22161703` following exact-head [CI #37172366202](https://github.com/sjevans1/Workspace-Platform/actions/runs/37172366202): backend 110/110; deployed browser 32 passed / 1 skipped; 4 compatibility, HTTPS/WSS, Trivy, SBOM and ClamAV successful. Same-block conflicting move-vs-delete remains W10c4f #111, unaccepted. Parent [W10c4 #100](https://github.com/sjevans1/Workspace-Platform/issues/100), [W10c #92](https://github.com/sjevans1/Workspace-Platform/issues/92), [W10 #74](https://github.com/sjevans1/Workspace-Platform/issues/74).
 
 ## Customer-visible change
 
