@@ -3043,13 +3043,19 @@ test("W10c4f distinct principals: same block move versus delete never leaves gho
       const current=(p:typeof page)=>p.locator(".workspace-callout-content");
       await current(page).click();
       await current(partner).click();
-      const moving=moveOwner?page:partner;
       const deleting=moveOwner?partner:page;
       const moveToolbar=moveOwner?ownerToolbar:memberToolbar;
       const deleteToolbar=moveOwner?memberToolbar:ownerToolbar;
-      // Both clicks are dispatched from independent browsers against the
-      // same original block. We intentionally do not claim strict network
-      // simultaneity or a deterministic position for surviving neighbors.
+      // Capture actual user-visible conflict feedback before the race:
+      // the single-writer arbiter must reject one stale structural action
+      // rather than silently deleting the neighboring Core quote.
+      for(const client of [page,partner])
+        await client.evaluate(()=>{
+          (window as any).__structuralNotices=[];
+          window.addEventListener("workspace-notice",(event:Event)=>{
+            (window as any).__structuralNotices.push((event as CustomEvent).detail);
+          });
+        });
       await Promise.all([
         moveToolbar.getByRole("button",{name:"Move current block down"}).click(),
         deleteToolbar.getByRole("button",{name:"Delete current block"}).click(),
@@ -3062,10 +3068,31 @@ test("W10c4f distinct principals: same block move versus delete never leaves gho
       const remainingIds=[ids[0],ids[2],ids[3]].sort();
       const names=new Map<string,string>(ids.map((id,i):[string,string]=>[id,
         ["heading","DELETED-CALLOUT","quote","tail"][i]]));
-      // Include structural identity and block type in CI failure output to
-      // distinguish ghost-resurrection from deletion of the wrong neighbor.
+      // Losing the sibling quote is NEVER valid, even transiently. If the
+      // server accepted Move first it must explicitly reject simultaneous
+      // Delete; an operator can retry against the now-synced canonical page.
       const describe=(blocks:any[])=>blocks.map((block:any)=>
         (names.get(block.id)||"UNEXPECTED")+":"+block.id+":"+block.type).sort();
+      await expect.poll(async()=>{
+        const current=await canonical();
+        return current.revision>start.revision ? current.blocks : null;
+      },{timeout:30000}).not.toBeNull();
+      const afterRace=await canonical();
+      const present=new Set(afterRace.blocks.map((b:any)=>b.id));
+      expect(present.has(ids[0])).toBe(true);
+      expect(present.has(ids[2])).toBe(true);
+      expect(present.has(ids[3])).toBe(true);
+      expect(afterRace.blocks.filter((b:any)=>b.id===ids[1]).length)
+        .toBeLessThanOrEqual(1);
+      expect(afterRace.blocks.length).toBe(present.has(ids[1])?4:3);
+      if(present.has(ids[1])) {
+        const conflict = await Promise.all([page,partner].map((client)=>
+          client.evaluate(()=>(window as any).__structuralNotices as string[])));
+        expect(conflict.flat().some((message)=>/Another editor|page changed/i.test(message)),
+          "A rejected collision needs an explicit user-visible reason").toBe(true);
+        await deleting.locator(".workspace-callout-content").click();
+        await deleteToolbar.getByRole("button",{name:"Delete current block"}).click();
+      }
       await expect.poll(async()=>describe((await canonical()).blocks),
         {timeout:30000}).toEqual(describe([
           {id:ids[0],type:"heading"},
