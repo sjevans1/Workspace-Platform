@@ -36,6 +36,7 @@ export default function Resource({
   const [node, setNode] = useState<any>(),
     [children, setChildren] = useState<any[]>([]),
     [panel, setPanel] = useState(""),
+    [commentAnchor, setCommentAnchor] = useState(""),
     [menu, setMenu] = useState(false),
     [record, setRecord] = useState<any>(),
     [members, setMembers] = useState<any[]>([]);
@@ -97,7 +98,10 @@ export default function Resource({
             className="icon-button"
             aria-label="Comments"
             title="Comments"
-            onClick={() => setPanel("comments")}
+            onClick={() => {
+              setCommentAnchor("");
+              setPanel("comments");
+            }}
           >
             <MessageSquare size={17} />
           </button>
@@ -338,7 +342,12 @@ export default function Resource({
               ))}
             </div>
           )}
-          <Editor id={id} user={me.user} theme={theme} />
+          <Editor id={id} user={me.user} theme={theme}
+            commentable={node.effective_permission >= 2}
+            onCommentBlock={(blockId: string) => {
+              setCommentAnchor(blockId);
+              setPanel("comments");
+            }} />
           <Backlinks id={id} />
         </>
       )}
@@ -354,6 +363,8 @@ export default function Resource({
           id={id}
           me={me}
           level={node.effective_permission}
+          anchorable={["page", "record"].includes(node.kind)}
+          initialAnchor={commentAnchor}
           close={() => setPanel("")}
         />
       )}{" "}
@@ -599,18 +610,39 @@ function Comments({
   id,
   me,
   level,
+  anchorable,
+  initialAnchor,
   close,
 }: {
   id: string;
   me: any;
   level: number;
+  anchorable: boolean;
+  initialAnchor: string;
   close: () => void;
 }) {
   const [rows, setRows] = useState<any[]>([]),
     [body, setBody] = useState(""),
     [members, setMembers] = useState<any[]>([]),
-    [editing, setEditing] = useState("");
-  const load = async () => setRows(await api(`/resources/${id}/comments`));
+    [editing, setEditing] = useState(""),
+    [anchor, setAnchor] = useState(initialAnchor),
+    [blocks, setBlocks] = useState<Map<string,string>>(new Map());
+  function indexBlocks(items: any[], result = new Map<string,string>()) {
+    for (const block of items) {
+      if (typeof block.id === "string")
+        result.set(block.id, typeof block.type === "string" ? block.type : "block");
+      if (Array.isArray(block.children)) indexBlocks(block.children,result);
+    }
+    return result;
+  }
+  const load = async () => {
+    const discussions=await api(`/resources/${id}/comments`);
+    setRows(discussions);
+    if (anchorable) {
+      const content=await api(`/pages/${id}/content`);
+      setBlocks(indexBlocks(content.blocks));
+    }
+  };
   useEffect(() => {
     run(load);
     api("/members")
@@ -629,6 +661,27 @@ function Comments({
               <span className="avatar small">{c.author[0]}</span>
               <div>
                 <strong>{c.author}</strong>
+                {c.block_id ? (
+                  <div className="muted">
+                    {blocks.has(c.block_id) ? (
+                      <>
+                        <span>On {blocks.get(c.block_id)} · </span>
+                        <button type="button" className="button small-button"
+                          aria-label="Go to commented block"
+                          onClick={() => {
+                            const target = Array.from(
+                              document.querySelectorAll<HTMLElement>(".bn-block[data-id]"),
+                            ).find((element) => element.dataset.id === c.block_id);
+                            close();
+                            target?.scrollIntoView({block:"center",behavior:"smooth"});
+                            target?.focus();
+                          }}>
+                          Jump to block
+                        </button>
+                      </>
+                    ) : <span>Original block removed · comment retained</span>}
+                  </div>
+                ) : <small>Page discussion</small>}
                 <small>
                   {date(c.created_at)}
                   {c.resolved ? " · Resolved" : ""}
@@ -698,10 +751,24 @@ function Comments({
           onSubmit={(e) => {
             e.preventDefault();
             run(async () => {
+              // A failed POST never clears the draft. Re-fetch the current
+              // canonical version; the server atomically checks its block ID
+              // and revision against the page row before creating a comment.
+              let payload: {body:string;block_id?:string;expected_revision?:number}={body};
+              if (!editing && anchor && anchorable) {
+                const content=await api(`/pages/${id}/content`);
+                const current=indexBlocks(content.blocks);
+                setBlocks(current);
+                if (!current.has(anchor)) {
+                  notify("The selected block was removed. Your draft is saved; choose a page comment.");
+                  return;
+                }
+                payload={body,block_id:anchor,expected_revision:content.revision};
+              }
               await api(
                 `/resources/${id}/comments${editing ? `/${editing}` : ""}`,
                 editing ? "PATCH" : "POST",
-                { body },
+                payload,
               );
               setBody("");
               setEditing("");
@@ -709,6 +776,25 @@ function Comments({
             });
           }}
         >
+          {!editing && anchorable && (
+            <div className="form-row">
+              {anchor ? (
+                <p role="status" className="muted">
+                  {blocks.has(anchor)
+                    ? `Commenting on selected ${blocks.get(anchor)}`
+                    : "Selected block removed — switch to page discussion"}
+                </p>
+              ) : (
+                <p className="muted">Commenting on the whole page</p>
+              )}
+              {anchor && (
+                <button type="button" className="button small-button"
+                  onClick={() => setAnchor("")}>
+                  Switch to page comment
+                </button>
+              )}
+            </div>
+          )}
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
