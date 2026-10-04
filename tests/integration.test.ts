@@ -4427,38 +4427,59 @@ test("W09c CSV submission retries are principal-bound, atomic and schema-aware",
 });
 
 test("W12b notification receipts require current recipient and page access",async()=>{
+  // Prior integration scenarios revoke their shared member session. Use a
+  // dedicated active actor so this security proof is independent of test order.
+  const recipientId=randomUUID();
+  await db.tenant(owner.tenant,async(q)=>{
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
+      [recipientId,"receipt-"+recipientId+"@example.test","Receipt Recipient"]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
+      [owner.tenant,recipientId]);
+  });
+  const recipientToken=await db.tenant(owner.tenant,(q)=>
+    createSession(q,owner.tenant,recipientId));
+  const recipient={
+    id:recipientId,tenant:owner.tenant,
+    cookie:"workspace_session="+recipientToken,csrf:csrf(recipientToken),
+  };
+  const foreignToken=await db.tenant(other.tenant,(q)=>
+    createSession(q,other.tenant,owner.id));
+  const foreign={cookie:"workspace_session="+foreignToken,csrf:csrf(foreignToken)};
+  assert.equal((await req("GET","/me",undefined,recipient)).statusCode,200,
+    "Dedicated recipient must be independently authenticated");
   const target=await ok("POST","/resources",{
     kind:"page",parent_id:space.id,title:"W12b receipt scoping",
   });
   await ok("POST","/resources/"+target.id+"/comments",{
-    body:"Please inspect this @{"+member.id+"}",
+    body:"Please inspect this @{"+recipientId+"}",
   });
-  const before=await ok("GET","/notifications",undefined,member);
+  const before=await ok("GET","/notifications",undefined,recipient);
   const notice=before.find((n:any)=>n.resource_id===target.id);
   assert.ok(notice,"An eligible mention must create a visible notification");
   assert.equal(notice.read_at,null,"New mention begins unread");
   const key="/notifications/"+notice.id;
-  const marked=await ok("PATCH",key,{read:true},member);
+  const marked=await ok("PATCH",key,{read:true},recipient);
   assert.equal(marked.id,notice.id);
   assert.ok(marked.read_at,"Read time persists in PostgreSQL");
-  const replay=await ok("PATCH",key,{read:true},member);
+  const replay=await ok("PATCH",key,{read:true},recipient);
   assert.equal(replay.read_at,marked.read_at,
-    "Idempotent read requests must not alter the original receipt");
-  assert.equal((await ok("GET","/notifications",undefined,member))
+    "Idempotent read requests must retain the original timestamp");
+  assert.equal((await ok("GET","/notifications",undefined,recipient))
     .find((n:any)=>n.id===notice.id).read_at,marked.read_at);
-  const unread=await ok("PATCH",key,{read:false},member);
+  const unread=await ok("PATCH",key,{read:false},recipient);
   assert.equal(unread.read_at,null);
   assert.equal((await req("PATCH",key,{read:true},owner)).statusCode,404,
-    "The same-tenant owner must not change another recipient receipt");
-  assert.equal((await req("PATCH",key,{read:true},other)).statusCode,404,
-    "A foreign tenant must not learn whether a notification exists");
-  assert.equal((await req("PATCH",key,{read:"yes"},member)).statusCode,400);
+    "Owner may not mutate another recipient's receipt");
+  assert.equal((await req("PATCH",key,{read:true},foreign)).statusCode,404,
+    "Other tenant may not infer notification existence");
+  assert.equal((await req("PATCH",key,{read:"yes"},recipient)).statusCode,400);
   await permissionPatch("/resources/"+target.id+"/permissions",{
-    inherit:true,grants:[{principal_id:member.id,level:0}],
+    inherit:true,grants:[{principal_id:recipientId,level:0}],
   });
-  const after=await ok("GET","/notifications",undefined,member);
+  const after=await ok("GET","/notifications",undefined,recipient);
   assert.ok(!after.some((n:any)=>n.id===notice.id),
-    "Revocation must hide even an earlier delivered notification");
-  assert.equal((await req("PATCH",key,{read:true},member)).statusCode,404,
-    "Known notification UUID grants no access after revocation");
+    "Revocation must hide previously delivered notification content");
+  assert.equal((await req("PATCH",key,{read:true},recipient)).statusCode,404,
+    "A known notification UUID grants no access after revocation");
 });
