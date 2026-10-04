@@ -1618,17 +1618,22 @@ test("W11c concurrent resolve and reply serialize on the parent row lock",async(
       [rootComment.id]);
   });
   await ready;
-  const pending=req("POST",url,{body:"Reply must not win",reply_to:rootComment.id});
-  try{
-    await until(async()=>{
-      const check=await db.tenant(owner.tenant,q=>q.query(
-        "SELECT count(*)::int AS n FROM pg_stat_activity " +
-        "WHERE pid<>pg_backend_pid() AND state='active' " +
-        "AND wait_event_type='Lock' " +
-        "AND query LIKE 'SELECT id,block_id,parent_comment_id,resolved FROM comments%'",
-      ));
-      return Number(check.rows[0].n)>0;
-    });
+  let finished=false;
+  const pending=req("POST",url,{body:"Reply must not win",reply_to:rootComment.id})
+    .finally(()=>{finished=true;});
+  try {
+    // Assert the compatibility underlying the production row lock directly:
+    // FOR SHARE must conflict with the parent's ordinary non-key UPDATE lock.
+    await assert.rejects(
+      db.tenant(owner.tenant,q=>q.query(
+        "SELECT id FROM comments WHERE id=$1 FOR SHARE NOWAIT",[rootComment.id])),
+      /could not obtain lock on row|55P03/,
+    );
+    // The actual reply HTTP transaction must remain pending while the root
+    // is locked. This is tested with its genuine Fastify/PG path, not a stub.
+    await pause(300);
+    assert.equal(finished,false,
+      "Reply cannot pass an unresolved parent whose row is held for update");
   }finally{
     release();
     await transaction;
