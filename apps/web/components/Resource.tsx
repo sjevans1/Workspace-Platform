@@ -625,6 +625,7 @@ function Comments({
     [body, setBody] = useState(""),
     [members, setMembers] = useState<any[]>([]),
     [editing, setEditing] = useState(""),
+    [replyTo, setReplyTo] = useState(""),
     [anchor, setAnchor] = useState(initialAnchor),
     [blocks, setBlocks] = useState<Map<string,string>>(new Map());
   function indexBlocks(items: any[], result = new Map<string,string>()) {
@@ -649,18 +650,31 @@ function Comments({
       .then(setMembers)
       .catch(() => {});
   }, [id]);
+  const threaded = rows
+    .filter((comment) => !comment.parent_comment_id)
+    .flatMap((root) => [
+      root,
+      ...rows.filter((comment) => comment.parent_comment_id === root.id)
+        .reverse(),
+    ]);
+  const replyingTo = rows.find((comment) => comment.id === replyTo);
   return (
     <Modal title="Discussion" close={close}>
-      <div className="comments">
-        {rows.length ? (
-          rows.map((c) => (
+      <div className="comments" aria-label="Discussion threads">
+        {threaded.length ? (
+          threaded.map((c) => (
             <div
               key={c.id}
-              className={`comment ${c.resolved ? "resolved" : ""}`}
+              className={`comment ${c.parent_comment_id ? "comment-reply" : ""} ${c.resolved ? "resolved" : ""}`}
+              data-comment-id={c.id}
+              data-parent-comment-id={c.parent_comment_id || undefined}
             >
               <span className="avatar small">{c.author[0]}</span>
               <div>
                 <strong>{c.author}</strong>
+                {c.parent_comment_id && (
+                  <small aria-label="Thread reply">Reply in thread</small>
+                )}
                 {c.block_id ? (
                   <div className="muted">
                     {blocks.has(c.block_id) ? (
@@ -695,7 +709,18 @@ function Comments({
                   )}
                 </p>
                 <div className="comment-actions">
-                  {level >= 2 && (
+                  {level >= 2 && !c.parent_comment_id && !c.resolved && (
+                    <button type="button"
+                      aria-label={`Reply to ${c.author}`}
+                      onClick={() => {
+                        setReplyTo(c.id);
+                        setEditing("");
+                        setBody("");
+                      }}>
+                      Reply
+                    </button>
+                  )}
+                  {(c.author_id === me.user.id || level >= 3) && !c.parent_comment_id && (
                     <button
                       onClick={() =>
                         run(async () => {
@@ -717,6 +742,7 @@ function Comments({
                       <button
                         onClick={() => {
                           setEditing(c.id);
+                          setReplyTo("");
                           setBody(c.body);
                         }}
                       >
@@ -754,8 +780,14 @@ function Comments({
               // A failed POST never clears the draft. Re-fetch the current
               // canonical version; the server atomically checks its block ID
               // and revision against the page row before creating a comment.
-              let payload: {body:string;block_id?:string;expected_revision?:number}={body};
-              if (!editing && anchor && anchorable) {
+              let payload: {
+                body:string;block_id?:string;expected_revision?:number;reply_to?:string;
+              }={body};
+              if (!editing && replyTo) {
+                // Never silently convert an inaccessible/resolved reply into a
+                // new root. Server verifies tenant, page and active permission.
+                payload={body,reply_to:replyTo};
+              } else if (!editing && anchor && anchorable) {
                 const content=await api(`/pages/${id}/content`);
                 const current=indexBlocks(content.blocks);
                 setBlocks(current);
@@ -772,11 +804,19 @@ function Comments({
               );
               setBody("");
               setEditing("");
+              setReplyTo("");
               await load();
             });
           }}
         >
-          {!editing && anchorable && (
+          {replyingTo && !editing && (
+            <div className="form-row" role="status">
+              <p className="muted">Replying to {replyingTo.author} in this thread</p>
+              <button type="button" className="button small-button"
+                onClick={() => setReplyTo("")}>Cancel reply</button>
+            </div>
+          )}
+          {!editing && !replyTo && anchorable && (
             <div className="form-row">
               {anchor ? (
                 <p role="status" className="muted">
@@ -796,9 +836,10 @@ function Comments({
             </div>
           )}
           <textarea
+            aria-label={editing ? "Edit comment text" : replyTo ? "Reply text" : "New comment text"}
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            placeholder="Add a thoughtful comment…"
+            placeholder={replyTo ? "Write a reply…" : "Add a thoughtful comment…"}
             required
             maxLength={10000}
           />
@@ -818,7 +859,7 @@ function Comments({
                 ))}
             </select>
             <button className="button primary">
-              {editing ? "Save edit" : "Post comment"}
+              {editing ? "Save edit" : replyTo ? "Post reply" : "Post comment"}
             </button>
           </div>
         </form>
