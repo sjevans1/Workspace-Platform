@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM node:24-trixie-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
@@ -6,11 +6,11 @@ RUN npm ci
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1 API_INTERNAL_URL=http://api:4000
 RUN npm run typecheck && npm run build && npm prune --omit=dev
-FROM node:24-bookworm-slim AS runtime
+FROM node:24-trixie-slim AS runtime
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
-# Apply available Debian security fixes to the shipped runtime image.
+# Use supported Debian 13/Trixie security fixes in the shipped runtime image.
 # Keep Trivy HIGH/CRITICAL blocking; never rely on a waived vulnerability.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
