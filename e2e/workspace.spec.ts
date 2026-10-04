@@ -3266,7 +3266,7 @@ test("W12a browser: new notification inbox filters mentions and rechecks destina
   await page.getByRole("button",{name:"Refresh",exact:true}).click();
   await expect(item).toBeVisible();
   await item.click();
-  await expect(page.getByText(title,{exact:true}).first()).toBeVisible();
+  await expect(page.getByRole("textbox",{name:"Page title"})).toHaveValue(title);
   const seen=await (await page.request.get("/api/v1/notifications")).json();
   expect(seen.some((notice:any)=>notice.resource_id===resource.id)).toBe(true);
 });
