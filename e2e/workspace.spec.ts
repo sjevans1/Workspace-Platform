@@ -2876,7 +2876,10 @@ test("W10c4e structural move/delete and peer edit converge with scoped history",
       await expect(toolbar.getByRole("button",{name})).toBeVisible();
     }
     const callout=page.locator(".workspace-callout");
-    await expect(callout).toContainText("Move target");
+    // Awareness cursor labels are transient DOM decorations inside the
+    // callout's inline content: validate visibility separately from the
+    // permission-checked canonical text and stable block identifiers.
+    await expect(callout).toBeVisible();
     await expect(peer.locator(".bn-editor blockquote")).toContainText("Peer quote baseline");
     const canonical=async()=>{
       const response=await page.request.get(endpoint);
@@ -2889,7 +2892,7 @@ test("W10c4e structural move/delete and peer edit converge with scoped history",
         && snapshot.plain_text.includes(token);
     };
     // Both clients act on adjacent rich blocks while their live sockets remain open.
-    await callout.getByText("Move target",{exact:true}).click();
+    await callout.locator(".workspace-callout-content").click();
     await peer.locator(".bn-editor blockquote").click();
     await peer.keyboard.press("End");
     await Promise.all([
@@ -2900,10 +2903,11 @@ test("W10c4e structural move/delete and peer edit converge with scoped history",
       {timeout:30000}).toBe(true);
     for(const client of [page,peer]){
       await expect(client.locator(".bn-editor blockquote")).toContainText("PEER_MERGED");
-      await expect(client.locator(".workspace-callout")).toContainText("Move target");
+      await expect(client.locator(".workspace-callout[data-workspace-callout='warning']")).toBeVisible();
     }
     const moved=await canonical();
     expect(moved.blocks[2].props.variant).toBe("warning");
+    expect(moved.plain_text).toContain("Move target");
     // The owner's undo/redo must move just the structural block; the
     // peer's committed quote edit and all original identifiers survive.
     await toolbar.getByRole("button",{name:"Undo last edit"}).click();
@@ -2911,7 +2915,7 @@ test("W10c4e structural move/delete and peer edit converge with scoped history",
     await toolbar.getByRole("button",{name:"Redo last edit"}).click();
     await expect.poll(()=>matches([ids[0],ids[2],ids[1],ids[3]],"PEER_MERGED"),
       {timeout:30000}).toBe(true);
-    await callout.getByText("Move target",{exact:true}).click();
+    await callout.locator(".workspace-callout-content").click();
     await peer.locator(".bn-editor blockquote").click();
     await peer.keyboard.press("End");
     await Promise.all([
@@ -2928,7 +2932,8 @@ test("W10c4e structural move/delete and peer edit converge with scoped history",
     await toolbar.getByRole("button",{name:"Undo last edit"}).click();
     await expect.poll(()=>matches([ids[0],ids[2],ids[1],ids[3]],"PEER_AFTER_DELETE"),
       {timeout:30000}).toBe(true);
-    await expect(page.locator(".workspace-callout")).toContainText("Move target");
+    await expect(page.locator(".workspace-callout[data-workspace-callout='warning']")).toBeVisible();
+    expect((await canonical()).plain_text).toContain("Move target");
     await toolbar.getByRole("button",{name:"Redo last edit"}).click();
     await expect.poll(()=>matches(withoutCallout,"PEER_AFTER_DELETE"),
       {timeout:30000}).toBe(true);
