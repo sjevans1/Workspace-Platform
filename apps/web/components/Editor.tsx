@@ -16,6 +16,8 @@ function Body({
   id,
   readOnly,
   theme,
+  commentable,
+  onCommentBlock,
 }: {
   provider: HocuspocusProvider;
   doc: Y.Doc;
@@ -23,6 +25,8 @@ function Body({
   id: string;
   readOnly: boolean;
   theme: "light" | "dark";
+  commentable: boolean;
+  onCommentBlock: (blockId: string) => void;
 }) {
   const [picker, setPicker] = useState(false),
     [needle, setNeedle] = useState(""),
@@ -94,6 +98,7 @@ function Body({
   // the exact block the user chose, never a different live cursor neighbor.
   const structuralTarget = useRef<string | null>(null);
   const pointedBlock = useRef<string | null>(null);
+  const commentTarget = useRef<string | null>(null);
   const pendingStructural = useRef(new Map<string, (ok: boolean, reason?: string) => void>());
   useEffect(() => {
     const onStateless = ({ payload }: { payload: string }) => {
@@ -146,6 +151,20 @@ function Body({
         resolve(false);
       }
     });
+  }
+  function rememberCommentTarget() {
+    commentTarget.current =
+      pointedBlock.current || editor.getTextCursorPosition().block.id;
+  }
+  function commentOnBlock() {
+    const target = commentTarget.current ||
+      editor.getTextCursorPosition().block.id;
+    commentTarget.current = null;
+    if (!editor.getBlock(target)) {
+      notify("This block changed in another session. Select it again.");
+      return;
+    }
+    onCommentBlock(target);
   }
   function rememberStructuralTarget() {
     // The editor pointer event happens when the user actually picks the
@@ -272,6 +291,19 @@ function Body({
             onClick={() => historyAction("redo")}>Redo</button>
         </div>
       )}
+      {commentable && (
+        <div className="page-link-tools" role="group" aria-label="Block discussion">
+          <button type="button" className="button small-button"
+            aria-label="Comment on selected block"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              rememberCommentTarget();
+            }}
+            onClick={commentOnBlock}>
+            Comment on block
+          </button>
+        </div>
+      )}
       {!readOnly && (
         <div className="page-link-tools">
           <button type="button" className="button small-button"
@@ -324,7 +356,15 @@ function Body({
     </>
   );
 }
-export default function Editor({ id, user, theme }: { id: string; user: any; theme: "light" | "dark" }) {
+export default function Editor({
+  id, user, theme, commentable = false, onCommentBlock,
+}: {
+  id: string;
+  user: any;
+  theme: "light" | "dark";
+  commentable?: boolean;
+  onCommentBlock: (blockId: string) => void;
+}) {
   const [connection, setConnection] = useState<any>(),
     [status, setStatus] = useState("Connecting…"),
     [people, setPeople] = useState<string[]>([]),
@@ -428,7 +468,8 @@ export default function Editor({ id, user, theme }: { id: string; user: any; the
         </span>
       </div>
       {connection ? (
-        <Body {...connection} user={user} id={id} theme={theme} />
+        <Body {...connection} user={user} id={id} theme={theme}
+          commentable={commentable} onCommentBlock={onCommentBlock} />
       ) : (
         <div className="loading">Opening document…</div>
       )}
