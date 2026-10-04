@@ -1142,6 +1142,14 @@ nav button:hover,
 .comment.resolved {
   opacity: 0.6;
 }
+.comment.comment-reply {
+  margin-left: 24px;
+  padding-left: 12px;
+  border-left: 2px solid var(--sage);
+}
+.comment.comment-reply > div {
+  min-width: 0;
+}
 .comment-actions {
   display: flex;
   gap: 12px;
