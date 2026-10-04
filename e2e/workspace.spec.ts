@@ -2606,6 +2606,17 @@ test("W10c4c overlapping edits to the same quote converge with scoped undo", asy
     for(const client of [page,peer])
       await expect(client.locator(".bn-editor blockquote"))
         .toContainText("Shared quote baseline");
+    // A visible quote isn't proof the local caret remains in that block.
+    // Catch an unintended selection rebase BEFORE concurrent keystrokes,
+    // rather than claiming success from document-wide plain_text alone.
+    for (const client of [page, peer]) {
+      expect(await client.evaluate(() => {
+        const selection = window.getSelection();
+        const node = selection?.anchorNode;
+        const element = node instanceof Element ? node : node?.parentElement;
+        return !!element?.closest(".bn-editor blockquote");
+      }), "Caret must remain inside the quote before the race").toBe(true);
+    }
     const fromOne="ONE_BEGIN ";
     const fromTwo=" TWO_END";
     await Promise.all([
@@ -2746,6 +2757,14 @@ test("W10c4d distinct principals merge same quote and honor live ACL changes",as
       (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
       (async()=>{await quote(partner).click();await partner.keyboard.press("End")})(),
     ]);
+    for (const client of [page, partner]) {
+      expect(await client.evaluate(() => {
+        const selection = window.getSelection();
+        const node = selection?.anchorNode;
+        const element = node instanceof Element ? node : node?.parentElement;
+        return !!element?.closest(".bn-editor blockquote");
+      }), "Principal's caret left the quote before concurrent input").toBe(true);
+    }
     const fromOwner="OWNER_BEGIN ";
     const fromMember=" MEMBER_END";
     await Promise.all([
@@ -3040,10 +3059,18 @@ test("W10c4f distinct principals: same block move versus delete never leaves gho
         return result.json();
       };
       const remainingIds=[ids[0],ids[2],ids[3]].sort();
-      await expect.poll(async()=>{
-        const snap=await canonical();
-        return snap.blocks.map((b:any)=>b.id).sort();
-      },{timeout:30000}).toEqual(remainingIds);
+      const names=new Map(ids.map((id,i)=>[id,
+        ["heading","DELETED-CALLOUT","quote","tail"][i]]));
+      // Include structural identity and block type in CI failure output to
+      // distinguish ghost-resurrection from deletion of the wrong neighbor.
+      const describe=(blocks:any[])=>blocks.map((block:any)=>
+        (names.get(block.id)||"UNEXPECTED")+":"+block.id+":"+block.type).sort();
+      await expect.poll(async()=>describe((await canonical()).blocks),
+        {timeout:30000}).toEqual(describe([
+          {id:ids[0],type:"heading"},
+          {id:ids[2],type:"quote"},
+          {id:ids[3],type:"paragraph"},
+        ]));
       for(const client of [page,partner]){
         await expect(client.locator(".workspace-callout")).toHaveCount(0);
         await expect(client.locator(".bn-editor blockquote"))
