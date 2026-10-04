@@ -3059,7 +3059,7 @@ test("W10c4f distinct principals: same block move versus delete never leaves gho
         return result.json();
       };
       const remainingIds=[ids[0],ids[2],ids[3]].sort();
-      const names=new Map(ids.map((id,i)=>[id,
+      const names=new Map<string,string>(ids.map((id,i):[string,string]=>[id,
         ["heading","DELETED-CALLOUT","quote","tail"][i]]));
       // Include structural identity and block type in CI failure output to
       // distinguish ghost-resurrection from deletion of the wrong neighbor.
