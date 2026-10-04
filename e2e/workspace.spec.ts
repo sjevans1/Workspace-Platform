@@ -2833,3 +2833,116 @@ test("W10c4d distinct principals merge same quote and honor live ACL changes",as
     await partnerContext.close();
   }
 });
+
+
+test("W10c4e structural move/delete and peer edit converge with scoped history", async ({page,browser})=>{
+  test.setTimeout(180000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceRes=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W10c4e structural collaboration "+randomUUID()},
+  });
+  expect(spaceRes.ok(),await spaceRes.text()).toBeTruthy();
+  const space=await spaceRes.json();
+  const pageRes=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,
+      title:"Structural move and peer edit "+randomUUID()},
+  });
+  expect(pageRes.ok(),await pageRes.text()).toBeTruthy();
+  const document=await pageRes.json();
+  const endpoint="/api/v1/pages/"+document.id+"/content";
+  const initial=await (await page.request.get(endpoint)).json();
+  const ids=[randomUUID(),randomUUID(),randomUUID(),randomUUID()];
+  const seed=await page.request.patch(endpoint,{
+    headers,data:{expected_revision:initial.revision,blocks:[
+      {id:ids[0],type:"heading",props:{level:2},content:"Structural edit proof"},
+      {id:ids[1],type:"callout",props:{variant:"warning"},content:"Move target"},
+      {id:ids[2],type:"quote",content:"Peer quote baseline"},
+      {id:ids[3],type:"paragraph",content:"Stable tail"},
+    ]},
+  });
+  expect(seed.ok(),await seed.text()).toBeTruthy();
+  const peerContext=await browser.newContext();
+  try{
+    const peer=await peerContext.newPage();
+    await page.goto("/?page="+document.id);
+    await login(peer,false);
+    await peer.goto("/?page="+document.id);
+    const toolbar=page.getByRole("toolbar",{name:"Formatting"});
+    for(const name of ["Move current block up","Move current block down","Delete current block"]){
+      await expect(toolbar.getByRole("button",{name})).toBeVisible();
+    }
+    const callout=page.locator(".workspace-callout");
+    await expect(callout).toContainText("Move target");
+    await expect(peer.locator(".bn-editor blockquote")).toContainText("Peer quote baseline");
+    const canonical=async()=>{
+      const response=await page.request.get(endpoint);
+      expect(response.ok(),await response.text()).toBeTruthy();
+      return response.json();
+    };
+    const matches=async(expected:string[],token:string)=>{
+      const snapshot=await canonical();
+      return snapshot.blocks.map((block:any)=>block.id).join("|")===expected.join("|")
+        && snapshot.plain_text.includes(token);
+    };
+    // Both clients act on adjacent rich blocks while their live sockets remain open.
+    await callout.getByText("Move target",{exact:true}).click();
+    await peer.locator(".bn-editor blockquote").click();
+    await peer.keyboard.press("End");
+    await Promise.all([
+      toolbar.getByRole("button",{name:"Move current block down"}).click(),
+      peer.keyboard.insertText(" PEER_MERGED"),
+    ]);
+    await expect.poll(()=>matches([ids[0],ids[2],ids[1],ids[3]],"PEER_MERGED"),
+      {timeout:30000}).toBe(true);
+    for(const client of [page,peer]){
+      await expect(client.locator(".bn-editor blockquote")).toContainText("PEER_MERGED");
+      await expect(client.locator(".workspace-callout")).toContainText("Move target");
+    }
+    const moved=await canonical();
+    expect(moved.blocks[2].props.variant).toBe("warning");
+    // The owner's undo/redo must move just the structural block; the
+    // peer's committed quote edit and all original identifiers survive.
+    await toolbar.getByRole("button",{name:"Undo last edit"}).click();
+    await expect.poll(()=>matches(ids,"PEER_MERGED"),{timeout:30000}).toBe(true);
+    await toolbar.getByRole("button",{name:"Redo last edit"}).click();
+    await expect.poll(()=>matches([ids[0],ids[2],ids[1],ids[3]],"PEER_MERGED"),
+      {timeout:30000}).toBe(true);
+    await callout.getByText("Move target",{exact:true}).click();
+    await peer.locator(".bn-editor blockquote").click();
+    await peer.keyboard.press("End");
+    await Promise.all([
+      toolbar.getByRole("button",{name:"Delete current block"}).click(),
+      peer.keyboard.insertText(" PEER_AFTER_DELETE"),
+    ]);
+    const withoutCallout=[ids[0],ids[2],ids[3]];
+    await expect.poll(()=>matches(withoutCallout,"PEER_AFTER_DELETE"),
+      {timeout:30000}).toBe(true);
+    for(const client of [page,peer]){
+      await expect(client.locator(".workspace-callout")).toHaveCount(0);
+      await expect(client.locator(".bn-editor blockquote")).toContainText("PEER_AFTER_DELETE");
+    }
+    await toolbar.getByRole("button",{name:"Undo last edit"}).click();
+    await expect.poll(()=>matches([ids[0],ids[2],ids[1],ids[3]],"PEER_AFTER_DELETE"),
+      {timeout:30000}).toBe(true);
+    await expect(page.locator(".workspace-callout")).toContainText("Move target");
+    await toolbar.getByRole("button",{name:"Redo last edit"}).click();
+    await expect.poll(()=>matches(withoutCallout,"PEER_AFTER_DELETE"),
+      {timeout:30000}).toBe(true);
+    await Promise.all([page.reload(),peer.reload()]);
+    for(const client of [page,peer]){
+      await expect(client.locator(".bn-editor blockquote")).toContainText("PEER_MERGED");
+      await expect(client.locator(".bn-editor blockquote")).toContainText("PEER_AFTER_DELETE");
+      await expect(client.locator(".workspace-callout")).toHaveCount(0);
+    }
+    const final=await canonical();
+    expect(final.blocks.map((b:any)=>b.id)).toEqual(withoutCallout);
+    expect(final.plain_text).not.toContain("Move target");
+    expect(final.blocks[1].type).toBe("quote");
+  }finally{
+    await peerContext.close();
+  }
+});
