@@ -1645,6 +1645,58 @@ test("W11c concurrent resolve and reply serialize on the parent row lock",async(
     [],"No reply is committed after the parent resolves");
 });
 
+
+test("W12c reply notifications respect recipient ACL and mention deduplication",async()=>{
+  const recipientId=randomUUID();
+  await db.tenant(owner.tenant,async q=>{
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
+      [recipientId,"thread-"+recipientId+"@example.test","Thread Recipient"]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
+      [owner.tenant,recipientId]);
+  });
+  const token=await db.tenant(owner.tenant,q=>
+    createSession(q,owner.tenant,recipientId));
+  const recipient={
+    id:recipientId,tenant:owner.tenant,
+    cookie:"workspace_session="+token,csrf:csrf(token),
+  };
+  assert.equal((await req("GET","/me",undefined,recipient)).statusCode,200);
+  const page=await ok("POST","/resources",{
+    kind:"page",parent_id:space.id,title:"Recipient reply notice",
+  });
+  const url="/resources/"+page.id+"/comments";
+  const root=await ok("POST",url,{body:"Root by recipient"},recipient);
+  assert.ok(root.id);
+  const before=(await ok("GET","/notifications",undefined,recipient))
+    .filter((n:any)=>n.resource_id===page.id);
+  assert.equal(before.length,0);
+  const first=await ok("POST",url,{reply_to:root.id,body:"A plain response"},owner);
+  assert.equal(first.parent_comment_id,root.id);
+  const after=await ok("GET","/notifications",undefined,recipient);
+  const notices=after.filter((n:any)=>n.resource_id===page.id);
+  assert.equal(notices.length,1,"An unmentioned root author gets one reply alert");
+  assert.match(notices[0].message,/replied to your comment/);
+  // Same recipient appears as an explicit mention twice and the root author:
+  // only one notification may be created for this comment transaction.
+  await ok("POST",url,{reply_to:root.id,
+    body:"Explicit @{"+recipientId+"} and repeated @{"+recipientId+"}"},owner);
+  const next=(await ok("GET","/notifications",undefined,recipient))
+    .filter((n:any)=>n.resource_id===page.id);
+  assert.equal(next.length,2,"No duplicate delivery for mention+reply");
+  assert.equal(next.filter((n:any)=>/mentioned you/.test(n.message)).length,1);
+  await permissionPatch("/resources/"+page.id+"/permissions",{
+    inherit:true,grants:[{principal_id:recipientId,level:0}],
+  });
+  await ok("POST",url,{reply_to:root.id,body:"After recipient revocation"},owner);
+  const persisted=await db.tenant(owner.tenant,q=>q.query(
+    "SELECT COUNT(*)::int count FROM notifications WHERE user_id=$1 AND resource_id=$2",
+    [recipientId,page.id]));
+  assert.equal(persisted.rows[0].count,2,
+    "No new private reply notification is stored after ACL revocation");
+  assert.equal((await req("GET",url,undefined,recipient)).statusCode,404);
+});
+
 test("comments create mentions and block unauthorized moderation", async () => {
   const c = await ok("POST", `/resources/${page.id}/comments`, {
     body: `Please review @{${member.id}}`,
