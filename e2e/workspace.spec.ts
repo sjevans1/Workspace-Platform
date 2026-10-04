@@ -81,6 +81,41 @@ async function login(page: Page, reuseSession = true) {
     cachedAuthCookies = (await page.context().cookies())
       .filter((cookie) => cookie.name === "workspace_session");
 }
+// Distinct Chromium pages have independent DOM selections, but a click in
+// another page can blur a ProseMirror editor before keyboard input is sent.
+// For collaboration *engine* races, explicitly anchor each browser's caret
+// to the intended quote immediately before that browser types. UI pointer
+// behavior has separate browser tests; this helper does not suppress any
+// unexpected data movement and canonical block identity is still asserted.
+async function typeAtQuoteEdge(page: Page, edge: "start" | "end", token: string) {
+  const quote=page.locator(".bn-editor blockquote");
+  await expect(quote).toBeVisible();
+  await quote.evaluate((node,where)=>{
+    const element=node as HTMLElement;
+    const root=element.closest<HTMLElement>(".bn-editor");
+    if (!root) throw new Error("Quote is not inside the editor");
+    root.focus();
+    const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+    const texts:Text[]=[];
+    while(walker.nextNode())texts.push(walker.currentNode as Text);
+    if(!texts.length)throw new Error("Quote has no text node");
+    const text=where==="start"?texts[0]:texts[texts.length-1];
+    const offset=where==="start"?0:text.length;
+    const range=document.createRange();
+    range.setStart(text,offset);
+    range.collapse(true);
+    const selection=window.getSelection();
+    if(!selection)throw new Error("Selection unavailable");
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const anchor=selection.anchorNode;
+    const host=anchor instanceof Element ? anchor : anchor?.parentElement;
+    if(!host?.closest(".bn-editor blockquote"))
+      throw new Error("Cannot anchor the caret to the intended quote");
+  },edge);
+  await page.keyboard.insertText(token);
+}
+
 test("Caddy strips spoofed forwarding headers before API rate limiting", async ({ request }) => {
   const first = await request.get("/api/v1/auth/methods", {
     headers: { "X-Forwarded-For": "203.0.113.17",
@@ -2593,24 +2628,13 @@ test("W10c4c overlapping edits to the same quote converge with scoped undo", asy
       .getByText("Shared quote baseline",{exact:true});
     await expect(quote(page)).toBeVisible();
     await expect(quote(peer)).toBeVisible();
-    // Place two independent carets in the *same* ProseMirror quote
-    // before either browser types. Home/End are within the single line.
-    await Promise.all([
-      (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
-      (async()=>{await quote(peer).click();await peer.keyboard.press("End")})(),
-    ]);
-    // Do not assert the transient DOM selection: collaborative cursor
-    // decorations can move/split selection anchors while awareness syncs.
-    // The stronger assertions below inspect BOTH inserted tokens in the
-    // canonical quote block, exact-once, after undo/redo and both reloads.
-    for(const client of [page,peer])
-      await expect(client.locator(".bn-editor blockquote"))
-        .toContainText("Shared quote baseline");
+    // Both users edit the *same quote*, not whichever heading or adjacent
+    // block happens to inherit a blurred browser tab's DOM selection.
     const fromOne="ONE_BEGIN ";
     const fromTwo=" TWO_END";
     await Promise.all([
-      page.keyboard.insertText(fromOne),
-      peer.keyboard.insertText(fromTwo),
+      typeAtQuoteEdge(page,"start",fromOne),
+      typeAtQuoteEdge(peer,"end",fromTwo),
     ]);
     const canonical=async()=>{
       const response=await page.request.get(endpoint);
@@ -2742,15 +2766,11 @@ test("W10c4d distinct principals merge same quote and honor live ACL changes",as
       .getByText("Shared quote baseline",{exact:true});
     await expect(quote(page)).toBeVisible();
     await expect(quote(partner)).toBeVisible();
-    await Promise.all([
-      (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
-      (async()=>{await quote(partner).click();await partner.keyboard.press("End")})(),
-    ]);
     const fromOwner="OWNER_BEGIN ";
     const fromMember=" MEMBER_END";
     await Promise.all([
-      page.keyboard.insertText(fromOwner),
-      partner.keyboard.insertText(fromMember),
+      typeAtQuoteEdge(page,"start",fromOwner),
+      typeAtQuoteEdge(partner,"end",fromMember),
     ]);
     const canonical=async()=>{
       const res=await page.request.get(endpoint);
@@ -2949,5 +2969,172 @@ test("W10c4e structural move/delete and peer edit converge with scoped history",
     expect(final.blocks[1].type).toBe("quote");
   }finally{
     await peerContext.close();
+  }
+});
+
+
+test("W10c4f distinct principals: same block move versus delete never leaves ghost content",async ({page,browser})=>{
+  test.setTimeout(240000);
+  await login(page);
+  const owner=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":owner.csrf};
+  const invite=await page.request.post("/api/v1/members/invite",{
+    headers,
+    data:{name:"Structural Conflict Partner",
+      email:"collision-"+randomUUID()+"@example.test",role:"member"},
+  });
+  expect(invite.ok(),await invite.text()).toBeTruthy();
+  const context=await browser.newContext();
+  try{
+    const partner=await context.newPage();
+    await partner.goto((await invite.json()).url);
+    await expect(partner.getByRole("heading",{name:"Join your team."})).toBeVisible();
+    await expect.poll(()=>new URL(partner.url()).search).toBe("");
+    await partner.getByLabel("Password",{exact:true})
+      .fill("partner-test-password-123");
+    await partner.getByRole("button",{name:"Accept invitation",exact:true}).click();
+    await expect(partner.getByRole("heading",{name:"Welcome back, Structural."}))
+      .toBeVisible();
+    const member=await (await partner.request.get("/api/v1/me")).json();
+    expect(member.user.id).not.toBe(owner.user.id);
+    expect(member.user.role).toBe("member");
+    const roots=await (await page.request.get("/api/v1/resources")).json();
+    const spaceResponse=await page.request.post("/api/v1/resources",{
+      headers,data:{kind:"space",parent_id:roots[0].id,
+        title:"Same block collision "+randomUUID()},
+    });
+    expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+    const space=await spaceResponse.json();
+
+    // Repeat against fresh, distinct canonical Yjs rooms. Each user has
+    // the *same* callout selected before triggering a competing operation.
+    for(const moveOwner of [true,false]){
+      const phase=moveOwner?"owner-moves":"member-moves";
+      const created=await page.request.post("/api/v1/resources",{
+        headers,data:{kind:"page",parent_id:space.id,
+          title:"Live collision "+phase+" "+randomUUID()},
+      });
+      expect(created.ok(),await created.text()).toBeTruthy();
+      const resource=await created.json();
+      const endpoint="/api/v1/pages/"+resource.id+"/content";
+      const initial=await (await page.request.get(endpoint)).json();
+      const ids=[randomUUID(),randomUUID(),randomUUID(),randomUUID()];
+      const seed=await page.request.patch(endpoint,{
+        headers,data:{expected_revision:initial.revision,blocks:[
+          {id:ids[0],type:"heading",props:{level:2},
+            content:"Collision regression "+phase},
+          {id:ids[1],type:"callout",props:{variant:"warning"},
+            content:"SAME_TARGET_SHOULD_BE_REMOVED"},
+          {id:ids[2],type:"quote",content:"Unrelated quote survives"},
+          {id:ids[3],type:"paragraph",content:"Preserved tail"},
+        ]},
+      });
+      expect(seed.ok(),await seed.text()).toBeTruthy();
+      const start=await seed.json();
+      await page.goto("/?page="+resource.id);
+      await partner.goto("/?page="+resource.id);
+      for(const client of [page,partner]){
+        await expect(client.locator(".workspace-callout[data-workspace-callout='warning']")).toBeVisible();
+        await expect(client.locator(".bn-editor blockquote")).toContainText("Unrelated quote survives");
+        await expect(client.getByRole("toolbar",{name:"Formatting"})).toBeVisible();
+      }
+      const ownerToolbar=page.getByRole("toolbar",{name:"Formatting"}),
+        memberToolbar=partner.getByRole("toolbar",{name:"Formatting"});
+      const current=(p:typeof page)=>p.locator(".workspace-callout-content");
+      await current(page).click();
+      await current(partner).click();
+      const deleting=moveOwner?partner:page;
+      const moveToolbar=moveOwner?ownerToolbar:memberToolbar;
+      const deleteToolbar=moveOwner?memberToolbar:ownerToolbar;
+      // Capture actual user-visible conflict feedback before the race:
+      // the single-writer arbiter must reject one stale structural action
+      // rather than silently deleting the neighboring Core quote.
+      for(const client of [page,partner])
+        await client.evaluate(()=>{
+          (window as any).__structuralNotices=[];
+          window.addEventListener("workspace-notice",(event:Event)=>{
+            (window as any).__structuralNotices.push((event as CustomEvent).detail);
+          });
+        });
+      await Promise.all([
+        moveToolbar.getByRole("button",{name:"Move current block down"}).click(),
+        deleteToolbar.getByRole("button",{name:"Delete current block"}).click(),
+      ]);
+      const canonical=async()=>{
+        const result=await page.request.get(endpoint);
+        expect(result.ok(),await result.text()).toBeTruthy();
+        return result.json();
+      };
+      const remainingIds=[ids[0],ids[2],ids[3]].sort();
+      const names=new Map<string,string>(ids.map((id,i):[string,string]=>[id,
+        ["heading","DELETED-CALLOUT","quote","tail"][i]]));
+      // Losing the sibling quote is NEVER valid, even transiently. If the
+      // server accepted Move first it must explicitly reject simultaneous
+      // Delete; an operator can retry against the now-synced canonical page.
+      const describe=(blocks:any[])=>blocks.map((block:any)=>
+        (names.get(block.id)||"UNEXPECTED")+":"+block.id+":"+block.type).sort();
+      await expect.poll(async()=>{
+        const current=await canonical();
+        return current.revision>start.revision ? current.blocks : null;
+      },{timeout:30000}).not.toBeNull();
+      const afterRace=await canonical();
+      const present=new Set(afterRace.blocks.map((b:any)=>b.id));
+      expect(present.has(ids[0])).toBe(true);
+      expect(present.has(ids[2])).toBe(true);
+      expect(present.has(ids[3])).toBe(true);
+      expect(afterRace.blocks.filter((b:any)=>b.id===ids[1]).length)
+        .toBeLessThanOrEqual(1);
+      expect(afterRace.blocks.length).toBe(present.has(ids[1])?4:3);
+      if(present.has(ids[1])) {
+        const conflict = await Promise.all([page,partner].map((client)=>
+          client.evaluate(()=>(window as any).__structuralNotices as string[])));
+        expect(conflict.flat().some((message)=>/Another editor|page changed/i.test(message)),
+          "A rejected collision needs an explicit user-visible reason").toBe(true);
+        await deleting.locator(".workspace-callout-content").click();
+        await deleteToolbar.getByRole("button",{name:"Delete current block"}).click();
+      }
+      await expect.poll(async()=>describe((await canonical()).blocks),
+        {timeout:30000}).toEqual(describe([
+          {id:ids[0],type:"heading"},
+          {id:ids[2],type:"quote"},
+          {id:ids[3],type:"paragraph"},
+        ]));
+      for(const client of [page,partner]){
+        await expect(client.locator(".workspace-callout")).toHaveCount(0);
+        await expect(client.locator(".bn-editor blockquote"))
+          .toContainText("Unrelated quote survives");
+      }
+      const beforePeer=await canonical();
+      expect(beforePeer.plain_text).not.toContain("SAME_TARGET_SHOULD_BE_REMOVED");
+      expect(beforePeer.blocks.filter((b:any)=>b.id===ids[1])).toHaveLength(0);
+      expect(beforePeer.epoch).toBe(start.epoch);
+      expect(beforePeer.revision).toBeGreaterThan(start.revision);
+
+      // Force one later, acknowledged unrelated Yjs write after the
+      // structural conflict. It must not reactivate the removed callout.
+      const token=moveOwner?" PEER_AFTER_OWNER_MOVE":" PEER_AFTER_MEMBER_MOVE";
+      await partner.locator(".bn-editor blockquote").click();
+      await partner.keyboard.press("End");
+      await partner.keyboard.insertText(token);
+      await expect.poll(async()=>{
+        const snap=await canonical();
+        return snap.plain_text.includes(token)
+          && snap.blocks.filter((b:any)=>b.id===ids[1]).length===0;
+      },{timeout:30000}).toBe(true);
+      await Promise.all([page.reload(),partner.reload()]);
+      for(const client of [page,partner]){
+        await expect(client.locator(".bn-editor blockquote")).toContainText(token);
+        await expect(client.locator(".workspace-callout")).toHaveCount(0);
+        await expect(client.locator(".bn-editor")).toContainText("Preserved tail");
+      }
+      const final=await canonical();
+      expect(final.blocks.map((b:any)=>b.id).sort()).toEqual(remainingIds);
+      expect(final.plain_text).not.toContain("SAME_TARGET_SHOULD_BE_REMOVED");
+      expect(final.blocks.find((b:any)=>b.id===ids[2])?.type).toBe("quote");
+      expect(final.epoch).toBe(start.epoch);
+      expect(final.revision).toBeGreaterThan(beforePeer.revision);
+    }
+  }finally{
+    await context.close();
   }
 });

@@ -1365,6 +1365,100 @@ test("two Yjs clients converge, persist canonical text, and reconnect", async ()
   assert.equal(c.doc.getMap("test").get("two"), "second");
   c.provider.destroy();
 });
+test("W10c4f native: authenticated structural intents serialize, expire and recheck ACL", async () => {
+  // Unlike two browser click promises, this test deliberately waits for a
+  // *confirmed* reservation before dispatching the conflicting principal.
+  // No test-only server backdoor or disabled security middleware is involved.
+  const targetPage=await ok("POST","/resources",{
+    kind:"page", parent_id:space.id, title:"Structural lease integration",
+  });
+  const endpoint="/pages/"+targetPage.id+"/content";
+  const initial=await ok("GET",endpoint);
+  const ids=[randomUUID(),randomUUID(),randomUUID()];
+  const seeded=await ok("PATCH",endpoint,{
+    expected_revision:initial.revision,blocks:[
+      {id:ids[0],type:"heading",props:{level:2},content:"Lease heading"},
+      {id:ids[1],type:"callout",props:{variant:"warning"},content:"Lease target"},
+      {id:ids[2],type:"quote",content:"Never remove this quote"},
+    ],
+  });
+  const a=await connect(owner,targetPage),b=await connect(member,targetPage);
+  type StructuralReply={type:string;reason?:string};
+  async function reserve(
+    client:typeof a,blockId:string,overrideVector?:string,
+  ):Promise<StructuralReply>{
+    const requestId=randomUUID();
+    return await new Promise<StructuralReply>((resolve,reject)=>{
+      const listener=({payload}:{payload:string})=>{
+        let reply:StructuralReply & {requestId?:string};
+        try {reply=JSON.parse(payload);} catch {return;}
+        if(reply.requestId!==requestId)return;
+        clearTimeout(timer);
+        client.provider.off("stateless",listener);
+        resolve(reply);
+      };
+      const timer=setTimeout(()=>{
+        client.provider.off("stateless",listener);
+        reject(Error("Structural reservation did not answer within 6s"));
+      },6000);
+      client.provider.on("stateless",listener);
+      client.provider.sendStateless(JSON.stringify({
+        type:"structural.acquire",requestId,blockId,
+        vector:overrideVector??
+          Buffer.from(Y.encodeStateVector(client.doc)).toString("base64"),
+      }));
+    });
+  }
+  try {
+    await until(()=>Buffer.from(Y.encodeStateVector(a.doc)).equals(
+      Buffer.from(Y.encodeStateVector(b.doc))));
+    const originalVector=Buffer.from(Y.encodeStateVector(a.doc)).toString("base64");
+    const first=await reserve(a,ids[1]);
+    assert.equal(first.type,"structural.granted");
+    const competing=await reserve(b,ids[1]);
+    assert.equal(competing.type,"structural.denied");
+    assert.equal(competing.reason,"concurrent-edit",
+      "A confirmed same-block reservation must exclude a second principal");
+    const repeat=await reserve(a,ids[0]);
+    assert.equal(repeat.reason,"concurrent-edit",
+      "One connection must not hold multiple reservations");
+    const forged=await reserve(b,randomUUID());
+    assert.equal(forged.reason,"missing-block");
+    const stale=await reserve(b,ids[2],Buffer.from([0]).toString("base64"));
+    assert.equal(stale.reason,"document-changed");
+    assert.deepEqual((await ok("GET",endpoint)).blocks.map((v:any)=>v.id),ids,
+      "Reservation requests alone must not change canonical persisted blocks");
+
+    // A client may crash or disappear after a grant: the next authenticated
+    // principal must regain control once the bounded lease expires.
+    await pause(8600);
+    const recovered=await reserve(b,ids[1]);
+    assert.equal(recovered.type,"structural.granted",
+      "Expired reservations must not permanently block editing");
+    b.doc.getMap("structural-lease-proof").set("written",randomUUID());
+    await until(async()=>(await ok("GET",endpoint)).revision>seeded.revision);
+    // A matching document write should release the lease on persistence,
+    // not block the room until the full 8-second timeout.
+    const afterWrite=await reserve(a,ids[1]);
+    assert.equal(afterWrite.type,"structural.granted",
+      "Persistence must release an exercised reservation");
+    assert.deepEqual((await ok("GET",endpoint)).blocks.map((v:any)=>v.id),ids);
+
+    // Revocation cannot be bypassed with a still-live connection or a
+    // previously encoded Yjs state-vector. No unauthorized grant is issued.
+    await permissionPatch("/resources/"+targetPage.id+"/permissions",{
+      inherit:true,grants:[{principal_id:member.id,level:2}],
+    });
+    const denied=await reserve(b,ids[1],originalVector);
+    assert.equal(denied.type,"structural.denied");
+    assert.ok(["read-only","document-changed"].includes(denied.reason||""),
+      "Permission downgrade or stale document must fail closed");
+  } finally {
+    a.provider.destroy();
+    b.provider.destroy();
+  }
+});
+
 test("W11a comment anchors require canonical same-page Yjs ID and current revision", async () => {
   const target=await ok("POST","/resources",{
     kind:"page",parent_id:space.id,title:"W11a canonical comment target",
@@ -1981,16 +2075,17 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
       );
     };
     // Preparing must not change the signature of subsequent delivery.
-    // Earlier tests may leave older outbox jobs ahead of this event. Keep
-    // draining bounded worker batches until the exact signed event arrives.
-    // An unrelated HTTP request cannot satisfy this assertion.
-    for (let attempt=0;attempt<12 &&
-      !received.some((entry)=>entry.headers["x-workspace-event"]===eventId);
+    // Earlier integration tests enqueue legitimate events for this tenant;
+    // a single worker tick need not reach this specific delivery when its
+    // bounded batch contains older jobs. Retain a finite retry budget and
+    // require the exact event ID (not just any HTTP request).
+    for (let attempt = 0; attempt < 12 &&
+      !received.some((entry) => entry.headers["x-workspace-event"] === eventId);
       attempt++)
       await tick(db);
     assert.ok(
-      received.some((entry)=>entry.headers["x-workspace-event"]===eventId),
-      "The rotation test event must actually be delivered",
+      received.some((entry) => entry.headers["x-workspace-event"] === eventId),
+      "The staged rotation test event must actually be delivered",
     );
     verify(subscription.secret);
     const activate = endpoint + "/activate";
