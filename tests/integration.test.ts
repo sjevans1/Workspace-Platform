@@ -1355,6 +1355,62 @@ test("two Yjs clients converge, persist canonical text, and reconnect", async ()
   assert.equal(c.doc.getMap("test").get("two"), "second");
   c.provider.destroy();
 });
+test("W11a comment anchors require canonical same-page Yjs ID and current revision", async () => {
+  const target=await ok("POST","/resources",{
+    kind:"page",parent_id:space.id,title:"W11a canonical comment target",
+  });
+  const foreign=await ok("POST","/resources",{
+    kind:"page",parent_id:space.id,title:"W11a unrelated private page",
+  });
+  const endpoint="/pages/"+target.id+"/content";
+  const first=await ok("GET",endpoint);
+  const anchor=randomUUID(),otherAnchor=randomUUID();
+  const saved=await ok("PATCH",endpoint,{
+    expected_revision:first.revision,
+    blocks:[{id:anchor,type:"heading",props:{level:2},
+      content:"Target block must be anchored by ID"}],
+  });
+  const foreignInitial=await ok("GET","/pages/"+foreign.id+"/content");
+  await ok("PATCH","/pages/"+foreign.id+"/content",{
+    expected_revision:foreignInitial.revision,
+    blocks:[{id:otherAnchor,type:"quote",content:"Not in the target page"}],
+  });
+  const url="/resources/"+target.id+"/comments";
+  const valid={body:"Review this precise heading",
+    block_id:anchor,expected_revision:saved.revision};
+  const posted=await ok("POST",url,valid);
+  assert.equal(posted.block_id,anchor);
+  const comments=await ok("GET",url);
+  assert.equal(comments.filter((c:any)=>c.id===posted.id)[0].block_id,anchor);
+  assert.equal((await req("POST",url,{body:"Unversioned",block_id:anchor}))
+    .statusCode,400);
+  assert.equal((await req("POST",url,{body:"Malformed",block_id:"../../other",
+    expected_revision:saved.revision})).statusCode,400);
+  assert.equal((await req("POST",url,{body:"Other page",block_id:otherAnchor,
+    expected_revision:saved.revision})).statusCode,404);
+  assert.equal((await req("POST",url,{body:"Unknown ID",block_id:randomUUID(),
+    expected_revision:saved.revision})).statusCode,404);
+  assert.equal((await req("POST",url,valid,other)).statusCode,404,
+    "Cross-tenant owner cannot forge a comment on a known page");
+  const updated=await ok("PATCH",endpoint,{
+    expected_revision:saved.revision,
+    blocks:[{id:anchor,type:"heading",props:{level:2},
+      content:"Same ID, newer canonical revision"}],
+  });
+  assert.equal((await req("POST",url,valid)).statusCode,409,
+    "A stale page revision must reject even a still-present block ID");
+  const current=await ok("POST",url,{
+    ...valid,expected_revision:updated.revision,
+  });
+  assert.equal(current.block_id,anchor);
+  assert.equal((await req("POST",url,{body:"No anchor",
+    expected_revision:updated.revision})).statusCode,400);
+  const legacy=await ok("POST",url,{body:"Resource-wide discussion remains valid"});
+  assert.equal(legacy.block_id,undefined,
+    "Legacy unanchored comments remain supported");
+  assert.equal((await ok("GET",url)).length,3);
+});
+
 test("comments create mentions and block unauthorized moderation", async () => {
   const c = await ok("POST", `/resources/${page.id}/comments`, {
     body: `Please review @{${member.id}}`,
