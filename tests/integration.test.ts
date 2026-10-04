@@ -1597,6 +1597,54 @@ test("W11c native replies stay on the same resource and revoked mentions vanish"
     "Deleting the parent must remove dependent replies via database constraint");
 });
 
+test("W11c concurrent resolve and reply serialize on the parent row lock",async()=>{
+  const target=await ok("POST","/resources",{
+    kind:"page",parent_id:space.id,title:"Thread resolve serialization",
+  });
+  const url="/resources/"+target.id+"/comments";
+  const rootComment=await ok("POST",url,{body:"Race root"});
+  let signal!:()=>void,release!:()=>void;
+  const ready=new Promise<void>(resolve=>{signal=resolve;});
+  const untilReleased=new Promise<void>(resolve=>{release=resolve;});
+  const transaction=db.tenant(owner.tenant,async q=>{
+    // A root resolve holds PostgreSQL's normal non-key UPDATE lock.
+    // KEY SHARE is compatible with this lock and would allow the reply to
+    // race past the resolution check. FOR SHARE must wait.
+    await q.query("SELECT id FROM comments WHERE id=$1 FOR NO KEY UPDATE",
+      [rootComment.id]);
+    signal();
+    await untilReleased;
+    await q.query("UPDATE comments SET resolved=true WHERE id=$1",
+      [rootComment.id]);
+  });
+  await ready;
+  let finished=false;
+  const pending=req("POST",url,{body:"Reply must not win",reply_to:rootComment.id})
+    .finally(()=>{finished=true;});
+  try {
+    // Assert the compatibility underlying the production row lock directly:
+    // FOR SHARE must conflict with the parent's ordinary non-key UPDATE lock.
+    await assert.rejects(
+      db.tenant(owner.tenant,q=>q.query(
+        "SELECT id FROM comments WHERE id=$1 FOR SHARE NOWAIT",[rootComment.id])),
+      /could not obtain lock on row|55P03/,
+    );
+    // The actual reply HTTP transaction must remain pending while the root
+    // is locked. This is tested with its genuine Fastify/PG path, not a stub.
+    await pause(300);
+    assert.equal(finished,false,
+      "Reply cannot pass an unresolved parent whose row is held for update");
+  }finally{
+    release();
+    await transaction;
+  }
+  const denied=await pending;
+  assert.equal(denied.statusCode,409,denied.body);
+  const rows=await ok("GET",url);
+  assert.deepEqual(rows.filter((c:any)=>c.parent_comment_id===rootComment.id),
+    [],"No reply is committed after the parent resolves");
+});
+
 test("comments create mentions and block unauthorized moderation", async () => {
   const c = await ok("POST", `/resources/${page.id}/comments`, {
     body: `Please review @{${member.id}}`,

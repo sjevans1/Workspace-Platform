@@ -2050,7 +2050,7 @@ function dataRoutes(
         ),
         cid = randomUUID();
       const parent=v.reply_to?await one(q,
-        "SELECT id,block_id,parent_comment_id,resolved FROM comments WHERE tenant_id=$1 AND resource_id=$2 AND id=$3 FOR KEY SHARE",
+        "SELECT id,block_id,parent_comment_id,resolved FROM comments WHERE tenant_id=$1 AND resource_id=$2 AND id=$3 FOR SHARE",
         [a.tenant_id,n.id,v.reply_to]):null;
       if(v.reply_to){
         assert(parent,404,"Comment not found");
