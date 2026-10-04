@@ -10,7 +10,12 @@ FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+# Apply available Debian security fixes to the shipped runtime image.
+# Keep Trivy HIGH/CRITICAL blocking; never rely on a waived vulnerability.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && mkdir -p /data/files /backups \
     && chown -R node:node /data /backups
 USER node
