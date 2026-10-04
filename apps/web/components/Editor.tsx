@@ -94,6 +94,59 @@ function Body({
   // the exact block the user chose, never a different live cursor neighbor.
   const structuralTarget = useRef<string | null>(null);
   const pointedBlock = useRef<string | null>(null);
+  const pendingStructural = useRef(new Map<string, (ok: boolean, reason?: string) => void>());
+  useEffect(() => {
+    const onStateless = ({ payload }: { payload: string }) => {
+      let message: { type?: string; requestId?: string; reason?: string };
+      try { message = JSON.parse(payload); } catch { return; }
+      if (message.type !== "structural.granted" &&
+          message.type !== "structural.denied") return;
+      const pending = pendingStructural.current.get(message.requestId || "");
+      if (!pending) return;
+      pendingStructural.current.delete(message.requestId || "");
+      pending(message.type === "structural.granted", message.reason);
+    };
+    provider.on("stateless", onStateless);
+    const pending=pendingStructural.current;
+    return () => {
+      provider.off("stateless", onStateless);
+      for(const finish of pending.values())finish(false,"disconnected");
+      pending.clear();
+    };
+  }, [provider]);
+  async function reserveStructural(blockId: string): Promise<boolean> {
+    const vector=Y.encodeStateVector(doc);
+    if (vector.length > 3072) {
+      notify("This document needs resynchronization before moving blocks.");
+      return false;
+    }
+    const requestId=crypto.randomUUID();
+    return new Promise<boolean>((resolve) => {
+      const timer=setTimeout(()=>{
+        pendingStructural.current.delete(requestId);
+        notify("Could not verify a safe structural edit. Try again.");
+        resolve(false);
+      },4000);
+      pendingStructural.current.set(requestId,(ok,reason)=>{
+        clearTimeout(timer);
+        if(!ok)notify(reason === "concurrent-edit"
+          ? "Another editor is changing this block. Retry after it settles."
+          : "The page changed. Select the block again before editing.");
+        resolve(ok);
+      });
+      try {
+        provider.sendStateless(JSON.stringify({
+          type:"structural.acquire",requestId,blockId,
+          vector:btoa(String.fromCharCode(...vector)),
+        }));
+      } catch {
+        clearTimeout(timer);
+        pendingStructural.current.delete(requestId);
+        notify("Collaboration connection unavailable.");
+        resolve(false);
+      }
+    });
+  }
   function rememberStructuralTarget() {
     // The editor pointer event happens when the user actually picks the
     // block. A remote Yjs update may rebase the live cursor before the
@@ -101,18 +154,20 @@ function Body({
     structuralTarget.current =
       pointedBlock.current || editor.getTextCursorPosition().block.id;
   }
-  function structuralAction(action: "up" | "down" | "delete") {
+  async function structuralAction(action: "up" | "down" | "delete") {
     if (readOnly) return;
     const target =
       structuralTarget.current || editor.getTextCursorPosition().block.id;
     structuralTarget.current = null;
     pointedBlock.current = null;
+    // In single-writer mode the Hocuspocus server arbitrates competing
+    // actions on exactly the same block. Refuse a stale state vector instead
+    // of allowing a remote move to retarget a local delete to its neighbor.
+    if (!(await reserveStructural(target))) return;
     if (!editor.getBlock(target)) {
       notify("This block changed in another session. Select it again.");
       return;
     }
-    // Core APIs take an explicit identifier: selection may be remapped by a
-    // concurrent Yjs transaction. Never move/delete its new neighbor.
     if (action === "up") editor.moveBlocksUp(target);
     else if (action === "down") editor.moveBlocksDown(target);
     else editor.removeBlocks([target]);
