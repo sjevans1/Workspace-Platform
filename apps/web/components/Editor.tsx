@@ -89,6 +89,16 @@ function Body({
     }
     editor.focus();
   }
+  function structuralAction(action: "up" | "down" | "delete") {
+    if (readOnly) return;
+    // Use the installed BlockNote Core transactions instead of rebuilding
+    // rich blocks from JSON. Moving must preserve each block's Yjs identity.
+    const current = editor.getTextCursorPosition().block;
+    if (action === "up") editor.moveBlocksUp();
+    else if (action === "down") editor.moveBlocksDown();
+    else editor.removeBlocks([current.id]);
+    editor.focus();
+  }
   function toggleMark(mark: "bold" | "italic" | "underline") {
     if (readOnly) return;
     if (mark === "bold") editor.toggleStyles({ bold: true });
@@ -166,6 +176,18 @@ function Body({
             aria-label="Insert divider" title="Insert a section divider"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => insertRichBlock("divider")}>Divider</button>
+          <button type="button" className="button small-button"
+            aria-label="Move current block up" title="Move selected block up"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => structuralAction("up")}>Move up</button>
+          <button type="button" className="button small-button"
+            aria-label="Move current block down" title="Move selected block down"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => structuralAction("down")}>Move down</button>
+          <button type="button" className="button small-button"
+            aria-label="Delete current block" title="Delete selected block (Undo restores)"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => structuralAction("delete")}>Delete block</button>
           <button type="button" className="button small-button"
             aria-label="Undo last edit" title="Undo recent local change"
             onMouseDown={(e) => e.preventDefault()}
