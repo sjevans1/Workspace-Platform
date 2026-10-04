@@ -2009,8 +2009,18 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
       );
     };
     // Preparing must not change the signature of subsequent delivery.
-    await tick(db);
-    assert.ok(received.length > 0);
+    // Earlier integration tests enqueue legitimate events for this tenant;
+    // a single worker tick need not reach this specific delivery when its
+    // bounded batch contains older jobs. Retain a finite retry budget and
+    // require the exact event ID (not just any HTTP request).
+    for (let attempt = 0; attempt < 12 &&
+      !received.some((entry) => entry.headers["x-workspace-event"] === eventId);
+      attempt++)
+      await tick(db);
+    assert.ok(
+      received.some((entry) => entry.headers["x-workspace-event"] === eventId),
+      "The staged rotation test event must actually be delivered",
+    );
     verify(subscription.secret);
     const activate = endpoint + "/activate";
     assert.equal((await req("POST", activate, precondition)).statusCode, 409);
