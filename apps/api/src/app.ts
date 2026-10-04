@@ -8,6 +8,7 @@ import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
 import Redis from "ioredis";
 import { createHash, randomUUID } from "node:crypto";
+import * as Y from "yjs";
 import { z } from "zod";
 import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
 import { stringify } from "csv-stringify/sync";
@@ -62,6 +63,7 @@ import { csvMappingSchema, previewCsvImport, csvSchemaDigest } from "../../../pa
 import {
   templates,
   blocksToMarkdown,
+  project,
 } from "../../../packages/editor/server.ts";
 import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
 import {
@@ -2039,12 +2041,42 @@ function dataRoutes(
           z
             .object({
               body: z.string().trim().min(1).max(10000),
-              block_id: z.string().max(100).optional(),
+              block_id: uuid.optional(),
+              expected_revision: z.number().int().nonnegative().optional(),
             })
             .strict(),
           r,
         ),
         cid = randomUUID();
+      // A supplied block anchor is a resource-owned *canonical Yjs block ID*.
+      // Never accept an arbitrary or neighbouring DOM selector: a guessed
+      // UUID can otherwise misdirect discussion into a different page.
+      if (v.block_id) {
+        assert(["page", "record"].includes(n.kind), 400,
+          "Anchored comments require a page");
+        assert(v.expected_revision !== undefined, 400,
+          "Anchored comments require the current page revision");
+        // Keep the authenticated document stable until this comment commits:
+        // page replacement takes a conflicting row lock.
+        const current = await one(q,
+          "SELECT revision,y_state FROM page_documents WHERE resource_id=$1 FOR SHARE",
+          [n.id]);
+        assert(current, 404, "Block not found");
+        assert(current.revision === v.expected_revision, 409,
+          "Page changed; select the block again");
+        const doc = new Y.Doc();
+        try {
+          Y.applyUpdate(doc, current.y_state);
+          const blocks=project(doc).blocks;
+          const contains=(items:any[]):boolean=>
+            items.some((block)=>block.id===v.block_id ||
+              contains(Array.isArray(block.children)?block.children:[]));
+          assert(contains(blocks),404,"Block not found");
+        } finally { doc.destroy(); }
+      } else {
+        assert(v.expected_revision === undefined,400,
+          "A revision is only valid with a block anchor");
+      }
       await q.query(
         "INSERT INTO comments(id,tenant_id,resource_id,author_id,body,block_id) VALUES($1,$2,$3,$4,$5,$6)",
         [cid, a.tenant_id, n.id, a.user_id, v.body, v.block_id || null],
