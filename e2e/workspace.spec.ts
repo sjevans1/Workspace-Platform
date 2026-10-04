@@ -81,6 +81,41 @@ async function login(page: Page, reuseSession = true) {
     cachedAuthCookies = (await page.context().cookies())
       .filter((cookie) => cookie.name === "workspace_session");
 }
+// Distinct Chromium pages have independent DOM selections, but a click in
+// another page can blur a ProseMirror editor before keyboard input is sent.
+// For collaboration *engine* races, explicitly anchor each browser's caret
+// to the intended quote immediately before that browser types. UI pointer
+// behavior has separate browser tests; this helper does not suppress any
+// unexpected data movement and canonical block identity is still asserted.
+async function typeAtQuoteEdge(page: Page, edge: "start" | "end", token: string) {
+  const quote=page.locator(".bn-editor blockquote");
+  await expect(quote).toBeVisible();
+  await quote.evaluate((node,where)=>{
+    const element=node as HTMLElement;
+    const root=element.closest<HTMLElement>(".bn-editor");
+    if (!root) throw new Error("Quote is not inside the editor");
+    root.focus();
+    const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+    const texts:Text[]=[];
+    while(walker.nextNode())texts.push(walker.currentNode as Text);
+    if(!texts.length)throw new Error("Quote has no text node");
+    const text=where==="start"?texts[0]:texts[texts.length-1];
+    const offset=where==="start"?0:text.length;
+    const range=document.createRange();
+    range.setStart(text,offset);
+    range.collapse(true);
+    const selection=window.getSelection();
+    if(!selection)throw new Error("Selection unavailable");
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const anchor=selection.anchorNode;
+    const host=anchor instanceof Element ? anchor : anchor?.parentElement;
+    if(!host?.closest(".bn-editor blockquote"))
+      throw new Error("Cannot anchor the caret to the intended quote");
+  },edge);
+  await page.keyboard.insertText(token);
+}
+
 test("Caddy strips spoofed forwarding headers before API rate limiting", async ({ request }) => {
   const first = await request.get("/api/v1/auth/methods", {
     headers: { "X-Forwarded-For": "203.0.113.17",
@@ -2593,35 +2628,13 @@ test("W10c4c overlapping edits to the same quote converge with scoped undo", asy
       .getByText("Shared quote baseline",{exact:true});
     await expect(quote(page)).toBeVisible();
     await expect(quote(peer)).toBeVisible();
-    // Place two independent carets in the *same* ProseMirror quote
-    // before either browser types. Home/End are within the single line.
-    await Promise.all([
-      (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
-      (async()=>{await quote(peer).click();await peer.keyboard.press("End")})(),
-    ]);
-    // Do not assert the transient DOM selection: collaborative cursor
-    // decorations can move/split selection anchors while awareness syncs.
-    // The stronger assertions below inspect BOTH inserted tokens in the
-    // canonical quote block, exact-once, after undo/redo and both reloads.
-    for(const client of [page,peer])
-      await expect(client.locator(".bn-editor blockquote"))
-        .toContainText("Shared quote baseline");
-    // A visible quote isn't proof the local caret remains in that block.
-    // Catch an unintended selection rebase BEFORE concurrent keystrokes,
-    // rather than claiming success from document-wide plain_text alone.
-    for (const client of [page, peer]) {
-      expect(await client.evaluate(() => {
-        const selection = window.getSelection();
-        const node = selection?.anchorNode;
-        const element = node instanceof Element ? node : node?.parentElement;
-        return !!element?.closest(".bn-editor blockquote");
-      }), "Caret must remain inside the quote before the race").toBe(true);
-    }
+    // Both users edit the *same quote*, not whichever heading or adjacent
+    // block happens to inherit a blurred browser tab's DOM selection.
     const fromOne="ONE_BEGIN ";
     const fromTwo=" TWO_END";
     await Promise.all([
-      page.keyboard.insertText(fromOne),
-      peer.keyboard.insertText(fromTwo),
+      typeAtQuoteEdge(page,"start",fromOne),
+      typeAtQuoteEdge(peer,"end",fromTwo),
     ]);
     const canonical=async()=>{
       const response=await page.request.get(endpoint);
@@ -2753,23 +2766,11 @@ test("W10c4d distinct principals merge same quote and honor live ACL changes",as
       .getByText("Shared quote baseline",{exact:true});
     await expect(quote(page)).toBeVisible();
     await expect(quote(partner)).toBeVisible();
-    await Promise.all([
-      (async()=>{await quote(page).click();await page.keyboard.press("Home")})(),
-      (async()=>{await quote(partner).click();await partner.keyboard.press("End")})(),
-    ]);
-    for (const client of [page, partner]) {
-      expect(await client.evaluate(() => {
-        const selection = window.getSelection();
-        const node = selection?.anchorNode;
-        const element = node instanceof Element ? node : node?.parentElement;
-        return !!element?.closest(".bn-editor blockquote");
-      }), "Principal's caret left the quote before concurrent input").toBe(true);
-    }
     const fromOwner="OWNER_BEGIN ";
     const fromMember=" MEMBER_END";
     await Promise.all([
-      page.keyboard.insertText(fromOwner),
-      partner.keyboard.insertText(fromMember),
+      typeAtQuoteEdge(page,"start",fromOwner),
+      typeAtQuoteEdge(partner,"end",fromMember),
     ]);
     const canonical=async()=>{
       const res=await page.request.get(endpoint);
