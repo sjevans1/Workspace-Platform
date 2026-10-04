@@ -3288,7 +3288,6 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
     await expect(peerDialog.locator('[data-parent-comment-id="'+root.id+'"]'))
       .toContainText("W11D_PEER_REPLY_KEEP_EXACT");
     await peerDialog.getByRole("button",{name:"Close dialog"}).click();
-    await ownerDialog.getByRole("button",{name:"Close dialog"}).catch(()=>{});
     await page.getByRole("button",{name:"Comments",exact:true}).click();
     const ownerAgain=page.getByRole("dialog",{name:"Discussion"});
     await expect(ownerAgain).toContainText("W11D_PEER_REPLY_KEEP_EXACT");
