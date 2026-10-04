@@ -2117,8 +2117,13 @@ function dataRoutes(
           );
       }
       await emit(q, a, "comment.created", n.id);
-      return { id: cid, ...v, block_id: inheritedAnchor,
-        parent_comment_id:parent?.id ?? null };
+      // Preserve W11a's legacy response contract: no new block_id key for
+      // unanchored root comments. A reply explicitly carries its inherited
+      // anchor and parent ID, even when that anchor was later orphaned.
+      return { id: cid, ...v,
+        ...(parent ? { block_id: inheritedAnchor, parent_comment_id: parent.id }
+          : { parent_comment_id: null }),
+      };
     },
   );
   route(
