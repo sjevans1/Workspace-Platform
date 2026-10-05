@@ -1337,6 +1337,135 @@ test("page backlinks use live canonical links and never reveal restricted source
     await linksApp.close();
   }
 });
+test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c cursor target",
+  });
+  const sourceA = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c first source",
+  });
+  const sourceB = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c second source",
+  });
+  const staleSource = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c stale source",
+  });
+  const linkedBlocks = [{
+    type: "paragraph",
+    content: [{
+      type: "link",
+      href: "/?page=" + target.id,
+      content: [{ type: "text", text: "Target", styles: {} }],
+    }],
+  }];
+  for (const source of [sourceA, sourceB])
+    await ok("PATCH", `/pages/${source.id}/content`, {
+      blocks: linkedBlocks, expected_revision: 1,
+    });
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("UPDATE resources SET updated_at=now() WHERE id=$1", [sourceA.id]);
+    await q.query(
+      "UPDATE resources SET updated_at=now()-interval '1 second' WHERE id=$1",
+      [sourceB.id],
+    );
+  });
+
+  const first = await ok("GET",
+    `/resources/${target.id}/backlinks/cursor?limit=1`,
+    undefined, member);
+  assert.deepEqual(first.items.map((x:any)=>x.id), [sourceA.id]);
+  assert.equal(first.has_more, true);
+  assert.equal(typeof first.next_cursor, "string");
+  assert.ok(!first.next_cursor.includes(sourceA.id));
+  assert.ok(!first.next_cursor.includes(sourceB.id));
+
+  const altered = first.next_cursor.slice(0, -1) +
+    (first.next_cursor.endsWith("A") ? "B" : "A");
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(altered)}`,
+    undefined, member)).statusCode, 400,
+    "Tampered backlink cursors must fail closed");
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, owner)).statusCode, 400,
+    "A cursor is bound to the issuing principal");
+
+  await permissionPatch(`/resources/${sourceB.id}/permissions`, {
+    inherit: false, grants: [],
+  });
+  const continued = await ok("GET",
+    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, member);
+  assert.deepEqual(continued.items, [],
+    "Revoked source must disappear on the next page without graph rebuild");
+  assert.equal(continued.has_more, false);
+  assert.equal(continued.next_cursor, null);
+
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "DELETE FROM resource_links WHERE source_id=$1 AND target_id=$2",
+      [sourceA.id, target.id],
+    );
+    await q.query(
+      "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+      [owner.tenant, staleSource.id, target.id],
+    );
+  });
+  const beforeRepair = await ok("GET", `/resources/${target.id}/backlinks`);
+  assert.deepEqual(beforeRepair.map((x:any)=>x.id), [sourceB.id],
+    "Read path stays side-effect free: missing canonical edge is not synthesized and stale edge is inert");
+
+  let reconcileCursor: string | null = null;
+  let pages = 0;
+  do {
+    const repaired = await ok("POST", "/resource-links/reconcile", {
+      limit: 100,
+      ...(reconcileCursor ? { cursor: reconcileCursor } : {}),
+    });
+    pages++;
+    assert.ok(repaired.processed >= 0 && repaired.processed <= 100);
+    reconcileCursor = repaired.next_cursor;
+    if (!repaired.has_more) {
+      assert.equal(reconcileCursor, null);
+      break;
+    }
+    assert.equal(typeof reconcileCursor, "string");
+    assert.ok(pages < 50, "Resource-link repair must make bounded forward progress");
+  } while (reconcileCursor);
+
+  const repairedEdges = (await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+    [target.id],
+  ))).rows.map((x:any)=>x.source_id).sort();
+  assert.deepEqual(repairedEdges, [sourceA.id, sourceB.id].sort(),
+    "Explicit repair restores canonical edges and removes stale candidates");
+
+  const snapshot = JSON.stringify(repairedEdges);
+  reconcileCursor = null;
+  pages = 0;
+  do {
+    const repeated = await ok("POST", "/resource-links/reconcile", {
+      limit: 100,
+      ...(reconcileCursor ? { cursor: reconcileCursor } : {}),
+    });
+    pages++;
+    reconcileCursor = repeated.next_cursor;
+    if (!repeated.has_more) break;
+    assert.ok(pages < 50, "Repeated repair must remain resumable");
+  } while (reconcileCursor);
+  const afterRepeat = (await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+    [target.id],
+  ))).rows.map((x:any)=>x.source_id).sort();
+  assert.equal(JSON.stringify(afterRepeat), snapshot,
+    "Resource-link reconciliation is idempotent");
+
+  const foreignRepair = await ok("POST", "/resource-links/reconcile",
+    { limit: 1 }, other);
+  assert.equal(foreignRepair.processed, 0,
+    "A different tenant cannot enumerate or repair this tenant's documents");
+});
+
 test("typed records, optimistic concurrency, saved filters and full bodies", async () => {
   database = await ok("POST", "/resources", {
     kind: "database",
