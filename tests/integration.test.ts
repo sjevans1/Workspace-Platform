@@ -4665,3 +4665,74 @@ test("W12c reply notifications respect recipient ACL and mention deduplication",
   assert.equal((await req("GET",url,undefined,recipient)).statusCode,404);
 });
 
+
+
+test("W12d alert preferences enforce recipient delivery modes under tenant RLS",async()=>{
+  const recipientId=randomUUID();
+  await db.tenant(owner.tenant,async(q)=>{
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'Alert Preferences Recipient')",
+      [recipientId,"alerts-"+recipientId+"@example.test"]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
+      [owner.tenant,recipientId]);
+  });
+  const token=await db.tenant(owner.tenant,q=>createSession(q,owner.tenant,recipientId));
+  const recipient={
+    id:recipientId,tenant:owner.tenant,
+    cookie:"workspace_session="+token,csrf:csrf(token),
+  };
+  const url="/notification-preferences";
+  assert.deepEqual(await ok("GET",url,undefined,recipient),{
+    mentions_enabled:true,replies_enabled:true,
+  },"Default behavior must retain existing delivery");
+  assert.equal((await req("PATCH",url,{mentions_enabled:false},recipient)).statusCode,400);
+  assert.equal((await req("PATCH",url,{
+    mentions_enabled:false,replies_enabled:false,secret:"not permitted",
+  },recipient)).statusCode,400);
+  const allOff=await ok("PATCH",url,{
+    mentions_enabled:false,replies_enabled:false,
+  },recipient);
+  assert.deepEqual(allOff,{mentions_enabled:false,replies_enabled:false});
+  const target=await ok("POST","/resources",{
+    kind:"page",parent_id:space.id,title:"Recipient alert choices",
+  });
+  const comments="/resources/"+target.id+"/comments";
+  const root=await ok("POST",comments,{body:"Root by notification recipient"},recipient);
+  await ok("POST",comments,{
+    reply_to:root.id,body:"Suppressed @{"+recipientId+"}",
+  });
+  let received=(await ok("GET","/notifications",undefined,recipient))
+    .filter((n:any)=>n.resource_id===target.id);
+  assert.equal(received.length,0,"Disabled modes must prevent insertion");
+  await ok("PATCH",url,{
+    mentions_enabled:true,replies_enabled:false,
+  },recipient);
+  await ok("POST",comments,{reply_to:root.id,
+    body:"Explicit mention @{"+recipientId+"} only"});
+  await ok("POST",comments,{reply_to:root.id,body:"Reply still muted"});
+  received=(await ok("GET","/notifications",undefined,recipient))
+    .filter((n:any)=>n.resource_id===target.id);
+  assert.equal(received.length,1);
+  assert.match(received[0].message,/mentioned you/);
+  await ok("PATCH",url,{
+    mentions_enabled:false,replies_enabled:true,
+  },recipient);
+  await ok("POST",comments,{reply_to:root.id,body:"Reply delivery now enabled"});
+  received=(await ok("GET","/notifications",undefined,recipient))
+    .filter((n:any)=>n.resource_id===target.id);
+  assert.equal(received.length,2);
+  assert.equal(received.filter((n:any)=>/replied to your comment/.test(n.message)).length,1);
+  // Preferences are persisted per recipient and tenant, not per browser session.
+  const freshToken=await db.tenant(owner.tenant,q=>createSession(q,owner.tenant,recipientId));
+  const fresh={cookie:"workspace_session="+freshToken,csrf:csrf(freshToken)};
+  assert.deepEqual(await ok("GET",url,undefined,fresh),{
+    mentions_enabled:false,replies_enabled:true,
+  });
+  const foreignToken=await db.tenant(other.tenant,q=>
+    createSession(q,other.tenant,owner.id));
+  const foreign={cookie:"workspace_session="+foreignToken,csrf:csrf(foreignToken)};
+  await ok("PATCH",url,{mentions_enabled:true,replies_enabled:true},foreign);
+  assert.deepEqual(await ok("GET",url,undefined,recipient),{
+    mentions_enabled:false,replies_enabled:true,
+  },"Other tenant preferences may not change recipient defaults");
+});
