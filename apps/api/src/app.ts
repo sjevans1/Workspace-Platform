@@ -2050,7 +2050,7 @@ function dataRoutes(
         ),
         cid = randomUUID();
       const parent=v.reply_to?await one(q,
-        "SELECT id,block_id,parent_comment_id,resolved FROM comments WHERE tenant_id=$1 AND resource_id=$2 AND id=$3 FOR SHARE",
+        "SELECT id,author_id,block_id,parent_comment_id,resolved FROM comments WHERE tenant_id=$1 AND resource_id=$2 AND id=$3 FOR SHARE",
         [a.tenant_id,n.id,v.reply_to]):null;
       if(v.reply_to){
         assert(parent,404,"Comment not found");
@@ -2095,26 +2095,29 @@ function dataRoutes(
         [cid, a.tenant_id, n.id, a.user_id, v.body,
           inheritedAnchor,parent?.id ?? null],
       );
-      for (const m of v.body.matchAll(/@\{([0-9a-f-]{36})\}/g)) {
-        const member = await one(
-          q,
+      // Deduplicate @mention and thread-owner notifications inside the
+      // comment transaction; never notify revoked or unauthorized members.
+      const delivered = new Set<string>();
+      const notifyMember = async (recipient:string,message:string) => {
+        if(delivered.has(recipient))return;
+        const member=await one(q,
           "SELECT role FROM memberships WHERE user_id=$1 AND active",
-          [m[1]],
+          [recipient]);
+        if(!member || !(await access(q,
+          {...a,user_id:recipient,role:member.role},n.id)))return;
+        await q.query(
+          "INSERT INTO notifications(id,tenant_id,user_id,resource_id,message) VALUES($1,$2,$3,$4,$5)",
+          [randomUUID(),a.tenant_id,recipient,n.id,message],
         );
-        if (
-          member &&
-          (await access(q, { ...a, user_id: m[1], role: member.role }, n.id))
-        )
-          await q.query(
-            "INSERT INTO notifications(id,tenant_id,user_id,resource_id,message) VALUES($1,$2,$3,$4,$5)",
-            [
-              randomUUID(),
-              a.tenant_id,
-              m[1],
-              n.id,
-              `${a.name} mentioned you in ${n.title}`,
-            ],
-          );
+        delivered.add(recipient);
+      };
+      for(const mention of v.body.matchAll(/@\{([0-9a-f-]{36})\}/g)){
+        await notifyMember(mention[1],
+          `${a.name} mentioned you in ${n.title}`);
+      }
+      if(parent?.author_id && parent.author_id!==a.user_id){
+        await notifyMember(parent.author_id,
+          `${a.name} replied to your comment in ${n.title}`);
       }
       await emit(q, a, "comment.created", n.id);
       // Preserve W11a's legacy response contract: no new block_id key for
