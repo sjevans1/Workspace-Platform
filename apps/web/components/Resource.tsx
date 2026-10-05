@@ -432,7 +432,7 @@ function Backlinks({ id }: { id: string }) {
     setError(false);
     setLoading(true);
     try {
-      const current=await api(`/resources/${id}/backlinks/cursor?limit=20`);
+      const current=await api(`/resources/${id}/backlinks?limit=20`);
       if(generation===request.current){
         setLinks(current.items);
         setNextCursor(current.next_cursor);
@@ -456,7 +456,7 @@ function Backlinks({ id }: { id: string }) {
     setLoadingMore(true);
     try {
       const current=await api(
-        `/resources/${id}/backlinks/cursor?limit=20&cursor=${encodeURIComponent(nextCursor)}`,
+        `/resources/${id}/backlinks?limit=20&cursor=${encodeURIComponent(nextCursor)}`,
       );
       if(generation===request.current){
         setLinks(previous=>{
