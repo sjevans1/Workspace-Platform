@@ -1107,7 +1107,7 @@ test("users can link a page from the editor and follow its accessible backlink",
     const response=await page.request.get(
       "/api/v1/resources/"+targetId+"/backlinks/cursor?limit=20",
     );
-    if(!response.ok())return true;
+    if(!response.ok())return false;
     return !(await response.json()).items.some((v:any)=>v.id===sourceId);
   },{timeout:30000}).toBe(true);
 });
