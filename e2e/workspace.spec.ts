@@ -3324,6 +3324,7 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
     await access.getByLabel("Access level",{exact:true}).selectOption("1");
     await access.getByRole("button",{name:"Save access",exact:true}).click();
     await expect(access).toBeHidden();
+    expect((await memberPage.request.get(commentsApi)).status()).toBe(200);
     await page.getByRole("button",{name:"Page actions"}).click();
     await page.getByRole("button",{name:"Manage access",exact:true}).click();
     await access.getByRole("button",{name:"Remove grant"}).click();
