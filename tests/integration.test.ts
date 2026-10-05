@@ -1362,6 +1362,9 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     await ok("PATCH", `/pages/${source.id}/content`, {
       blocks: linkedBlocks, expected_revision: 1,
     });
+  await ok("PATCH", `/resources/${sourceA.id}`, {
+    title: "W13c renamed first source",
+  });
   await db.tenant(owner.tenant, async (q) => {
     await q.query("UPDATE resources SET updated_at=now() WHERE id=$1", [sourceA.id]);
     await q.query(
@@ -1374,6 +1377,8 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     `/resources/${target.id}/backlinks/cursor?limit=1`,
     undefined, member);
   assert.deepEqual(first.items.map((x:any)=>x.id), [sourceA.id]);
+  assert.equal(first.items[0].title, "W13c renamed first source",
+    "Backlinks resolve the source's current title without re-indexing IDs");
   assert.equal(first.has_more, true);
   assert.equal(typeof first.next_cursor, "string");
   assert.ok(!first.next_cursor.includes(sourceA.id));
