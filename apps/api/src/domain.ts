@@ -22,6 +22,7 @@ import {
   blocksToState,
   validateBlocks,
 } from "../../../packages/editor/server.ts";
+import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import { emit } from "../../../packages/events/index.ts";
 import { indexedRecordText, validateRelationWrites } from "./relations.ts";
 import { presentedRecordValues } from "./rollups.ts";
@@ -70,11 +71,13 @@ export async function createResource(
       textOf(blocks),
     ],
   );
-  if (["page", "record"].includes(v.kind))
+  if (["page", "record"].includes(v.kind)) {
     await q.query(
       "INSERT INTO page_documents(tenant_id,resource_id,blocks,plain_text,y_state) VALUES($1,$2,$3,$4,$5)",
       [a.tenant_id, id, json(blocks), textOf(blocks), blocksToState(blocks)],
     );
+    await syncWorkspaceResourceLinks(q,a.tenant_id,id,blocks);
+  }
   if (v.kind === "database") {
     await q.query(
       "INSERT INTO databases(tenant_id,resource_id,properties) VALUES($1,$2,$3)",
@@ -399,6 +402,7 @@ export async function replaceDocument(
     "UPDATE page_documents SET blocks=$2,plain_text=$3,y_state=$4,revision=revision+1,epoch=epoch+1 WHERE resource_id=$1",
     [id, json(blocks), textOf(blocks), blocksToState(blocks)],
   );
+  await syncWorkspaceResourceLinks(q,a.tenant_id,id,blocks);
   await q.query(
     "UPDATE resources SET search_text=$2,updated_by=$3,updated_at=now() WHERE id=$1",
     [id, textOf(blocks), a.user_id],

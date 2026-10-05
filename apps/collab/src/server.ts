@@ -10,6 +10,7 @@ import {
 import { requireAccess } from "../../../packages/permissions/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
 import { project } from "../../../packages/editor/server.ts";
+import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import { emit } from "../../../packages/events/index.ts";
 type Context = { ticket: Ticket; actor: Actor };
 export async function createCollab(db: Database, port = 1234) {
@@ -211,6 +212,7 @@ export async function createCollab(db: Database, port = 1234) {
             "UPDATE page_documents SET blocks=$2,plain_text=$3,y_state=$4,revision=revision+1 WHERE resource_id=$1",
             [resource, json(p.blocks), p.plain_text, p.state],
           );
+          await syncWorkspaceResourceLinks(q,tenant,resource,p.blocks);
           await q.query(
             "UPDATE resources SET search_text=$2,updated_at=now(),updated_by=$3 WHERE id=$1",
             [resource, p.plain_text, a.user_id],
