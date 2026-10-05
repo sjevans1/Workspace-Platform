@@ -1098,6 +1098,18 @@ test("users can link a page from the editor and follow its accessible backlink",
   await expect(backlink).toBeVisible();
   await backlink.click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(sourceName);
+  const sourceEditor=page.locator(".bn-editor");
+  await sourceEditor.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("Backspace");
+  await expect(page.getByRole("status").filter({hasText:"Saved"})).toBeVisible();
+  await expect.poll(async()=>{
+    const response=await page.request.get(
+      "/api/v1/resources/"+targetId+"/backlinks/cursor?limit=20",
+    );
+    if(!response.ok())return true;
+    return !(await response.json()).items.some((v:any)=>v.id===sourceId);
+  },{timeout:30000}).toBe(true);
 });
 
 
