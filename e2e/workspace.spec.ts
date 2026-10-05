@@ -1085,7 +1085,7 @@ test("users can link a page from the editor and follow its accessible backlink",
   await expect(backlink).toBeVisible();
   // Simulate an authorization failure after the page has already displayed
   // a backlink. Focus-based refresh must remove the old private title.
-  const deniedBacklinks="**/api/v1/resources/"+targetId+"/backlinks";
+  const deniedBacklinks="**/api/v1/resources/"+targetId+"/backlinks/cursor*";
   await page.route(deniedBacklinks,route=>route.fulfill({
     status:403,contentType:"application/json",
     body:JSON.stringify({error:"Access revoked"}),
@@ -1098,6 +1098,86 @@ test("users can link a page from the editor and follow its accessible backlink",
   await expect(backlink).toBeVisible();
   await backlink.click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(sourceName);
+});
+
+
+test("W13c browser paginates backlinks and clears them on continuation failure", async ({ page }) => {
+  await login(page);
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const workspace = roots.find((item:any)=>item.kind==="workspace") || roots[0];
+  const headers = {
+    "X-CSRF-Token": (await (await page.request.get("/api/v1/me")).json()).csrf,
+  };
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "space",
+      parent_id: workspace.id,
+      title: "W13c pagination space " + randomUUID(),
+    },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const targetResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "page",
+      parent_id: space.id,
+      title: "W13c pagination target " + randomUUID(),
+    },
+  });
+  expect(targetResponse.ok(), await targetResponse.text()).toBeTruthy();
+  const target = await targetResponse.json();
+  const firstId=randomUUID(), secondId=randomUUID();
+  const routePattern="**/api/v1/resources/"+target.id+"/backlinks/cursor*";
+  await page.route(routePattern,route=>{
+    const url=new URL(route.request().url());
+    const cursor=url.searchParams.get("cursor");
+    if(!cursor)
+      return route.fulfill({
+        status:200,contentType:"application/json",
+        body:JSON.stringify({
+          items:[{
+            id:firstId,title:"Paged backlink first",kind:"page",
+            updated_at:new Date().toISOString(),
+          }],
+          next_cursor:"opaque-test-cursor",has_more:true,
+        }),
+      });
+    return route.fulfill({
+      status:200,contentType:"application/json",
+      body:JSON.stringify({
+        items:[{
+          id:secondId,title:"Paged backlink second",kind:"page",
+          updated_at:new Date().toISOString(),
+        }],
+        next_cursor:null,has_more:false,
+      }),
+    });
+  });
+  await page.goto("/?page="+target.id);
+  await expect(page.getByRole("button",{name:"Paged backlink first",exact:true}))
+    .toBeVisible();
+  await page.getByRole("button",{name:"Load more links",exact:true}).click();
+  await expect(page.getByRole("button",{name:"Paged backlink second",exact:true}))
+    .toBeVisible();
+  await expect(page.getByRole("button",{name:"Load more links",exact:true}))
+    .toHaveCount(0);
+
+  await page.unroute(routePattern);
+  await page.route(routePattern,route=>route.fulfill({
+    status:403,contentType:"application/json",
+    body:JSON.stringify({error:"Access revoked"}),
+  }));
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("button",{name:"Paged backlink first",exact:true}))
+    .toHaveCount(0);
+  await expect(page.getByRole("button",{name:"Paged backlink second",exact:true}))
+    .toHaveCount(0);
+  await expect(page.getByText("Unable to load backlinks. Try refreshing.",{
+    exact:true,
+  })).toBeVisible();
+  await page.unroute(routePattern);
 });
 
 
