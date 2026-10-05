@@ -19,6 +19,11 @@ export default function NotificationInbox(){
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState(false);
   const [opening,setOpening]=useState("");
+  const [preferences,setPreferences]=useState<{
+    mentions_enabled:boolean;replies_enabled:boolean;
+  }|null>(null);
+  const [savingPreferences,setSavingPreferences]=useState(false);
+  const [preferencesError,setPreferencesError]=useState(false);
   const requestGeneration=useRef(0);
   const refresh=useCallback(async()=>{
     const generation=++requestGeneration.current;
@@ -41,6 +46,34 @@ export default function NotificationInbox(){
       if(generation===requestGeneration.current)setLoading(false);
     }
   },[]);
+  useEffect(()=>{
+    void api("/notification-preferences").then((data)=>{
+      setPreferences({
+        mentions_enabled:data.mentions_enabled,
+        replies_enabled:data.replies_enabled,
+      });
+      setPreferencesError(false);
+    }).catch(()=>{
+      setPreferences(null);
+      setPreferencesError(true);
+    });
+  },[]);
+  async function savePreferences(){
+    if(!preferences||savingPreferences)return;
+    setSavingPreferences(true);
+    try {
+      const saved=await api("/notification-preferences","PATCH",preferences);
+      setPreferences({
+        mentions_enabled:saved.mentions_enabled,
+        replies_enabled:saved.replies_enabled,
+      });
+      setPreferencesError(false);
+      notify("Notification preferences saved.");
+    } catch {
+      setPreferencesError(true);
+      notify("Couldn't save notification preferences.");
+    } finally {setSavingPreferences(false);}
+  }
   useEffect(()=>{
     void refresh();
     const onFocus=()=>{void refresh();};
@@ -90,6 +123,32 @@ export default function NotificationInbox(){
         <RefreshCw size={15}/> Refresh
       </button>
     </div>
+    <fieldset className="notification-preferences" disabled={!preferences||savingPreferences}
+      aria-label="Notification preferences">
+      <legend>Notification preferences</legend>
+      <p className="muted small-text">Choose which new alerts are delivered to this workspace. Earlier notifications remain in your inbox.</p>
+      <label className="checkbox-line">
+        <input type="checkbox" aria-label="Mention alerts"
+          checked={preferences?.mentions_enabled??true}
+          onChange={event=>setPreferences(prev=>prev?{
+            ...prev,mentions_enabled:event.target.checked,
+          }:prev)}/>
+        Mentions
+      </label>
+      <label className="checkbox-line">
+        <input type="checkbox" aria-label="Reply alerts"
+          checked={preferences?.replies_enabled??true}
+          onChange={event=>setPreferences(prev=>prev?{
+            ...prev,replies_enabled:event.target.checked,
+          }:prev)}/>
+        Replies to your comments
+      </label>
+      <button type="button" className="button small-button"
+        onClick={()=>void savePreferences()} disabled={!preferences||savingPreferences}>
+        {savingPreferences?"Saving…":"Save preferences"}
+      </button>
+      {preferencesError&&<p role="alert">Preferences unavailable or not saved. Your previous settings remain authoritative.</p>}
+    </fieldset>
     <label className="field">
       <span>Filter notifications</span>
       <input value={filter} onChange={event=>setFilter(event.target.value)}

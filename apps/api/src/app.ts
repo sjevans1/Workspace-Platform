@@ -2098,13 +2098,21 @@ function dataRoutes(
       // Deduplicate @mention and thread-owner notifications inside the
       // comment transaction; never notify revoked or unauthorized members.
       const delivered = new Set<string>();
-      const notifyMember = async (recipient:string,message:string) => {
+      const notifyMember = async (
+        recipient:string,message:string,kind:"mention"|"reply",
+      ) => {
         if(delivered.has(recipient))return;
         const member=await one(q,
           "SELECT role FROM memberships WHERE user_id=$1 AND active",
           [recipient]);
         if(!member || !(await access(q,
           {...a,user_id:recipient,role:member.role},n.id)))return;
+        const preferences=await one(q,
+          "SELECT mentions_enabled,replies_enabled FROM notification_preferences WHERE user_id=$1",
+          [recipient]);
+        // No preference row means both are on (preserving prior behavior).
+        if(kind==="mention" && preferences?.mentions_enabled===false)return;
+        if(kind==="reply" && preferences?.replies_enabled===false)return;
         await q.query(
           "INSERT INTO notifications(id,tenant_id,user_id,resource_id,message) VALUES($1,$2,$3,$4,$5)",
           [randomUUID(),a.tenant_id,recipient,n.id,message],
@@ -2113,11 +2121,11 @@ function dataRoutes(
       };
       for(const mention of v.body.matchAll(/@\{([0-9a-f-]{36})\}/g)){
         await notifyMember(mention[1],
-          `${a.name} mentioned you in ${n.title}`);
+          `${a.name} mentioned you in ${n.title}`,"mention");
       }
       if(parent?.author_id && parent.author_id!==a.user_id){
         await notifyMember(parent.author_id,
-          `${a.name} replied to your comment in ${n.title}`);
+          `${a.name} replied to your comment in ${n.title}`,"reply");
       }
       await emit(q, a, "comment.created", n.id);
       // Preserve W11a's legacy response contract: no new block_id key for
@@ -2795,6 +2803,36 @@ function dataRoutes(
         [noticeId,a.user_id,v.read]);
       assert(updated,404,"Notification not found");
       return updated;
+    },
+  );
+
+  route(
+    "GET",
+    "/notification-preferences",
+    "Read own notification preferences",
+    async (q,a) => {
+      const saved=await one(q,
+        "SELECT mentions_enabled,replies_enabled FROM notification_preferences WHERE user_id=$1",
+        [a.user_id]);
+      return {
+        mentions_enabled:saved?.mentions_enabled ?? true,
+        replies_enabled:saved?.replies_enabled ?? true,
+      };
+    },
+  );
+  route(
+    "PATCH",
+    "/notification-preferences",
+    "Update own notification preferences",
+    async (q,a,r) => {
+      const choices=body(z.object({
+        mentions_enabled:z.boolean(),
+        replies_enabled:z.boolean(),
+      }).strict(),r);
+      const saved=await one(q,
+        "INSERT INTO notification_preferences(tenant_id,user_id,mentions_enabled,replies_enabled) VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id,user_id) DO UPDATE SET mentions_enabled=EXCLUDED.mentions_enabled,replies_enabled=EXCLUDED.replies_enabled,updated_at=now() RETURNING mentions_enabled,replies_enabled",
+        [a.tenant_id,a.user_id,choices.mentions_enabled,choices.replies_enabled]);
+      return saved;
     },
   );
 
