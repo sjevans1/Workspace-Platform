@@ -1092,19 +1092,20 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
   );
   const backlinksSpec = spec.paths["/api/v1/resources/{id}/backlinks"].get;
   assert.equal(backlinksSpec.responses["200"].content["application/json"]
-    .schema.type, "array");
-  assert.equal(backlinksSpec.responses["200"].content["application/json"]
-    .schema.maxItems, 40);
-  const backlinkCursorSpec =
-    spec.paths["/api/v1/resources/{id}/backlinks/cursor"].get;
+    .schema.type, "object");
   assert.deepEqual(
-    backlinkCursorSpec.responses["200"].content["application/json"]
+    backlinksSpec.responses["200"].content["application/json"]
       .schema.required,
     ["items", "next_cursor", "has_more"],
   );
   assert.equal(
-    backlinkCursorSpec.parameters.find((p:any)=>p.name==="limit")
+    backlinksSpec.parameters.find((p:any)=>p.name==="limit")
       ?.schema.maximum,
+    40,
+  );
+  assert.equal(
+    backlinksSpec.responses["200"].content["application/json"]
+      .schema.properties.items.maxItems,
     40,
   );
   const linkReconcileSpec = spec.paths["/api/v1/resource-links/reconcile"].post;
@@ -1268,7 +1269,7 @@ test("page backlinks use live canonical links and never reveal restricted source
   ));
   let ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
   assert.deepEqual(
-    ownerBacklinks.map((x: any) => x.id).sort(),
+    ownerBacklinks.items.map((x: any) => x.id).sort(),
     [source.id, privateSource.id].sort(),
   );
   await linkOk("DELETE",`/resources/${target.id}`);
@@ -1294,8 +1295,8 @@ test("page backlinks use live canonical links and never reveal restricted source
   });
   const memberBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`,
     undefined, member);
-  assert.deepEqual(memberBacklinks.map((x: any) => x.id), [source.id]);
-  assert.doesNotMatch(JSON.stringify(memberBacklinks), /Secret referencing source/);
+  assert.deepEqual(memberBacklinks.items.map((x: any) => x.id), [source.id]);
+  assert.doesNotMatch(JSON.stringify(memberBacklinks.items), /Secret referencing source/);
   assert.equal((await linkReq("GET",
     `/resources/${target.id}/backlinks`, undefined, guest)).statusCode, 404);
   assert.equal((await linkReq("GET",
@@ -1311,7 +1312,7 @@ test("page backlinks use live canonical links and never reveal restricted source
   });
   const after = await linkOk("GET", `/resources/${target.id}/backlinks`,
     undefined, member);
-  assert.deepEqual(after, []);
+  assert.deepEqual(after.items, []);
   assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
     "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
     [source.id,target.id],
@@ -1332,7 +1333,7 @@ test("page backlinks use live canonical links and never reveal restricted source
   ))).rowCount,1,"Version restore restores the canonical graph edge");
   const restored=await linkOk("GET",`/resources/${target.id}/backlinks`,
     undefined,member);
-  assert.deepEqual(restored.map((x:any)=>x.id),[source.id]);
+  assert.deepEqual(restored.items.map((x:any)=>x.id),[source.id]);
   } finally {
     await linksApp.close();
   }
@@ -1367,11 +1368,11 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
   });
   await ok("DELETE", `/resources/${sourceA.id}`);
   let visible = await ok("GET", `/resources/${target.id}/backlinks`);
-  assert.ok(!visible.some((x:any)=>x.id===sourceA.id),
+  assert.ok(!visible.items.some((x:any)=>x.id===sourceA.id),
     "A trashed source must immediately leave backlink results");
   await ok("POST", `/resources/${sourceA.id}/restore`);
   visible = await ok("GET", `/resources/${target.id}/backlinks`);
-  assert.ok(visible.some((x:any)=>x.id===sourceA.id),
+  assert.ok(visible.items.some((x:any)=>x.id===sourceA.id),
     "Restoring a source recovers its retained canonical backlink");
   // Keep both sources inside the same JavaScript millisecond while preserving
   // PostgreSQL microsecond ordering. A cursor that rounded through Date would
@@ -1388,7 +1389,7 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
   });
 
   const first = await ok("GET",
-    `/resources/${target.id}/backlinks/cursor?limit=1`,
+    `/resources/${target.id}/backlinks?limit=1`,
     undefined, member);
   assert.deepEqual(first.items.map((x:any)=>x.id), [sourceA.id]);
   assert.equal(first.items[0].title, "W13c renamed first source",
@@ -1401,20 +1402,20 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
   const altered = first.next_cursor.slice(0, -1) +
     (first.next_cursor.endsWith("A") ? "B" : "A");
   assert.equal((await req("GET",
-    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(altered)}`,
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(altered)}`,
     undefined, member)).statusCode, 400,
     "Tampered backlink cursors must fail closed");
   assert.equal((await req("GET",
-    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
     undefined, owner)).statusCode, 400,
     "A cursor is bound to the issuing principal");
   assert.equal((await req("GET",
-    `/resources/${target.id}/backlinks/cursor?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+    `/resources/${target.id}/backlinks?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
     undefined, member)).statusCode, 400,
     "A cursor cannot be replayed under a different page-size contract");
 
   const preciseContinuation = await ok("GET",
-    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
     undefined, member);
   assert.deepEqual(preciseContinuation.items.map((x:any)=>x.id), [sourceB.id],
     "Microsecond-distinct backlinks in one JS millisecond must not be skipped");
@@ -1425,7 +1426,7 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     inherit: false, grants: [],
   });
   const continued = await ok("GET",
-    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
     undefined, member);
   assert.deepEqual(continued.items, [],
     "Revoked source must disappear on the next page without graph rebuild");
@@ -1443,7 +1444,7 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     );
   });
   const beforeRepair = await ok("GET", `/resources/${target.id}/backlinks`);
-  assert.deepEqual(beforeRepair.map((x:any)=>x.id), [sourceB.id],
+  assert.deepEqual(beforeRepair.items.map((x:any)=>x.id), [sourceB.id],
     "Read path stays side-effect free: missing canonical edge is not synthesized and stale edge is inert");
 
   const firstRepairPage = await ok("POST", "/resource-links/reconcile", {
@@ -1563,7 +1564,7 @@ test("W13c scoped cursor metadata excludes source kinds outside token scope", as
   const serviceToken = await db.tenant(owner.tenant, (q) =>
     createSession(q, owner.tenant, serviceId, ["pages.read"], "W13 scoped reader"));
   const response = await req("GET",
-    `/resources/${target.id}/backlinks/cursor?limit=1`,
+    `/resources/${target.id}/backlinks?limit=1`,
     undefined, null, { authorization: "Bearer " + serviceToken });
   assert.equal(response.statusCode, 200, response.body);
   const result = response.json();
@@ -1653,7 +1654,7 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
     for (let segment = 0; segment < 5; segment++) {
       const started = Date.now();
       const result = await ok("GET",
-        `/resources/${target.id}/backlinks/cursor?limit=40` +
+        `/resources/${target.id}/backlinks?limit=40` +
         (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
         undefined, member);
       latencies.push(Date.now() - started);
