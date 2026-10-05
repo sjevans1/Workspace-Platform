@@ -1365,6 +1365,14 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
   await ok("PATCH", `/resources/${sourceA.id}`, {
     title: "W13c renamed first source",
   });
+  await ok("DELETE", `/resources/${sourceA.id}`);
+  let visible = await ok("GET", `/resources/${target.id}/backlinks`);
+  assert.ok(!visible.some((x:any)=>x.id===sourceA.id),
+    "A trashed source must immediately leave backlink results");
+  await ok("POST", `/resources/${sourceA.id}/restore`);
+  visible = await ok("GET", `/resources/${target.id}/backlinks`);
+  assert.ok(visible.some((x:any)=>x.id===sourceA.id),
+    "Restoring a source recovers its retained canonical backlink");
   await db.tenant(owner.tenant, async (q) => {
     await q.query("UPDATE resources SET updated_at=now() WHERE id=$1", [sourceA.id]);
     await q.query(
