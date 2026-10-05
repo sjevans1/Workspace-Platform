@@ -66,6 +66,16 @@ import {
   project,
 } from "../../../packages/editor/server.ts";
 import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
+import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
+import {
+  beginLinkReconcileCursor,
+  decodeBacklinkPageCursor,
+  decodeLinkReconcileCursor,
+  encodeBacklinkPageCursor,
+  encodeLinkReconcileCursor,
+  newBacklinkPageCursor,
+  type BacklinkPageCursor,
+} from "../../../packages/editor/backlink-cursor.ts";
 import {
   createStorage,
   inspectFile,
@@ -132,6 +142,71 @@ const pageScope = (k: string, w = false) =>
     : ["workspace", "space"].includes(k)
       ? "workspace"
       : "pages") + (w ? ".write" : ".read");
+
+async function backlinkPage(
+  q: Query,
+  a: Actor,
+  targetId: string,
+  limit: number,
+  after?: Pick<BacklinkPageCursor, "after_at" | "after"> | null,
+) {
+  // Bound every request even if a conservative migration/backfill produced
+  // many stale candidates. SQL filters current ACL before candidate rows are
+  // materialized; canonical content remains the final disclosure authority.
+  const scanLimit = Math.min(500, Math.max(100, limit * 10));
+  const values: any[] = [a.tenant_id, targetId, a.user_id, a.role];
+  let continuationSql = "";
+  if (after) {
+    values.push(after.after_at, after.after);
+    continuationSql =
+      " AND (source.updated_at,source.id)<($" +
+      (values.length - 1) + "::timestamptz,$" + values.length + "::uuid)";
+  }
+  values.push(scanLimit + 1);
+  const candidates = (await q.query(
+    "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
+    " FROM resource_links link" +
+    " JOIN resources source ON source.tenant_id=link.tenant_id" +
+    " AND source.id=link.source_id" +
+    " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
+    " AND d.resource_id=source.id" +
+    " WHERE link.tenant_id=$1 AND link.target_id=$2" +
+    " AND source.deleted_at IS NULL" +
+    " AND source.kind IN ('page','record')" +
+    " AND workspace_can_read_resource(source.id,$3::uuid,$4::text)" +
+    continuationSql +
+    " ORDER BY source.updated_at DESC,source.id DESC LIMIT $" + values.length,
+    values,
+  )).rows;
+  const items: any[] = [];
+  let processed = 0;
+  let last: any = null;
+  const bounded = candidates.slice(0, scanLimit);
+  for (const source of bounded) {
+    processed++;
+    last = source;
+    if (!linkedWorkspaceResources(source.blocks).has(targetId)) continue;
+    if (a.scopes && !a.scopes.includes(pageScope(source.kind))) continue;
+    if (!(await access(q, a, source.id))) continue;
+    items.push({
+      id: source.id,
+      title: source.title,
+      kind: source.kind,
+      updated_at: source.updated_at,
+    });
+    if (items.length === limit) break;
+  }
+  const hasMore = processed < candidates.length;
+  return {
+    items,
+    hasMore,
+    scanned: processed,
+    after: hasMore && last ? {
+      after_at: new Date(last.updated_at).toISOString(),
+      after: last.id as string,
+    } : null,
+  };
+}
 const cookies = () => ({
   httpOnly: true,
   secure: process.env.COOKIE_SECURE !== "false",
