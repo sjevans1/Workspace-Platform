@@ -1479,6 +1479,76 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     "A different tenant cannot enumerate or repair this tenant's documents");
 });
 
+test("W13c scoped cursor metadata excludes source kinds outside token scope", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c scoped target",
+  });
+  const pageSource = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c scoped page source",
+  });
+  const recordSource = randomUUID();
+  const blocks = [{
+    type: "paragraph",
+    content: [{
+      type: "link",
+      href: "/?page=" + target.id,
+      content: [{ type: "text", text: "Scoped target", styles: {} }],
+    }],
+  }];
+  await ok("PATCH", `/pages/${pageSource.id}/content`, {
+    blocks, expected_revision: 1,
+  });
+  const serviceId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,'W13 Scoped Reader',true)",
+      [serviceId, serviceId + "@service.internal"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'guest')",
+      [owner.tenant, serviceId],
+    );
+    await q.query(
+      "INSERT INTO resources(id,tenant_id,parent_id,kind,title,updated_at)" +
+      " VALUES($1,$2,$3,'record','W13c hidden-by-scope record',now()-interval '1 second')",
+      [recordSource, owner.tenant, space.id],
+    );
+    await q.query(
+      "INSERT INTO page_documents(tenant_id,resource_id,blocks,plain_text,y_state)" +
+      " VALUES($1,$2,$3,'',decode('00','hex'))",
+      [owner.tenant, recordSource, JSON.stringify(blocks)],
+    );
+    await q.query(
+      "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3)",
+      [owner.tenant, recordSource, target.id],
+    );
+    for (const resourceId of [target.id, pageSource.id, recordSource])
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,1) ON CONFLICT(tenant_id,resource_id,principal_id)" +
+        " DO UPDATE SET level=EXCLUDED.level",
+        [owner.tenant, resourceId, serviceId],
+      );
+    await q.query("UPDATE resources SET updated_at=now() WHERE id=$1",
+      [pageSource.id]);
+  });
+  const serviceToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, serviceId, ["pages.read"], "W13 scoped reader"));
+  const response = await req("GET",
+    `/resources/${target.id}/backlinks/cursor?limit=1`,
+    undefined, null, { authorization: "Bearer " + serviceToken });
+  assert.equal(response.statusCode, 200, response.body);
+  const result = response.json();
+  assert.deepEqual(result.items.map((x:any)=>x.id), [pageSource.id]);
+  assert.equal(result.has_more, false,
+    "Scope-inaccessible record candidates must not influence continuation metadata");
+  assert.equal(result.next_cursor, null);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(recordSource),
+    "Scoped result/cursor metadata must not reveal excluded record IDs");
+  assert.doesNotMatch(JSON.stringify(result), /hidden-by-scope record/,
+    "Scoped result must not reveal excluded record titles");
+});
+
 test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async () => {
   const target = await ok("POST", "/resources", {
     kind: "page", parent_id: space.id, title: "W13c 10k backlink target",
