@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Star,
@@ -414,30 +414,41 @@ export default function Resource({
   );
 }
 function Backlinks({ id }: { id: string }) {
-  const [links, setLinks] = useState<any[]>([]),
-    [loading, setLoading] = useState(true),
-    [error, setError] = useState(false);
-  async function refresh() {
+  const [links,setLinks]=useState<any[]>([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState(false);
+  const request=useRef(0);
+  const refresh=useCallback(async()=>{
+    const generation=++request.current;
+    // Recheck authority on every focus/manual refresh. Previous titles must
+    // never remain visible while a new ACL decision is in flight.
+    setLinks([]);
+    setError(false);
     setLoading(true);
     try {
-      const rows = await api(`/resources/${id}/backlinks`);
-      setLinks(rows);
-      setError(false);
+      const current=await api(`/resources/${id}/backlinks`);
+      if(generation===request.current){
+        setLinks(current);
+        setError(false);
+      }
     } catch {
-      setError(true);
+      if(generation===request.current){
+        setLinks([]);
+        setError(true);
+      }
     } finally {
-      setLoading(false);
+      if(generation===request.current)setLoading(false);
     }
-  }
-  useEffect(() => {
-    let live = true;
-    setLoading(true);
-    api(`/resources/${id}/backlinks`)
-      .then((rows) => { if (live) { setLinks(rows); setError(false); } })
-      .catch(() => { if (live) setError(true); })
-      .finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
-  }, [id]);
+  },[id]);
+  useEffect(()=>{
+    void refresh();
+    const onFocus=()=>void refresh();
+    window.addEventListener("focus",onFocus);
+    return ()=>{
+      request.current++;
+      window.removeEventListener("focus",onFocus);
+    };
+  },[refresh]);
   return (
     <section className="backlinks" aria-label="Linked from">
       <div className="section-title">

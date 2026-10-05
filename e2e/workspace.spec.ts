@@ -1083,6 +1083,19 @@ test("users can link a page from the editor and follow its accessible backlink",
   const backlink = page.locator(".backlink-items")
     .getByRole("button", { name: sourceName, exact: true });
   await expect(backlink).toBeVisible();
+  // Simulate an authorization failure after the page has already displayed
+  // a backlink. Focus-based refresh must remove the old private title.
+  const deniedBacklinks="**/api/v1/resources/"+targetId+"/backlinks";
+  await page.route(deniedBacklinks,route=>route.fulfill({
+    status:403,contentType:"application/json",
+    body:JSON.stringify({error:"Access revoked"}),
+  }));
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await expect(backlink).toHaveCount(0);
+  await expect(page.getByText("Unable to load backlinks. Try refreshing.", { exact: true })).toBeVisible();
+  await page.unroute(deniedBacklinks);
+  await page.getByRole("button",{name:"Refresh links"}).click();
+  await expect(backlink).toBeVisible();
   await backlink.click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(sourceName);
 });
