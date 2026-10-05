@@ -1585,8 +1585,10 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
   const probeTarget = await ok("POST", "/resources", {
     kind: "page", parent_id: space.id, title: "W13c index probe target",
   });
-  const size = 10000, hiddenCount = 5000;
+  const size = 10000, hiddenCount = 5000, staleCount = 300;
   const ids = Array.from({ length: size }, () => randomUUID());
+  const staleIds = ids.slice(hiddenCount, hiddenCount + staleCount);
+  const restoreProbe = ids[hiddenCount + staleCount];
   const blocks = JSON.stringify([{
     type: "paragraph",
     content: [{
@@ -1594,6 +1596,10 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
       href: "/?page=" + target.id,
       content: [{ type: "text", text: "Target", styles: {} }],
     }],
+  }]);
+  const staleBlocks = JSON.stringify([{
+    type: "paragraph",
+    content: "Conservative migration candidate /?page=" + target.id,
   }]);
   const fixtureStarted = Date.now();
   try {
@@ -1613,6 +1619,11 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
         [ids, owner.tenant, blocks],
       );
       await q.query(
+        "UPDATE page_documents SET blocks=$2::jsonb" +
+        " WHERE resource_id=ANY($1::uuid[])",
+        [staleIds, staleBlocks],
+      );
+      await q.query(
         "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
         " SELECT $2::uuid,x.id,$3::text,0" +
         " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
@@ -1622,8 +1633,7 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
     });
     const fixtureMs = Date.now() - fixtureStarted;
 
-    const backfillStarted = Date.now();
-    await db.tenant(owner.tenant, (q) => q.query(
+    const backfillSql =
       "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
       " SELECT DISTINCT d.tenant_id,d.resource_id,(match.ids)[1]::uuid" +
       " FROM page_documents d" +
@@ -1635,18 +1645,79 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
       " AND linked_target.id=(match.ids)[1]::uuid" +
       " AND linked_target.kind IN ('page','record')" +
       " WHERE d.resource_id<>(match.ids)[1]::uuid" +
-      " ON CONFLICT DO NOTHING",
-    ));
+      " ON CONFLICT DO NOTHING";
+    let backfillLocks: any[] = [], concurrentReadMs = 0;
+    if (!pg.emulated) {
+      const planned = await db.tenant(owner.tenant, (q) =>
+        q.query("EXPLAIN (FORMAT JSON) " + backfillSql));
+      console.info("W13_BACKFILL_PLAN " +
+        JSON.stringify(planned.rows[0]["QUERY PLAN"]));
+    }
+    const backfillStarted = Date.now();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(backfillSql);
+      if (!pg.emulated) {
+        const pid = (await q.query("SELECT pg_backend_pid() pid")).rows[0].pid;
+        const readStarted = Date.now();
+        const evidence = await db.tenant(owner.tenant, async (probe) => {
+          const read = await probe.query(
+            "SELECT count(*)::int n FROM resource_links" +
+            " WHERE tenant_id=$1 AND target_id=$2",
+            [owner.tenant, target.id],
+          );
+          const locks = await probe.query(
+            "SELECT mode,granted FROM pg_locks" +
+            " WHERE pid=$1 AND relation='resource_links'::regclass",
+            [pid],
+          );
+          return { read: read.rows[0].n, locks: locks.rows };
+        });
+        concurrentReadMs = Date.now() - readStarted;
+        backfillLocks = evidence.locks;
+        assert.ok(concurrentReadMs < 5000,
+          "Migration backfill must not block concurrent backlink reads");
+        assert.ok(backfillLocks.some((lock:any) =>
+          lock.granted && lock.mode === "RowExclusiveLock"),
+          "Backfill evidence must capture the expected insert lock");
+        assert.ok(!backfillLocks.some((lock:any) =>
+          lock.granted && lock.mode === "AccessExclusiveLock"),
+          "Backfill must not require an AccessExclusive lock on resource_links");
+      }
+    });
     const backfillMs = Date.now() - backfillStarted;
     const edgeCount = await db.tenant(owner.tenant, (q) => one(q,
       "SELECT count(*)::int n FROM resource_links WHERE target_id=$1",
       [target.id]));
     assert.equal(edgeCount.n, size,
-      "Set-based W13 migration/backfill must materialize every canonical edge");
+      "Set-based W13 migration/backfill must materialize canonical and conservative candidates");
+    const staleEdgeCount = await db.tenant(owner.tenant, (q) => one(q,
+      "SELECT count(*)::int n FROM resource_links" +
+      " WHERE target_id=$1 AND source_id=ANY($2::uuid[])",
+      [target.id, staleIds]));
+    assert.equal(staleEdgeCount.n, staleCount,
+      "Conservative backfill must include false-positive candidates for read-time canonical filtering");
     assert.ok(backfillMs < 60000,
       "10k W13 backfill exceeded provisional 60s CI budget: " + backfillMs + "ms");
 
+    await ok("DELETE", `/resources/${restoreProbe}`);
+    const deletedPage = await ok("GET",
+      `/resources/${target.id}/backlinks?limit=40`, undefined, member);
+    assert.ok(!deletedPage.items.some((row:any)=>row.id===restoreProbe),
+      "Deleted hot-target sources must disappear without graph cleanup");
+    const retainedProbe = await db.tenant(owner.tenant, (q) => one(q,
+      "SELECT count(*)::int n FROM resource_links" +
+      " WHERE source_id=$1 AND target_id=$2",
+      [restoreProbe, target.id]));
+    assert.equal(retainedProbe.n, 1,
+      "Soft delete retains the candidate edge so restore stays cheap");
+    await ok("POST", `/resources/${restoreProbe}/restore`);
+    const restoredPage = await ok("GET",
+      `/resources/${target.id}/backlinks?limit=40`, undefined, member);
+    assert.ok(restoredPage.items.some((row:any)=>row.id===restoreProbe),
+      "Restored hot-target source must recover on the next read");
+
     const hidden = new Set(ids.slice(0, hiddenCount));
+    const stale = new Set(staleIds);
     const latencies: number[] = [];
     const gathered: string[] = [];
     let cursor: string | null = null;
@@ -1662,6 +1733,8 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
         "A hot target must return a full permission-filtered page");
       assert.ok(result.items.every((row:any)=>!hidden.has(row.id)),
         "Denied source IDs/titles may not enter backlink pages");
+      assert.ok(result.items.every((row:any)=>!stale.has(row.id)),
+        "Conservative false-positive candidates must never become disclosed backlinks");
       gathered.push(...result.items.map((row:any)=>row.id));
       cursor = result.next_cursor;
       assert.equal(result.has_more, true);
@@ -1678,9 +1751,12 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
     console.info("W13_10K_BACKLINK_BENCH " + JSON.stringify({
       source_pages: size,
       hidden_sources: hiddenCount,
-      visible_sources: size - hiddenCount,
+      stale_false_positive_candidates: staleCount,
+      visible_canonical_sources: size - hiddenCount - staleCount,
       fixture_ms: fixtureMs,
       migration_backfill_ms: backfillMs,
+      migration_concurrent_read_ms: concurrentReadMs,
+      migration_lock_modes: backfillLocks.map((lock:any)=>lock.mode).sort(),
       five_page_ms: pageMs,
       page_p50_ms: percentile(0.5),
       page_p95_ms: percentile(0.95),
