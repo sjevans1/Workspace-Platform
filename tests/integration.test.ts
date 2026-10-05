@@ -1373,10 +1373,16 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
   visible = await ok("GET", `/resources/${target.id}/backlinks`);
   assert.ok(visible.some((x:any)=>x.id===sourceA.id),
     "Restoring a source recovers its retained canonical backlink");
+  // Keep both sources inside the same JavaScript millisecond while preserving
+  // PostgreSQL microsecond ordering. A cursor that rounded through Date would
+  // skip the second source; the opaque cursor must retain the exact DB key.
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("UPDATE resources SET updated_at=now() WHERE id=$1", [sourceA.id]);
     await q.query(
-      "UPDATE resources SET updated_at=now()-interval '1 second' WHERE id=$1",
+      "UPDATE resources SET updated_at='2026-10-05T12:00:00.123900Z'::timestamptz WHERE id=$1",
+      [sourceA.id],
+    );
+    await q.query(
+      "UPDATE resources SET updated_at='2026-10-05T12:00:00.123800Z'::timestamptz WHERE id=$1",
       [sourceB.id],
     );
   });
@@ -1406,6 +1412,14 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     `/resources/${target.id}/backlinks/cursor?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
     undefined, member)).statusCode, 400,
     "A cursor cannot be replayed under a different page-size contract");
+
+  const preciseContinuation = await ok("GET",
+    `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, member);
+  assert.deepEqual(preciseContinuation.items.map((x:any)=>x.id), [sourceB.id],
+    "Microsecond-distinct backlinks in one JS millisecond must not be skipped");
+  assert.equal(preciseContinuation.has_more, false);
+  assert.equal(preciseContinuation.next_cursor, null);
 
   await permissionPatch(`/resources/${sourceB.id}/permissions`, {
     inherit: false, grants: [],
