@@ -148,7 +148,7 @@ async function backlinkPage(
   a: Actor,
   targetId: string,
   limit: number,
-  after?: Pick<BacklinkPageCursor, "after_at" | "after"> | null,
+  after?: Pick<BacklinkPageCursor, "after_us" | "after"> | null,
 ) {
   // Bound every request even if a conservative migration/backfill produced
   // many stale candidates. SQL filters current ACL before candidate rows are
@@ -167,14 +167,15 @@ async function backlinkPage(
   ];
   let continuationSql = "";
   if (after) {
-    values.push(after.after_at, after.after);
+    values.push(after.after_us, after.after);
     continuationSql =
-      " AND (source.updated_at,source.id)<($" +
-      (values.length - 1) + "::timestamptz,$" + values.length + "::uuid)";
+      " AND ((extract(epoch from source.updated_at)*1000000)::bigint,source.id)<($" +
+      (values.length - 1) + "::bigint,$" + values.length + "::uuid)";
   }
   values.push(scanLimit + 1);
   const candidates = (await q.query(
-    "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
+    "SELECT source.id,source.title,source.kind,source.updated_at," +
+    " ((extract(epoch from source.updated_at)*1000000)::bigint)::text updated_us,d.blocks" +
     " FROM resource_links link" +
     " JOIN resources source ON source.tenant_id=link.tenant_id" +
     " AND source.id=link.source_id" +
@@ -212,7 +213,7 @@ async function backlinkPage(
     hasMore,
     scanned: processed,
     after: hasMore && last ? {
-      after_at: new Date(last.updated_at).toISOString(),
+      after_us: String(last.updated_us),
       after: last.id as string,
     } : null,
   };
@@ -1214,7 +1215,7 @@ export async function buildApp(
           a.user_id,
           target.id,
           limit,
-          page.after.after_at,
+          page.after.after_us,
           page.after.after,
         ))
         : null;
