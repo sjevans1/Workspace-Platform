@@ -1101,7 +1101,7 @@ export async function buildApp(
       assert(["page", "record"].includes(target.kind), 404, "Page not found");
       // W13b: target lookup and ACL filtering happen in PostgreSQL before
       // pagination. Canonical block re-parse remains defense-in-depth and
-      // also self-heals any conservative migration-backfill false positive.
+      // keeps conservative migration/backfill false positives response-inert.
       const result:any[]=[];
       let cursor:{updated_at:any;id:string}|null=null;
       while(result.length<40){
