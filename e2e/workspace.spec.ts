@@ -3310,11 +3310,16 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
     await access.getByLabel("Principal",{exact:true}).selectOption(member.user.id);
     await access.getByLabel("Access level",{exact:true}).selectOption("1");
     await access.getByRole("button",{name:"Save access",exact:true}).click();
+    await expect(access).toBeHidden();
+    expect((await memberPage.request.get(commentsApi)).status()).toBe(200);
     await page.getByRole("button",{name:"Page actions"}).click();
     await page.getByRole("button",{name:"Manage access",exact:true}).click();
     await access.getByRole("button",{name:"Remove grant"}).click();
     await access.getByLabel("Inherit access from parent").uncheck();
     await access.getByRole("button",{name:"Save access",exact:true}).click();
+    // Save closes only after the permission PATCH has committed; use that
+    // user-visible boundary before making the revoked-principal request.
+    await expect(access).toBeHidden();
     expect((await memberPage.request.get(commentsApi)).status()).toBe(404);
     expect((await memberPage.request.get("/api/v1/notifications")).ok()).toBeTruthy();
     const notification=await (await memberPage.request.get("/api/v1/notifications")).json();
