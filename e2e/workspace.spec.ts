@@ -1075,7 +1075,7 @@ test("users can link a page from the editor and follow its accessible backlink",
   await expect.poll(async () => {
     const response = await page.request.get("/api/v1/resources/" + targetId + "/backlinks");
     if (!response.ok()) return false;
-    return (await response.json()).some((v: any) => v.id === sourceId);
+    return (await response.json()).items.some((v: any) => v.id === sourceId);
   }, { timeout: 12000 }).toBe(true);
   await page.goto("/?page=" + targetId);
   await expect(page.getByRole("heading", { name: "Linked from", exact: true }))
@@ -1085,7 +1085,7 @@ test("users can link a page from the editor and follow its accessible backlink",
   await expect(backlink).toBeVisible();
   // Simulate an authorization failure after the page has already displayed
   // a backlink. Focus-based refresh must remove the old private title.
-  const deniedBacklinks="**/api/v1/resources/"+targetId+"/backlinks/cursor*";
+  const deniedBacklinks="**/api/v1/resources/"+targetId+"/backlinks*";
   await page.route(deniedBacklinks,route=>route.fulfill({
     status:403,contentType:"application/json",
     body:JSON.stringify({error:"Access revoked"}),
@@ -1105,7 +1105,7 @@ test("users can link a page from the editor and follow its accessible backlink",
   await expect(page.getByRole("status").filter({hasText:"Saved"})).toBeVisible();
   await expect.poll(async()=>{
     const response=await page.request.get(
-      "/api/v1/resources/"+targetId+"/backlinks/cursor?limit=20",
+      "/api/v1/resources/"+targetId+"/backlinks?limit=20",
     );
     if(!response.ok())return false;
     return !(await response.json()).items.some((v:any)=>v.id===sourceId);
@@ -1141,7 +1141,7 @@ test("W13c browser paginates backlinks and clears them on continuation failure",
   expect(targetResponse.ok(), await targetResponse.text()).toBeTruthy();
   const target = await targetResponse.json();
   const firstId=randomUUID(), secondId=randomUUID();
-  const routePattern="**/api/v1/resources/"+target.id+"/backlinks/cursor*";
+  const routePattern="**/api/v1/resources/"+target.id+"/backlinks*";
   await page.route(routePattern,route=>{
     const url=new URL(route.request().url());
     const cursor=url.searchParams.get("cursor");
