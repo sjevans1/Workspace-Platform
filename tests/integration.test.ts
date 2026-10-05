@@ -1536,7 +1536,7 @@ test("W13c scoped cursor metadata excludes source kinds outside token scope", as
       "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3)",
       [owner.tenant, recordSource, target.id],
     );
-    for (const resourceId of [target.id, pageSource.id, recordSource])
+    for (const resourceId of [root.id, target.id, pageSource.id, recordSource])
       await q.query(
         "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
         " VALUES($1,$2,$3,1) ON CONFLICT(tenant_id,resource_id,principal_id)" +
