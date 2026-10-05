@@ -1180,17 +1180,6 @@ export async function buildApp(
   route(
     "GET",
     "/resources/:id/backlinks",
-    "List first readable backlink page",
-    async (q, a, r) => {
-      const target = await requireAccess(q, a, id(r));
-      scope(a, pageScope(target.kind));
-      assert(["page", "record"].includes(target.kind), 404, "Page not found");
-      return (await backlinkPage(q, a, target.id, 40)).items;
-    },
-  );
-  route(
-    "GET",
-    "/resources/:id/backlinks/cursor",
     "List readable backlinks with opaque bounded pagination",
     async (q, a, r) => {
       const target = await requireAccess(q, a, id(r));
