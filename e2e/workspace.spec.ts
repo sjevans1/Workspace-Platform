@@ -1092,7 +1092,7 @@ test("users can link a page from the editor and follow its accessible backlink",
   }));
   await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
   await expect(backlink).toHaveCount(0);
-  await expect(page.getByRole("alert")).toContainText("Unable to load backlinks");
+  await expect(page.getByText("Unable to load backlinks. Try refreshing.", { exact: true })).toBeVisible();
   await page.unroute(deniedBacklinks);
   await page.getByRole("button",{name:"Refresh links"}).click();
   await expect(backlink).toBeVisible();
