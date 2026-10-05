@@ -1402,6 +1402,10 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     `/resources/${target.id}/backlinks/cursor?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
     undefined, owner)).statusCode, 400,
     "A cursor is bound to the issuing principal");
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks/cursor?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, member)).statusCode, 400,
+    "A cursor cannot be replayed under a different page-size contract");
 
   await permissionPatch(`/resources/${sourceB.id}/permissions`, {
     inherit: false, grants: [],
