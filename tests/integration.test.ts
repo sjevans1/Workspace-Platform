@@ -1242,6 +1242,12 @@ test("page backlinks use live canonical links and never reveal restricted source
   assert.equal((await db.tenant(other.tenant,(q)=>q.query(
     "SELECT 1 FROM resource_links WHERE target_id=$1",[target.id],
   ))).rowCount,0,"Tenant RLS hides the link graph across organisations");
+  // Simulate a conservative migration/backfill false positive. The indexed
+  // row is only a candidate: canonical blocks remain the disclosure authority.
+  await db.tenant(owner.tenant,(q)=>q.query(
+    "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+    [owner.tenant,textOnly.id,target.id],
+  ));
   let ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
   assert.deepEqual(
     ownerBacklinks.map((x: any) => x.id).sort(),
