@@ -3316,9 +3316,8 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
     await access.getByRole("button",{name:"Remove grant"}).click();
     await access.getByLabel("Inherit access from parent").uncheck();
     await access.getByRole("button",{name:"Save access",exact:true}).click();
-    // The Save button's React handler awaits the ACL PATCH before closing.
-    // Playwright's click itself does not await that Promise, so use the modal
-    // disappearance as the user-visible commit boundary before access checks.
+    // Save closes only after the permission PATCH has committed; use that
+    // user-visible boundary before making the revoked-principal request.
     await expect(access).toBeHidden();
     expect((await memberPage.request.get(commentsApi)).status()).toBe(404);
     expect((await memberPage.request.get("/api/v1/notifications")).ok()).toBeTruthy();
@@ -3414,4 +3413,35 @@ test("W12b browser: read/unread persisted across reload and unread filter",async
   await expect(retained.getByRole("button",{name:/^Mark read:/})).toBeVisible();
   const apiResult=await (await page.request.get("/api/v1/notifications")).json();
   expect(apiResult.find((n:any)=>n.resource_id===target.id)?.read_at).toBeNull();
+});
+
+
+test("W12d browser: user controls mention and reply alerts with persisted preferences",async({page})=>{
+  test.setTimeout(90000);
+  await login(page);
+  await page.goto("/");
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Inbox"})).toBeVisible();
+  const mentions=page.getByRole("checkbox",{name:"Mention alerts"});
+  const replies=page.getByRole("checkbox",{name:"Reply alerts"});
+  await expect(mentions).toBeChecked();
+  await expect(replies).toBeChecked();
+  await mentions.uncheck();
+  await replies.uncheck();
+  await page.getByRole("button",{name:"Save preferences"}).click();
+  await expect(page.getByRole("button",{name:"Save preferences"})).toBeEnabled();
+  await page.reload();
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  await expect(mentions).not.toBeChecked();
+  await expect(replies).not.toBeChecked();
+  const response=await page.request.get("/api/v1/notification-preferences");
+  expect(response.ok(),await response.text()).toBeTruthy();
+  expect(await response.json()).toEqual({
+    mentions_enabled:false,replies_enabled:false,
+  });
+  await mentions.check();
+  await replies.check();
+  await page.getByRole("button",{name:"Save preferences"}).click();
+  await expect(mentions).toBeChecked();
+  await expect(replies).toBeChecked();
 });
