@@ -35,7 +35,6 @@ CROSS JOIN LATERAL regexp_matches(
 JOIN resources target
   ON target.tenant_id=d.tenant_id
  AND target.id=(match.ids)[1]::uuid
- AND target.deleted_at IS NULL
  AND target.kind IN ('page','record')
 WHERE d.resource_id<>(match.ids)[1]::uuid
 ON CONFLICT DO NOTHING;
