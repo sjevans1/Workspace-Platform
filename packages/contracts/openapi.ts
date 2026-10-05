@@ -129,27 +129,6 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
   },
   "GET /resources/:id/backlinks": {
     params: idParams,
-    response: {
-      200: {
-        type: "array",
-        maxItems: 40,
-        items: {
-          type: "object",
-          required: ["id", "title", "kind", "updated_at"],
-          additionalProperties: false,
-          properties: {
-            id: uuid,
-            title: { type: "string" },
-            kind: { enum: ["page", "record"] },
-            updated_at: dateTime,
-          },
-        },
-      },
-      ...errors,
-    },
-  },
-  "GET /resources/:id/backlinks/cursor": {
-    params: idParams,
     querystring: {
       type: "object",
       properties: {
@@ -164,17 +143,21 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
         required: ["items", "next_cursor", "has_more"],
         additionalProperties: false,
         properties: {
-          items: { type: "array", maxItems: 40, items: {
-          type: "object",
-          required: ["id", "title", "kind", "updated_at"],
-          additionalProperties: false,
-          properties: {
-            id: uuid,
-            title: { type: "string" },
-            kind: { enum: ["page", "record"] },
-            updated_at: dateTime,
+          items: {
+            type: "array",
+            maxItems: 40,
+            items: {
+              type: "object",
+              required: ["id", "title", "kind", "updated_at"],
+              additionalProperties: false,
+              properties: {
+                id: uuid,
+                title: { type: "string" },
+                kind: { enum: ["page", "record"] },
+                updated_at: dateTime,
+              },
+            },
           },
-        } },
           next_cursor: {
             anyOf: [
               { type: "string", minLength: 1, maxLength: 2048 },
