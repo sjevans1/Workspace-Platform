@@ -1242,11 +1242,25 @@ test("page backlinks use live canonical links and never reveal restricted source
   assert.equal((await db.tenant(other.tenant,(q)=>q.query(
     "SELECT 1 FROM resource_links WHERE target_id=$1",[target.id],
   ))).rowCount,0,"Tenant RLS hides the link graph across organisations");
-  const ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
+  let ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
   assert.deepEqual(
     ownerBacklinks.map((x: any) => x.id).sort(),
     [source.id, privateSource.id].sort(),
   );
+  await linkOk("DELETE",`/resources/${target.id}`);
+  assert.equal((await linkReq("GET",
+    `/resources/${target.id}/backlinks`)).statusCode,404,
+    "Trashed target is not discoverable");
+  assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
+    "SELECT count(*)::int count FROM resource_links WHERE target_id=$1",
+    [target.id],
+  ))).rows[0].count,2,
+    "Soft-delete retains canonical graph for a possible restore");
+  await linkOk("POST",`/resources/${target.id}/restore`);
+  ownerBacklinks=await linkOk("GET",`/resources/${target.id}/backlinks`);
+  assert.deepEqual(ownerBacklinks.map((x:any)=>x.id).sort(),
+    [source.id,privateSource.id].sort(),
+    "Restoring target restores backlink visibility without source rewrites");
   const policy = await linkOk("GET",
     `/resources/${privateSource.id}/permissions`);
   await linkOk("PATCH", `/resources/${privateSource.id}/permissions`, {
