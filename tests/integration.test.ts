@@ -1428,6 +1428,16 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
   assert.deepEqual(beforeRepair.map((x:any)=>x.id), [sourceB.id],
     "Read path stays side-effect free: missing canonical edge is not synthesized and stale edge is inert");
 
+  const firstRepairPage = await ok("POST", "/resource-links/reconcile", {
+    limit: 1,
+  });
+  assert.equal(firstRepairPage.has_more, true);
+  assert.equal(typeof firstRepairPage.next_cursor, "string");
+  assert.equal((await req("POST", "/resource-links/reconcile", {
+    limit: 1, cursor: firstRepairPage.next_cursor,
+  }, other)).statusCode, 400,
+  "Rebuild continuation is tenant/principal bound");
+
   let reconcileCursor: string | null = null;
   let pages = 0;
   do {
