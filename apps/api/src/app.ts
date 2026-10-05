@@ -2776,6 +2776,28 @@ function dataRoutes(
       ),
   );
 
+  route(
+    "PATCH",
+    "/notifications/:notice",
+    "Set own visible notification read state",
+    async (q, a, r) => {
+      const noticeId=id(r,"notice");
+      const v=body(z.object({read:z.boolean()}).strict(),r);
+      const notice=await one(q,
+        "SELECT id,resource_id FROM notifications WHERE id=$1 AND user_id=$2 FOR UPDATE",
+        [noticeId,a.user_id]);
+      assert(notice,404,"Notification not found");
+      // An old notification identifier never conveys a lasting capability.
+      // Reauthorize against the resource on every mutation, just like GET.
+      await requireAccess(q,a,notice.resource_id);
+      const updated=await one(q,
+        "UPDATE notifications SET read_at=CASE WHEN $3::boolean THEN COALESCE(read_at,now()) ELSE NULL END WHERE id=$1 AND user_id=$2 RETURNING id,read_at",
+        [noticeId,a.user_id,v.read]);
+      assert(updated,404,"Notification not found");
+      return updated;
+    },
+  );
+
   // T2: registrations are inert. No live sign-in or logout route reads this
   // table; enabling a tenant provider requires a separately reviewed T3/T4.
   route(

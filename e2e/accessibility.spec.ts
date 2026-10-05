@@ -8,7 +8,9 @@ let verifiedCookies: Awaited<ReturnType<BrowserContext["cookies"]>> = [];
 
 async function login(page: Page) {
   if (verifiedCookies.length) await page.context().addCookies(verifiedCookies);
-  await page.goto("/");
+  // Live collaboration and background resources may outlive DOM readiness.
+  // Firefox navigation should await interactive HTML, not every subresource.
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("h1")).toBeVisible();
   if (
     await page

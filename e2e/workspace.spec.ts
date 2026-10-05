@@ -3325,3 +3325,88 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
   }finally{await context.close();}
 });
 
+test("W12a browser: new notification inbox filters mentions and rechecks destination",async ({page})=>{
+  test.setTimeout(90000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"Inbox space "+randomUUID()},
+  });
+  expect(spaceResponse.ok(),await spaceResponse.text()).toBeTruthy();
+  const space=await spaceResponse.json();
+  const title="Mention inbox "+randomUUID();
+  const create=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,title},
+  });
+  expect(create.ok(),await create.text()).toBeTruthy();
+  const resource=await create.json();
+  const mention=await page.request.post("/api/v1/resources/"+resource.id+"/comments",{
+    headers,data:{body:"Please review @{"+me.user.id+"}"},
+  });
+  expect(mention.ok(),await mention.text()).toBeTruthy();
+  await page.goto("/");
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Inbox"})).toBeVisible();
+  const filter=page.getByRole("textbox",{name:"Filter notifications"});
+  const item=page.getByRole("button",{name:/Open notification:.*mentioned you/}).filter({
+    hasText:title,
+  });
+  await expect(item).toBeVisible();
+  await filter.fill("Definitely no such message "+randomUUID());
+  await expect(item).toHaveCount(0);
+  await expect(page.getByText("No notifications match your filter.")).toBeVisible();
+  await filter.fill(title);
+  await expect(item).toBeVisible();
+  await page.getByRole("button",{name:"Refresh",exact:true}).click();
+  await expect(item).toBeVisible();
+  await item.click();
+  await expect(page.getByRole("textbox",{name:"Page title"})).toHaveValue(title);
+  const seen=await (await page.request.get("/api/v1/notifications")).json();
+  expect(seen.some((notice:any)=>notice.resource_id===resource.id)).toBe(true);
+});
+
+test("W12b browser: read/unread persisted across reload and unread filter",async ({page})=>{
+  test.setTimeout(90000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceRes=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,title:"Receipt space "+randomUUID()},
+  });
+  expect(spaceRes.ok(),await spaceRes.text()).toBeTruthy();
+  const space=await spaceRes.json();
+  const name="Read receipt "+randomUUID();
+  const pageRes=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,title:name},
+  });
+  expect(pageRes.ok(),await pageRes.text()).toBeTruthy();
+  const target=await pageRes.json();
+  const mention=await page.request.post("/api/v1/resources/"+target.id+"/comments",{
+    headers,data:{body:"Receipt please @{"+me.user.id+"}"},
+  });
+  expect(mention.ok(),await mention.text()).toBeTruthy();
+  await page.goto("/");
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  const row=page.locator(".notification-inbox-row").filter({hasText:name});
+  await expect(row).toBeVisible();
+  const unread=page.getByRole("checkbox",{name:"Unread only"});
+  await unread.check();
+  await expect(row).toBeVisible();
+  await row.getByRole("button",{name:/^Mark read:/}).click();
+  await expect(row).toHaveCount(0);
+  await unread.uncheck();
+  await expect(row).toBeVisible();
+  await expect(row.getByRole("button",{name:/^Mark unread:/})).toBeVisible();
+  await page.reload();
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  const retained=page.locator(".notification-inbox-row").filter({hasText:name});
+  await expect(retained.getByRole("button",{name:/^Mark unread:/})).toBeVisible();
+  await retained.getByRole("button",{name:/^Mark unread:/}).click();
+  await expect(retained.getByRole("button",{name:/^Mark read:/})).toBeVisible();
+  const apiResult=await (await page.request.get("/api/v1/notifications")).json();
+  expect(apiResult.find((n:any)=>n.resource_id===target.id)?.read_at).toBeNull();
+});

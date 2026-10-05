@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Home,
+  Bell,
   Search,
   Clock,
   Star,
@@ -22,6 +23,7 @@ import {
 import { api, ApiError, setCsrf, notify, run, changed, go, icon, date } from "../lib/api";
 import { Modal, Empty, Spinner, Field } from "./common";
 import Resource from "./Resource";
+import NotificationInbox from "./NotificationInbox";
 import Settings from "./Settings";
 import { useAppearance } from "../lib/appearance";
 export default function Workspace() {
@@ -193,6 +195,7 @@ export default function Workspace() {
   const nav = [
     ["home", "Home", Home],
     ["recent", "Recent", Clock],
+    ["inbox", "Inbox", Bell],
     ["favourites", "Favourites", Star],
     ["templates", "Templates", LayoutTemplate],
   ] as const;
@@ -385,6 +388,8 @@ export default function Workspace() {
               create={setCreate}
               theme={resolvedTheme}
             />
+          ) : screen === "inbox" ? (
+            <NotificationInbox />
           ) : screen === "settings" ? (
             <Settings me={me} reload={init} appearance={appearance} setAppearance={setAppearance} />
           ) : (
@@ -394,6 +399,7 @@ export default function Workspace() {
               root={root}
               version={version}
               create={setCreate}
+              navigate={navigate}
             />
           )}
         </div>
@@ -494,12 +500,14 @@ function Dashboard({
   root,
   version,
   create,
+  navigate,
 }: {
   screen: string;
   me: any;
   root: string;
   version: number;
   create: (v: any) => void;
+  navigate: (screen: string) => void;
 }) {
   const [items, setItems] = useState<any[]>([]),
     [spaces, setSpaces] = useState<any[]>([]),
@@ -713,6 +721,9 @@ function Dashboard({
                 <>
                   <div className="section-title">
                     <h2>For your attention</h2>
+                    <button type="button" className="text-button" onClick={() => navigate("inbox")}>
+                      View all <ArrowUpRight size={14}/>
+                    </button>
                   </div>
                   {notes.slice(0, 5).map((n) => (
                     <button
