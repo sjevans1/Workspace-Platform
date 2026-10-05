@@ -23,7 +23,6 @@ export async function syncWorkspaceResourceLinks(
     "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
     " SELECT $1,$2,target.id FROM resources target" +
     " WHERE target.tenant_id=$1 AND target.id=ANY($3::uuid[])" +
-    " AND target.deleted_at IS NULL" +
     " AND target.kind IN ('page','record')" +
     " ON CONFLICT DO NOTHING",
     [tenantId,sourceId,targets],
