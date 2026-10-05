@@ -1232,6 +1232,16 @@ test("page backlinks use live canonical links and never reveal restricted source
     }] }],
     expected_revision: 1,
   });
+  const indexed = (await db.tenant(owner.tenant,(q)=>q.query(
+    "SELECT source_id,target_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+    [target.id],
+  ))).rows;
+  assert.deepEqual(indexed.map((x:any)=>x.source_id).sort(),
+    [source.id,privateSource.id].sort(),
+    "Only canonical internal links enter the materialized graph");
+  assert.equal((await db.tenant(other.tenant,(q)=>q.query(
+    "SELECT 1 FROM resource_links WHERE target_id=$1",[target.id],
+  ))).rowCount,0,"Tenant RLS hides the link graph across organisations");
   const ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
   assert.deepEqual(
     ownerBacklinks.map((x: any) => x.id).sort(),
@@ -1262,6 +1272,27 @@ test("page backlinks use live canonical links and never reveal restricted source
   const after = await linkOk("GET", `/resources/${target.id}/backlinks`,
     undefined, member);
   assert.deepEqual(after, []);
+  assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
+    "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
+    [source.id,target.id],
+  ))).rowCount,0,"Content replacement removes the stale graph edge");
+
+  // The version written before link removal contains the canonical link.
+  // Restoring it must restore the graph transactionally as well.
+  const versions=await linkOk("GET",`/pages/${source.id}/versions`);
+  const linkedVersion=versions.find((v:any)=>v.revision===2);
+  assert.ok(linkedVersion);
+  await linkOk("POST",
+    `/pages/${source.id}/versions/${linkedVersion.id}/restore`,{
+      expected_revision:3,
+    });
+  assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
+    "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
+    [source.id,target.id],
+  ))).rowCount,1,"Version restore restores the canonical graph edge");
+  const restored=await linkOk("GET",`/resources/${target.id}/backlinks`,
+    undefined,member);
+  assert.deepEqual(restored.map((x:any)=>x.id),[source.id]);
   } finally {
     await linksApp.close();
   }
