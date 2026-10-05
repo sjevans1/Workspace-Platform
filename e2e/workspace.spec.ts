@@ -3310,11 +3310,16 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
     await access.getByLabel("Principal",{exact:true}).selectOption(member.user.id);
     await access.getByLabel("Access level",{exact:true}).selectOption("1");
     await access.getByRole("button",{name:"Save access",exact:true}).click();
+    await expect(access).toBeHidden();
     await page.getByRole("button",{name:"Page actions"}).click();
     await page.getByRole("button",{name:"Manage access",exact:true}).click();
     await access.getByRole("button",{name:"Remove grant"}).click();
     await access.getByLabel("Inherit access from parent").uncheck();
     await access.getByRole("button",{name:"Save access",exact:true}).click();
+    // The Save button's React handler awaits the ACL PATCH before closing.
+    // Playwright's click itself does not await that Promise, so use the modal
+    // disappearance as the user-visible commit boundary before access checks.
+    await expect(access).toBeHidden();
     expect((await memberPage.request.get(commentsApi)).status()).toBe(404);
     expect((await memberPage.request.get("/api/v1/notifications")).ok()).toBeTruthy();
     const notification=await (await memberPage.request.get("/api/v1/notifications")).json();
