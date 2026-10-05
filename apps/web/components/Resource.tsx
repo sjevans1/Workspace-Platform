@@ -428,6 +428,7 @@ function Backlinks({ id }: { id: string }) {
     setLinks([]);
     setNextCursor(null);
     setHasMore(false);
+    setLoadingMore(false);
     setError(false);
     setLoading(true);
     try {
