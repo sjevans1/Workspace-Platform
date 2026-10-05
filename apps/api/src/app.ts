@@ -1099,30 +1099,59 @@ export async function buildApp(
       const target = await requireAccess(q, a, id(r));
       scope(a, pageScope(target.kind));
       assert(["page", "record"].includes(target.kind), 404, "Page not found");
-      // Bounded read-only scan of links in canonical persisted blocks.
-      // A UUID mentioned in plain text or an external URL is not a link.
-      const candidates = (
-        await q.query(
+      // W13b: target lookup and ACL filtering happen in PostgreSQL before
+      // pagination. Canonical block re-parse remains defense-in-depth and
+      // also self-heals any conservative migration-backfill false positive.
+      const result:any[]=[];
+      let cursor:{updated_at:any;id:string}|null=null;
+      while(result.length<40){
+        const values:any[]=[a.tenant_id,target.id,a.user_id,a.role];
+        let after="";
+        if(cursor){
+          values.push(cursor.updated_at,cursor.id);
+          after=" AND (source.updated_at,source.id)<($" +
+            (values.length-1) + "::timestamptz,$" + values.length + "::uuid)";
+        }
+        values.push(100);
+        const candidates=(await q.query(
           "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
-          " FROM page_documents d JOIN resources source" +
-          " ON source.id=d.resource_id AND source.tenant_id=d.tenant_id" +
-          " WHERE d.tenant_id=$1 AND source.id<>$2" +
-          " AND source.deleted_at IS NULL AND source.kind IN ('page','record')" +
-          " AND d.blocks::text LIKE $3" +
-          " ORDER BY source.updated_at DESC,source.id DESC LIMIT 300",
-          [a.tenant_id, target.id, "%" + target.id + "%"],
-        )
-      ).rows;
-      const result = [];
-      for (const source of candidates) {
-        if (!linkedWorkspaceResources(source.blocks).has(target.id)) continue;
-        if (a.scopes && !a.scopes.includes(pageScope(source.kind))) continue;
-        if (!(await access(q, a, source.id))) continue;
-        result.push({
-          id: source.id, title: source.title,
-          kind: source.kind, updated_at: source.updated_at,
-        });
-        if (result.length === 40) break;
+          " FROM resource_links link" +
+          " JOIN resources source ON source.tenant_id=link.tenant_id" +
+          " AND source.id=link.source_id" +
+          " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
+          " AND d.resource_id=source.id" +
+          " WHERE link.tenant_id=$1 AND link.target_id=$2" +
+          " AND source.deleted_at IS NULL" +
+          " AND source.kind IN ('page','record')" +
+          " AND workspace_can_read_resource(source.id,$3::uuid,$4::text)" +
+          after +
+          " ORDER BY source.updated_at DESC,source.id DESC LIMIT $" + values.length,
+          values,
+        )).rows;
+        if(!candidates.length)break;
+        for(const source of candidates){
+          if(!linkedWorkspaceResources(source.blocks).has(target.id)){
+            await q.query(
+              "DELETE FROM resource_links WHERE source_id=$1 AND target_id=$2",
+              [source.id,target.id],
+            );
+            continue;
+          }
+          if(a.scopes && !a.scopes.includes(pageScope(source.kind)))continue;
+          // Independent application-side recheck protects against any future
+          // SQL predicate drift or ACL change inside this transaction.
+          if(!(await access(q,a,source.id)))continue;
+          result.push({
+            id:source.id,title:source.title,
+            kind:source.kind,updated_at:source.updated_at,
+          });
+          if(result.length===40)break;
+        }
+        cursor={
+          updated_at:candidates.at(-1).updated_at,
+          id:candidates.at(-1).id,
+        };
+        if(candidates.length<100)break;
       }
       return result;
     },
