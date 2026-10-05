@@ -1257,11 +1257,13 @@ test("page backlinks use live canonical links and never reveal restricted source
   assert.equal((await linkReq("GET",
     `/resources/${target.id}/backlinks`)).statusCode,404,
     "Trashed target is not discoverable");
-  assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
-    "SELECT count(*)::int count FROM resource_links WHERE target_id=$1",
+  const retainedCandidates=(await db.tenant(owner.tenant,(q)=>q.query(
+    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
     [target.id],
-  ))).rows[0].count,2,
-    "Soft-delete retains canonical graph for a possible restore");
+  ))).rows.map((x:any)=>x.source_id).sort();
+  assert.deepEqual(retainedCandidates,
+    [source.id,privateSource.id,textOnly.id].sort(),
+    "Soft-delete retains graph candidates; stale index edges stay inert and GET remains read-only");
   await linkOk("POST",`/resources/${target.id}/restore`);
   ownerBacklinks=await linkOk("GET",`/resources/${target.id}/backlinks`);
   assert.deepEqual(ownerBacklinks.map((x:any)=>x.id).sort(),
