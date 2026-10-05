@@ -1130,13 +1130,10 @@ export async function buildApp(
         )).rows;
         if(!candidates.length)break;
         for(const source of candidates){
-          if(!linkedWorkspaceResources(source.blocks).has(target.id)){
-            await q.query(
-              "DELETE FROM resource_links WHERE source_id=$1 AND target_id=$2",
-              [source.id,target.id],
-            );
-            continue;
-          }
+          // The migration backfill is deliberately conservative. A stale or
+          // false-positive index edge is never authority: canonical blocks
+          // must still contain the exact Workspace link before disclosure.
+          if(!linkedWorkspaceResources(source.blocks).has(target.id))continue;
           if(a.scopes && !a.scopes.includes(pageScope(source.kind)))continue;
           // Independent application-side recheck protects against any future
           // SQL predicate drift or ACL change inside this transaction.
