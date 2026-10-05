@@ -1466,6 +1466,145 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     "A different tenant cannot enumerate or repair this tenant's documents");
 });
 
+test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c 10k backlink target",
+  });
+  const probeTarget = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c index probe target",
+  });
+  const size = 10000, hiddenCount = 5000;
+  const ids = Array.from({ length: size }, () => randomUUID());
+  const blocks = JSON.stringify([{
+    type: "paragraph",
+    content: [{
+      type: "link",
+      href: "/?page=" + target.id,
+      content: [{ type: "text", text: "Target", styles: {} }],
+    }],
+  }]);
+  const fixtureStarted = Date.now();
+  try {
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position,updated_at)" +
+        " SELECT x.id,$2::uuid,$3::uuid,'page'," +
+        " 'W13c source '||x.n::text,x.n::float8," +
+        " now()-(x.n::text||' milliseconds')::interval" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+        [ids, owner.tenant, space.id],
+      );
+      await q.query(
+        "INSERT INTO page_documents(tenant_id,resource_id,blocks,plain_text,y_state)" +
+        " SELECT $2::uuid,x.id,$3::jsonb,'',decode('00','hex')" +
+        " FROM unnest($1::uuid[]) AS x(id)",
+        [ids, owner.tenant, blocks],
+      );
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " SELECT $2::uuid,x.id,$3::text,0" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+        " WHERE x.n<=$4",
+        [ids, owner.tenant, member.id, hiddenCount],
+      );
+    });
+    const fixtureMs = Date.now() - fixtureStarted;
+
+    const backfillStarted = Date.now();
+    await db.tenant(owner.tenant, (q) => q.query(
+      "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
+      " SELECT DISTINCT d.tenant_id,d.resource_id,(match.ids)[1]::uuid" +
+      " FROM page_documents d" +
+      " CROSS JOIN LATERAL regexp_matches(" +
+      " d.blocks::text," +
+      " '[/]?[?]page=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})','g'" +
+      " ) AS match(ids)" +
+      " JOIN resources linked_target ON linked_target.tenant_id=d.tenant_id" +
+      " AND linked_target.id=(match.ids)[1]::uuid" +
+      " AND linked_target.kind IN ('page','record')" +
+      " WHERE d.resource_id<>(match.ids)[1]::uuid" +
+      " ON CONFLICT DO NOTHING",
+    ));
+    const backfillMs = Date.now() - backfillStarted;
+    const edgeCount = await db.tenant(owner.tenant, (q) => one(q,
+      "SELECT count(*)::int n FROM resource_links WHERE target_id=$1",
+      [target.id]));
+    assert.equal(edgeCount.n, size,
+      "Set-based W13 migration/backfill must materialize every canonical edge");
+    assert.ok(backfillMs < 60000,
+      "10k W13 backfill exceeded provisional 60s CI budget: " + backfillMs + "ms");
+
+    const hidden = new Set(ids.slice(0, hiddenCount));
+    const latencies: number[] = [];
+    const gathered: string[] = [];
+    let cursor: string | null = null;
+    const pageStarted = Date.now();
+    for (let segment = 0; segment < 5; segment++) {
+      const started = Date.now();
+      const result = await ok("GET",
+        `/resources/${target.id}/backlinks/cursor?limit=40` +
+        (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+        undefined, member);
+      latencies.push(Date.now() - started);
+      assert.equal(result.items.length, 40,
+        "A hot target must return a full permission-filtered page");
+      assert.ok(result.items.every((row:any)=>!hidden.has(row.id)),
+        "Denied source IDs/titles may not enter backlink pages");
+      gathered.push(...result.items.map((row:any)=>row.id));
+      cursor = result.next_cursor;
+      assert.equal(result.has_more, true);
+      assert.equal(typeof cursor, "string");
+    }
+    assert.equal(gathered.length, 200);
+    assert.equal(new Set(gathered).size, 200,
+      "Stable backlink cursor pages must not duplicate unchanged sources");
+    const pageMs = Date.now() - pageStarted;
+    latencies.sort((a,b)=>a-b);
+    const percentile = (p:number) =>
+      latencies[Math.min(latencies.length - 1,
+        Math.ceil(p * latencies.length) - 1)];
+    console.info("W13_10K_BACKLINK_BENCH " + JSON.stringify({
+      source_pages: size,
+      hidden_sources: hiddenCount,
+      visible_sources: size - hiddenCount,
+      fixture_ms: fixtureMs,
+      migration_backfill_ms: backfillMs,
+      five_page_ms: pageMs,
+      page_p50_ms: percentile(0.5),
+      page_p95_ms: percentile(0.95),
+      returned: gathered.length,
+    }));
+    assert.ok(pageMs < 30000,
+      "10k W13 paginated ACL workload exceeded provisional 30s CI budget");
+
+    // Use a highly selective target to prove the target/source ordering index
+    // is available to the exact lookup predicate used by the API.
+    await db.tenant(owner.tenant, (q) => q.query(
+      "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
+      " VALUES($1,$2,$3)",
+      [owner.tenant, ids[hiddenCount], probeTarget.id],
+    ));
+    if (!pg.emulated) {
+      const explained = await db.tenant(owner.tenant, (q) => q.query(
+        "EXPLAIN (FORMAT JSON) SELECT source_id FROM resource_links" +
+        " WHERE tenant_id=$1 AND target_id=$2" +
+        " ORDER BY source_id LIMIT 100",
+        [owner.tenant, probeTarget.id],
+      ));
+      const plan = JSON.stringify(explained.rows[0]["QUERY PLAN"]);
+      assert.match(plan, /resource_links_target/,
+        "PostgreSQL must be able to use the W13 target lookup index");
+      console.info("W13_LINK_INDEX_PLAN " + plan);
+    }
+  } finally {
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query("DELETE FROM resources WHERE id=ANY($1::uuid[])", [ids]);
+      await q.query("DELETE FROM resources WHERE id=ANY($1::uuid[])",
+        [[target.id, probeTarget.id]]);
+    });
+  }
+});
+
 test("typed records, optimistic concurrency, saved filters and full bodies", async () => {
   database = await ok("POST", "/resources", {
     kind: "database",
