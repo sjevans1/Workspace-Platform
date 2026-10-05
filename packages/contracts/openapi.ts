@@ -148,6 +148,73 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
       ...errors,
     },
   },
+  "GET /resources/:id/backlinks/cursor": {
+    params: idParams,
+    querystring: {
+      type: "object",
+      properties: {
+        cursor: { type: "string", minLength: 1, maxLength: 2048 },
+        limit: { type: "integer", minimum: 1, maximum: 40 },
+      },
+      additionalProperties: false,
+    },
+    response: {
+      200: {
+        type: "object",
+        required: ["items", "next_cursor", "has_more"],
+        additionalProperties: false,
+        properties: {
+          items: { type: "array", maxItems: 40, items: {
+          type: "object",
+          required: ["id", "title", "kind", "updated_at"],
+          additionalProperties: false,
+          properties: {
+            id: uuid,
+            title: { type: "string" },
+            kind: { enum: ["page", "record"] },
+            updated_at: dateTime,
+          },
+        } },
+          next_cursor: {
+            anyOf: [
+              { type: "string", minLength: 1, maxLength: 2048 },
+              { type: "null" },
+            ],
+          },
+          has_more: { type: "boolean" },
+        },
+      },
+      ...errors,
+    },
+  },
+  "POST /resource-links/reconcile": {
+    body: {
+      type: "object",
+      properties: {
+        cursor: { type: "string", minLength: 1, maxLength: 2048 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+    response: {
+      200: {
+        type: "object",
+        required: ["processed", "next_cursor", "has_more"],
+        additionalProperties: false,
+        properties: {
+          processed: { type: "integer", minimum: 0, maximum: 100 },
+          next_cursor: {
+            anyOf: [
+              { type: "string", minLength: 1, maxLength: 2048 },
+              { type: "null" },
+            ],
+          },
+          has_more: { type: "boolean" },
+        },
+      },
+      ...errors,
+    },
+  },
   "GET /pages/:id/content": {
     params: idParams,
     response: { 200: pageContent, ...errors },
