@@ -724,6 +724,21 @@ nav button:hover,
   border-bottom: 1px solid var(--border);
   font-size: 12px;
 }
+.notification-inbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.notification-inbox-row .notification {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+.notification-inbox-row.is-read .notification-inbox-copy strong {
+  font-weight: 400;
+}
 .notification-inbox-list .notification {
   align-items: center;
   gap: 14px;

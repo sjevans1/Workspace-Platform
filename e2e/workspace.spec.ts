@@ -3367,3 +3367,46 @@ test("W12a browser: new notification inbox filters mentions and rechecks destina
   const seen=await (await page.request.get("/api/v1/notifications")).json();
   expect(seen.some((notice:any)=>notice.resource_id===resource.id)).toBe(true);
 });
+
+test("W12b browser: read/unread persisted across reload and unread filter",async ({page})=>{
+  test.setTimeout(90000);
+  await login(page);
+  const me=await (await page.request.get("/api/v1/me")).json();
+  const headers={"X-CSRF-Token":me.csrf};
+  const roots=await (await page.request.get("/api/v1/resources")).json();
+  const spaceRes=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,title:"Receipt space "+randomUUID()},
+  });
+  expect(spaceRes.ok(),await spaceRes.text()).toBeTruthy();
+  const space=await spaceRes.json();
+  const name="Read receipt "+randomUUID();
+  const pageRes=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"page",parent_id:space.id,title:name},
+  });
+  expect(pageRes.ok(),await pageRes.text()).toBeTruthy();
+  const target=await pageRes.json();
+  const mention=await page.request.post("/api/v1/resources/"+target.id+"/comments",{
+    headers,data:{body:"Receipt please @{"+me.user.id+"}"},
+  });
+  expect(mention.ok(),await mention.text()).toBeTruthy();
+  await page.goto("/");
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  const row=page.locator(".notification-inbox-row").filter({hasText:name});
+  await expect(row).toBeVisible();
+  const unread=page.getByRole("checkbox",{name:"Unread only"});
+  await unread.check();
+  await expect(row).toBeVisible();
+  await row.getByRole("button",{name:/^Mark read:/}).click();
+  await expect(row).toHaveCount(0);
+  await unread.uncheck();
+  await expect(row).toBeVisible();
+  await expect(row.getByRole("button",{name:/^Mark unread:/})).toBeVisible();
+  await page.reload();
+  await page.getByRole("button",{name:"Inbox",exact:true}).click();
+  const retained=page.locator(".notification-inbox-row").filter({hasText:name});
+  await expect(retained.getByRole("button",{name:/^Mark unread:/})).toBeVisible();
+  await retained.getByRole("button",{name:/^Mark unread:/}).click();
+  await expect(retained.getByRole("button",{name:/^Mark read:/})).toBeVisible();
+  const apiResult=await (await page.request.get("/api/v1/notifications")).json();
+  expect(apiResult.find((n:any)=>n.resource_id===target.id)?.read_at).toBeNull();
+});
