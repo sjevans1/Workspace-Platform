@@ -154,7 +154,17 @@ async function backlinkPage(
   // many stale candidates. SQL filters current ACL before candidate rows are
   // materialized; canonical content remains the final disclosure authority.
   const scanLimit = Math.min(500, Math.max(100, limit * 10));
-  const values: any[] = [a.tenant_id, targetId, a.user_id, a.role];
+  const allowedKinds = a.scopes
+    ? [
+      ...(a.scopes.includes("pages.read") ? ["page"] : []),
+      ...(a.scopes.includes("databases.read") ? ["record"] : []),
+    ]
+    : ["page", "record"];
+  if (!allowedKinds.length)
+    return { items: [], hasMore: false, scanned: 0, after: null };
+  const values: any[] = [
+    a.tenant_id, targetId, a.user_id, a.role, allowedKinds,
+  ];
   let continuationSql = "";
   if (after) {
     values.push(after.after_at, after.after);
@@ -172,7 +182,7 @@ async function backlinkPage(
     " AND d.resource_id=source.id" +
     " WHERE link.tenant_id=$1 AND link.target_id=$2" +
     " AND source.deleted_at IS NULL" +
-    " AND source.kind IN ('page','record')" +
+    " AND source.kind=ANY($5::text[])" +
     " AND workspace_can_read_resource(source.id,$3::uuid,$4::text)" +
     continuationSql +
     " ORDER BY source.updated_at DESC,source.id DESC LIMIT $" + values.length,
