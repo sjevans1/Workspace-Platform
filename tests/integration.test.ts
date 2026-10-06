@@ -3141,7 +3141,7 @@ test("W11c native replies stay on the same resource and revoked mentions vanish"
   );
   await permissionPatch("/resources/" + target.id + "/permissions", {
     inherit: true,
-    grants: [{ principal_id: redactionMember.id, level: 0 }],
+    grants: [{ principal_id: member.id, level: 0 }],
   });
   const after = await ok("GET", "/notifications", undefined, member);
   assert.ok(
@@ -8050,7 +8050,7 @@ test("W17 export redacts unreadable external relation schema metadata", async ()
   });
   await permissionPatch(`/resources/${hiddenTarget.id}/permissions`, {
     inherit: true,
-    grants: [{ principal_id: member.id, level: 0 }],
+    grants: [{ principal_id: redactionMember.id, level: 0 }],
   });
   assert.equal(
     (await req("GET", `/resources/${hiddenTarget.id}`, undefined, redactionMember))
