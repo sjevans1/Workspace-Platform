@@ -166,7 +166,7 @@ export type ImportReport = {
   resources: number;
   records: number;
   files: number;
-  root_kind_converted: boolean;
+  workspace_root_merged: boolean;
   dropped_external_relations: number;
   dropped_external_relation_values: number;
   dropped_person_values: number;
@@ -307,7 +307,7 @@ export async function importPortableArchive(
       resources: 0,
       records: 0,
       files: 0,
-      root_kind_converted: root.kind === "workspace",
+      workspace_root_merged: root.kind === "workspace",
       dropped_external_relations: 0,
       dropped_external_relation_values: 0,
       dropped_person_values: 0,
@@ -321,15 +321,20 @@ export async function importPortableArchive(
   // become indexed target links in the destination.
   for (const node of ordered) {
     if (node.kind === "record") continue;
+    if (node.id === root.id && node.kind === "workspace") {
+      // A tenant already owns exactly one destination workspace root. Whole-
+      // workspace restore maps the source root onto that authority boundary
+      // and gives every portable descendant a fresh ID beneath it.
+      ids.set(node.id, destination.id);
+      report.resources += 1;
+      continue;
+    }
     const parentId = node.id === root.id
       ? destination.id
       : ids.get(node.parent_id!);
     assert(parentId, 400, "Archive parent mapping is incomplete");
-    const kind = node.id === root.id && node.kind === "workspace"
-      ? "space"
-      : node.kind;
     const created = await createResource(q, a, {
-      kind,
+      kind: node.kind,
       parent_id: parentId,
       title: node.title,
       icon: node.icon,
