@@ -242,6 +242,8 @@ export default function Database({
     [cursorHistory, setCursorHistory] = useState<(string | null)[]>([]),
     [nextCursor, setNextCursor] = useState<string | null>(null),
     [pageHasMore, setPageHasMore] = useState(false),
+    [loading, setLoading] = useState(true),
+    [loadError, setLoadError] = useState(""),
     [month, setMonth] = useState(() => {
       const today = new Date();
       return today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0");
@@ -255,30 +257,40 @@ export default function Database({
     data?.views.find((v: any) => v.id === selected) || data?.views[0];
   async function load(viewId = selected, cursorOverride: string | null = cursor, offsetOverride = offset) {
     const generation = ++loadGeneration.current;
-    const d = await api(`/databases/${id}`);
-    const v = d.views.find((v: any) => v.id === viewId) || d.views[0];
-    const size = v?.config.type === "calendar" ? 200 : 100;
-    const argumentsPart = `limit=${size}${v ? `&view=${v.id}` : ""}${v?.config.type === "calendar" ? `&month=${month}` : ""}`;
-    // Use deterministic typed keysets for scalar saved-view sorts.
-    // Preserve the bounded legacy path for non-scalar legacy sorts.
-    if (!supportsCursorSort(v?.config, d.properties)) {
-      const older = await api(
-        `/databases/${id}/records?${argumentsPart}&offset=${offsetOverride}`);
-      if (generation !== loadGeneration.current) return;
-      setData(d);
-      setSelected(v?.id || "");
-      setRows(older);
-      setPageHasMore(older.length === size);
-      setNextCursor(null);
-    } else {
-      const page = await api(
-        `/databases/${id}/records/page?${argumentsPart}${cursorOverride ? `&cursor=${encodeURIComponent(cursorOverride)}` : ""}`);
-      if (generation !== loadGeneration.current) return;
-      setData(d);
-      setSelected(v?.id || "");
-      setRows(page.items);
-      setPageHasMore(page.has_more);
-      setNextCursor(page.next_cursor);
+    setLoading(true);
+    try {
+      const d = await api(`/databases/${id}`);
+      const v = d.views.find((v: any) => v.id === viewId) || d.views[0];
+      const size = v?.config.type === "calendar" ? 200 : 100;
+      const argumentsPart = `limit=${size}${v ? `&view=${v.id}` : ""}${v?.config.type === "calendar" ? `&month=${month}` : ""}`;
+      // Use deterministic typed keysets for scalar saved-view sorts.
+      // Preserve the bounded legacy path for non-scalar legacy sorts.
+      if (!supportsCursorSort(v?.config, d.properties)) {
+        const older = await api(
+          `/databases/${id}/records?${argumentsPart}&offset=${offsetOverride}`);
+        if (generation !== loadGeneration.current) return;
+        setData(d);
+        setSelected(v?.id || "");
+        setRows(older);
+        setPageHasMore(older.length === size);
+        setNextCursor(null);
+      } else {
+        const page = await api(
+          `/databases/${id}/records/page?${argumentsPart}${cursorOverride ? `&cursor=${encodeURIComponent(cursorOverride)}` : ""}`);
+        if (generation !== loadGeneration.current) return;
+        setData(d);
+        setSelected(v?.id || "");
+        setRows(page.items);
+        setPageHasMore(page.has_more);
+        setNextCursor(page.next_cursor);
+      }
+      if (generation === loadGeneration.current) setLoadError("");
+    } catch (error) {
+      if (generation === loadGeneration.current)
+        setLoadError(error instanceof Error ? error.message : "Unable to load database");
+      throw error;
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }
   useEffect(() => {
@@ -287,7 +299,16 @@ export default function Database({
       setMembers(await api("/members"));
     });
   }, [id, selected, offset, month, cursor]);
-  if (!data) return <div className="loading">Opening database…</div>;
+  if (!data && loadError)
+    return (
+      <div className="database-status error" role="alert">
+        <strong>Database unavailable</strong>
+        <span>{loadError}</span>
+        <button className="button" type="button"
+          onClick={() => run(() => load())}>Retry database</button>
+      </div>
+    );
+  if (!data) return <div className="loading" role="status">Opening database…</div>;
   const config = current?.config || { type: "table", filters: [], sort: [] };
   const usesCursor = supportsCursorSort(config, data.properties);
   const props = (config.order || data.properties.map((p: any) => p.id))
@@ -373,6 +394,16 @@ export default function Database({
   }
   return (
     <div className="database">
+      {loadError && (
+        <div className="database-status error" role="alert">
+          <span>{loadError}</span>
+          <button className="button" type="button"
+            onClick={() => run(() => load())}>Retry database</button>
+        </div>
+      )}
+      {loading && <div className="database-status muted" role="status">
+        Updating database…
+      </div>}
       <div className="database-toolbar">
         <div className="view-tabs">
           <button
