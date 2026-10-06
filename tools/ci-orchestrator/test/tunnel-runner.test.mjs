@@ -20,4 +20,5 @@ test("quick tunnel runner pins Wrangler and fails unrequested clean exits", () =
   assert.equal(supervisedExitCode({ requested: false, code: 0 }), 1);
   assert.equal(supervisedExitCode({ requested: false, code: 7 }), 7);
   assert.equal(supervisedExitCode({ requested: true, code: 0 }), 0);
+  assert.equal(supervisedExitCode({ requested: true, code: 7 }), 0);
 });

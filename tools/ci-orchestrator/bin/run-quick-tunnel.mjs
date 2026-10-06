@@ -11,7 +11,7 @@ export function parseQuickTunnelUrl(line) {
 }
 
 export function supervisedExitCode({ requested, code }) {
-  if (requested) return code ?? 0;
+  if (requested) return 0;
   return code && code !== 0 ? code : 1;
 }
 
