@@ -2463,7 +2463,7 @@ test("live permission changes update editability, and ancestor revocation remove
     404,
   );
   assert.equal(
-    (await ok("GET", "/search?q=Live", undefined, member)).length,
+    (await ok("GET", "/search?q=Live", undefined, member)).items.length,
     0,
   );
   assert.equal(

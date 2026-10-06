@@ -1746,13 +1746,13 @@ export async function buildApp(
       if (state) {
         binds.push(state.rank, state.updated_us, state.after);
         continuation =
-          " WHERE (rank,updated_at,id)<($" + (binds.length - 2) +
+          " AND (rank,updated_at,id)<($" + (binds.length - 2) +
           "::double precision,to_timestamp($" + (binds.length - 1) +
           "::bigint/1000000.0),$" + binds.length + "::uuid)";
       }
       binds.push(size + 1);
       const rows = (await q.query(
-        "WITH candidates AS (" +
+        "WITH candidates AS MATERIALIZED (" +
         " SELECT r.id,r.id resource_id,r.title,r.kind,r.updated_at," +
         " CASE WHEN r.search_text='' THEN '' ELSE left(r.search_text,240) END snippet," +
         " round((CASE WHEN lower(r.title)=lower($1) THEN 3.0" +
@@ -1761,7 +1761,6 @@ export async function buildApp(
         " websearch_to_tsquery('simple',$1)))::numeric,6)::double precision rank" +
         " FROM resources r WHERE cardinality($3::text[])>0" +
         " AND r.kind=ANY($3::text[]) AND r.deleted_at IS NULL" +
-        " AND workspace_can_read_resource(r.id,$4::uuid,$5::text)" +
         " AND (to_tsvector('simple',r.title||' '||r.search_text)" +
         " @@websearch_to_tsquery('simple',$1) OR r.title ILIKE $2 ESCAPE '\\')" +
         " UNION ALL" +
@@ -1773,7 +1772,13 @@ export async function buildApp(
         ")" +
         " SELECT id,resource_id,title,kind,snippet,updated_at,rank," +
         " ((extract(epoch from updated_at)*1000000)::bigint)::text updated_us" +
-        " FROM candidates" + continuation +
+        // Text filtering runs first inside the materialized candidates step
+        // so the GIN text index bounds the row set; the per-row ACL
+        // predicate then applies only to text-matched candidates. Files are
+        // ACL-checked inside their branch (their permission anchors on
+        // resource_id, not the file id).
+        " FROM candidates WHERE kind='file'" +
+        " OR workspace_can_read_resource(id,$4::uuid,$5::text)" + continuation +
         " ORDER BY rank DESC,updated_at DESC,id DESC LIMIT $" + binds.length,
         binds,
       )).rows;
