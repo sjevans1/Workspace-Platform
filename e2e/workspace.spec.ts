@@ -487,10 +487,10 @@ test("W16 touch phone and tablet complete navigation database calendar and recov
     await mobile.keyboard.press("Escape");
     await expect(mobile.locator(".sidebar")).toBeHidden();
 
-    const newRecord = mobile.getByRole("button", {
-      name: "New record",
-      exact: true,
-    });
+    const newRecord = mobile.locator(".database-controls").getByRole(
+      "button",
+      { name: "New record", exact: true },
+    );
     const target = await newRecord.boundingBox();
     expect(target?.height || 0,
       "Primary mobile database actions must be touch-sized").toBeGreaterThanOrEqual(44);
