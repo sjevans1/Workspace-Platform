@@ -22,7 +22,7 @@ Status: acceptance in progress on [PR #158](https://github.com/sjevans1/Workspac
   - validates archive and hierarchy before materialization;
   - collision-safe fresh resource, record and file IDs;
   - two-pass page-link, relation-database and related-record remapping;
-  - source workspace roots import as a destination-inheriting space wrapper;
+  - whole-workspace archives map their source workspace root onto the existing destination workspace authority boundary; every portable descendant receives a fresh ID;
   - external/nonportable page, file, relation and Person references are dropped and reported rather than resolved by source UUID;
   - saved database views are sanitized against the imported schema;
   - imported documents rebuild Yjs state, search text and backlink indexes;
@@ -57,7 +57,7 @@ Status: acceptance in progress on [PR #158](https://github.com/sjevans1/Workspac
 - `files/index.json`: attachment metadata.
 - `files/<file-id>.data`: attachment bytes.
 
-All IDs in the archive are source-local references only. Import always allocates destination IDs and rewrites supported internal references after allocation.
+All IDs in the archive are source-local references only. Import allocates fresh destination IDs for portable descendants and rewrites supported internal references after allocation. A whole-workspace archive is the one root-level exception: its source workspace ID maps to the already-provisioned destination workspace instead of creating or renaming an organisation authority root.
 
 ## Explicit v1 exclusions
 
