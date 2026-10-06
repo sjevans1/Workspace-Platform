@@ -5,6 +5,7 @@ import type { Actor } from "../../../packages/auth/index.ts";
 import { admin } from "../../../packages/auth/index.ts";
 import {
   requireAccess,
+  access,
   ancestry,
   visibleDirectRecordChildren,
   directChildCanReadSql,
@@ -232,12 +233,17 @@ export async function duplicateResourceTree(
           [cloned.id, json(properties)]);
         await q.query("DELETE FROM database_views WHERE database_id=$1",
           [cloned.id]);
-        await q.query(
-          "INSERT INTO database_views(id,tenant_id,database_id,name,config)" +
-          " SELECT gen_random_uuid(),$2,$3,name,config FROM database_views" +
-          " WHERE database_id=$1",
-          [row.id, a.tenant_id, cloned.id],
-        );
+        const views = (await q.query(
+          "SELECT name,config FROM database_views WHERE database_id=$1 ORDER BY name",
+          [row.id],
+        )).rows;
+        for (const sourceView of views)
+          await q.query(
+            "INSERT INTO database_views(id,tenant_id,database_id,name,config)" +
+            " VALUES($1,$2,$3,$4,$5)",
+            [randomUUID(), a.tenant_id, cloned.id,
+              sourceView.name, json(sourceView.config)],
+          );
       }
     }
     ids.set(row.id, cloned.id);
@@ -300,7 +306,7 @@ export async function duplicateResourceTree(
       );
       await q.query(
         "UPDATE resources SET search_text=$2,updated_at=now(),updated_by=$3 WHERE id=$1",
-        [clonedId, textOf(blocks), a.user_id],
+        [clonedId, row.search_text, a.user_id],
       );
       await syncWorkspaceResourceLinks(q, a.tenant_id, clonedId, blocks);
     }
