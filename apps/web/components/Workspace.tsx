@@ -511,7 +511,8 @@ function Dashboard({
 }) {
   const [items, setItems] = useState<any[]>([]),
     [spaces, setSpaces] = useState<any[]>([]),
-    [notes, setNotes] = useState<any[]>([]);
+    [notes, setNotes] = useState<any[]>([]),
+    [templateItems, setTemplateItems] = useState<any[]>([]);
   useEffect(() => {
     run(async () => {
       setItems(
@@ -523,27 +524,9 @@ function Dashboard({
       );
       if (root) setSpaces(await api(`/resources?parent_id=${root}`));
       if (screen === "home") setNotes(await api("/notifications"));
+      if (screen === "templates") setTemplateItems(await api("/templates"));
     });
   }, [screen, root, version]);
-  const templates = [
-    ["blank", "Blank page", "A little space for your next idea.", "✧"],
-    [
-      "meeting",
-      "Meeting notes",
-      "Turn conversations into clear next steps.",
-      "☷",
-    ],
-    ["project", "Project plan", "Keep milestones and decisions together.", "◈"],
-    ["tasks", "Task tracker", "A table and board to keep work moving.", "☑"],
-    [
-      "knowledge",
-      "Knowledge base",
-      "Build a useful home for shared knowledge.",
-      "📖",
-    ],
-    ["sop", "Standard procedure", "Document a repeatable way of working.", "↳"],
-    ["decision", "Decision log", "Remember the why behind the what.", "◎"],
-  ];
   return (
     <div className="dashboard">
       <div className="eyebrow">
@@ -578,20 +561,29 @@ function Dashboard({
             <button
               className="button primary"
               onClick={() =>
-                create({ parent: spaces[0]?.id || root, kind: "page" })
+                spaces.length
+                  ? create({ parent: spaces[0].id, kind: "page" })
+                  : create({
+                      parent: root,
+                      kind: "space",
+                      template: "project-space",
+                      title: "Project space",
+                    })
               }
             >
               <Plus size={16} />
-              Create a page
+              {spaces.length ? "Create a page" : "Create your first space"}
             </button>
             <button
               className="text-button"
               onClick={() =>
-                create({
-                  parent: spaces[0]?.id || root,
-                  kind: "page",
-                  importing: true,
-                })
+                spaces.length
+                  ? create({
+                      parent: spaces[0].id,
+                      kind: "page",
+                      importing: true,
+                    })
+                  : notify("Create a space before importing pages.")
               }
             >
               Import your work <ArrowUpRight size={15} />
@@ -611,27 +603,44 @@ function Dashboard({
       )}
       {screen === "templates" ? (
         <div className="template-grid">
-          {templates.map(([t, name, desc, symbol]) => (
-            <button
-              className="template-card"
-              key={t}
-              onClick={() =>
-                create({
-                  parent: spaces[0]?.id || root,
-                  kind: t === "tasks" ? "database" : "page",
-                  template: t,
-                  title: name,
-                })
-              }
-            >
-              <span className="template-icon">{symbol}</span>
-              <h3>{name}</h3>
-              <p>{desc}</p>
-              <span className="template-use">
-                Use template <ArrowRight size={15} />
-              </span>
-            </button>
-          ))}
+          {templateItems.map((template: any) => {
+            const needsSpace = template.kind !== "space" && !spaces.length;
+            return (
+              <button
+                className="template-card"
+                key={template.id}
+                disabled={needsSpace}
+                aria-describedby={needsSpace
+                  ? `template-${template.id}-requirement` : undefined}
+                onClick={() =>
+                  create({
+                    parent: template.kind === "space"
+                      ? root
+                      : spaces[0]?.id || root,
+                    kind: template.kind,
+                    template: template.id,
+                    title: template.title,
+                  })
+                }
+              >
+                <span className="template-icon">{template.icon}</span>
+                <h3>{template.title}</h3>
+                <p>{template.description}</p>
+                {needsSpace ? (
+                  <span
+                    className="template-use"
+                    id={`template-${template.id}-requirement`}
+                  >
+                    Create a space first
+                  </span>
+                ) : (
+                  <span className="template-use">
+                    Use template <ArrowRight size={15} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       ) : (
         <>

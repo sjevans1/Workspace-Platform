@@ -106,6 +106,7 @@ import {
   treeLock,
   seedDemo,
   purgeDeletedResource,
+  duplicateResourceTree,
 } from "./domain.ts";
 import {
   indexedRecordText, validateRelationSchema, validateRelationWrites,
@@ -1252,11 +1253,33 @@ export async function buildApp(
       r,
     );
     scope(a, pageScope(v.kind, true));
-    return createResource(q, a, {
+    const template = v.template ? templates[v.template] : undefined;
+    assert(!v.template || template, 400, "Unknown template");
+    assert(!template || template.kind === v.kind, 400,
+      "Template does not match resource type");
+    const created = await createResource(q, a, {
       ...v,
-      blocks: templates[v.template || ""]?.blocks || [],
-      tasks: v.template === "tasks",
+      icon: v.icon || template?.icon,
+      blocks: template?.blocks || [],
+      tasks: template?.tasks === true,
     });
+    if (template?.children?.length) {
+      for (const child of template.children) {
+        scope(a, pageScope(child.kind, true));
+        const childTemplate = child.template ? templates[child.template] : undefined;
+        assert(!childTemplate || childTemplate.kind === child.kind, 500,
+          "Invalid built-in child template");
+        await createResource(q, a, {
+          kind: child.kind,
+          parent_id: created.id,
+          title: child.title,
+          icon: child.icon || childTemplate?.icon,
+          blocks: childTemplate?.blocks || [],
+          tasks: childTemplate?.tasks === true,
+        });
+      }
+    }
+    return created;
   });
   route(
     "GET",
@@ -1421,23 +1444,16 @@ export async function buildApp(
   route(
     "POST",
     "/resources/:id/duplicate",
-    "Duplicate a page body",
+    "Safely duplicate a page, database or space subtree",
     async (q, a, r) => {
-      scope(a, "pages.write");
+      assert(!a.scopes, 403, "Human session required for subtree duplication");
       const n = await requireAccess(q, a, id(r));
-      assert(n.kind === "page", 400, "Duplicate supports pages");
-      const d = await one(
-        q,
-        "SELECT blocks FROM page_documents WHERE resource_id=$1",
-        [n.id],
+      scope(a, pageScope(n.kind, true));
+      const v = body(
+        z.object({ parent_id: uuid.optional() }).strict(),
+        r,
       );
-      return createResource(q, a, {
-        kind: "page",
-        title: `${n.title} (copy)`,
-        parent_id: n.parent_id,
-        icon: n.icon,
-        blocks: d.blocks,
-      });
+      return duplicateResourceTree(q, a, n.id, v.parent_id);
     },
   );
   route(
@@ -1816,7 +1832,13 @@ export async function buildApp(
     "/templates",
     "List built-in templates",
     async () =>
-      Object.entries(templates).map(([id, t]) => ({ id, title: t.title })),
+      Object.entries(templates).map(([id, t]) => ({
+        id,
+        title: t.title,
+        description: t.description,
+        icon: t.icon,
+        kind: t.kind,
+      })),
     "workspace.read",
   );
   dataRoutes(route, storage, antivirus, antivirusMetrics);

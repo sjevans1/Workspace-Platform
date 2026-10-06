@@ -5,6 +5,7 @@ import type { Actor } from "../../../packages/auth/index.ts";
 import { admin } from "../../../packages/auth/index.ts";
 import {
   requireAccess,
+  access,
   ancestry,
   visibleDirectRecordChildren,
   directChildCanReadSql,
@@ -116,6 +117,213 @@ export async function createResource(
   await emit(q, a, `${v.kind}.created`, id);
   return one(q, "SELECT * FROM resources WHERE id=$1", [id]);
 }
+
+function remapWorkspaceLinks(value: any, ids: Map<string, string>): any {
+  if (Array.isArray(value)) return value.map((item) => remapWorkspaceLinks(item, ids));
+  if (!value || typeof value !== "object") return value;
+  const copy: Record<string, any> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "href" && typeof child === "string") {
+      const match = child.match(/^(\/)?\?page=([0-9a-f-]{36})$/i);
+      const mapped = match && ids.get(match[2]);
+      copy[key] = mapped ? `${match![1] || ""}?page=${mapped}` : child;
+    } else copy[key] = remapWorkspaceLinks(child, ids);
+  }
+  return copy;
+}
+
+export async function duplicateResourceTree(
+  q: Query,
+  a: Actor,
+  sourceId: string,
+  requestedParentId?: string,
+) {
+  await treeLock(q, a.tenant_id);
+  const source = await requireAccess(q, a, sourceId);
+  assert(["page", "database", "space"].includes(source.kind), 400,
+    "Duplicate supports pages, databases and spaces");
+  const destinationParentId = requestedParentId || source.parent_id;
+  assert(destinationParentId, 400, "Duplicate destination required");
+  const destination = await requireAccess(q, a, destinationParentId, 3);
+  assert(
+    source.kind === "space"
+      ? destination.kind === "workspace"
+      : ["space", "page"].includes(destination.kind),
+    400,
+    "Invalid duplicate destination",
+  );
+
+  const rows = (await q.query(
+    "WITH RECURSIVE tree AS (" +
+    " SELECT r.*,0 depth FROM resources r WHERE r.id=$1 AND r.deleted_at IS NULL" +
+    " UNION ALL SELECT r.*,tree.depth+1 FROM resources r" +
+    " JOIN tree ON r.parent_id=tree.id" +
+    " WHERE r.deleted_at IS NULL AND tree.depth<32" +
+    ") SELECT * FROM tree ORDER BY depth,position,id LIMIT 2001",
+    [source.id],
+  )).rows;
+  assert(rows.length && rows.length <= 2000, 400,
+    "Duplicate subtree exceeds the 2000-resource limit");
+  for (const row of rows) await requireAccess(q, a, row.id);
+
+  const sourceIds = new Set(rows.map((row: any) => row.id as string));
+  const ids = new Map<string, string>();
+  const databaseDefinitions = new Map<string, any>();
+  const recordValues = new Map<string, any>();
+  const documentBlocks = new Map<string, any[]>();
+
+  for (const row of rows) {
+    if (row.kind === "database") {
+      const definition = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1", [row.id]);
+      assert(definition, 409, "Database definition missing");
+      for (const property of definition.properties)
+        if (property.type === "relation" && property.target_database_id &&
+            !sourceIds.has(property.target_database_id))
+          await requireAccess(q, a, property.target_database_id);
+      databaseDefinitions.set(row.id, definition.properties);
+    }
+    if (row.kind === "record") {
+      const record = await one(q,
+        "SELECT values FROM database_records WHERE resource_id=$1", [row.id]);
+      assert(record, 409, "Record values missing");
+      recordValues.set(row.id, record.values);
+    }
+    if (["page", "record"].includes(row.kind)) {
+      const document = await one(q,
+        "SELECT blocks FROM page_documents WHERE resource_id=$1", [row.id]);
+      assert(document, 409, "Document body missing");
+      documentBlocks.set(row.id, document.blocks);
+    }
+  }
+
+  for (const row of rows) {
+    const parentId = row.id === source.id
+      ? destinationParentId
+      : ids.get(row.parent_id);
+    assert(parentId, 409, "Duplicate parent mapping missing");
+    let cloned: any;
+    if (row.kind === "record") {
+      const sourceValues = { ...recordValues.get(row.id) };
+      const sourceDatabase = rows.find((candidate: any) =>
+        candidate.id === row.parent_id);
+      const properties = databaseDefinitions.get(sourceDatabase?.id) || [];
+      for (const property of properties.filter((p: any) => p.type === "relation")) {
+        const values = Array.isArray(sourceValues[property.id])
+          ? sourceValues[property.id] : [];
+        const safe: string[] = [];
+        for (const relatedId of values) {
+          if (sourceIds.has(relatedId) || await access(q, a, relatedId))
+            safe.push(relatedId);
+        }
+        sourceValues[property.id] = safe;
+      }
+      cloned = await createRecord(q, a, parentId, sourceValues);
+    } else {
+      cloned = await createResource(q, a, {
+        kind: row.kind,
+        title: row.id === source.id ? `${row.title} (copy)` : row.title,
+        parent_id: parentId,
+        icon: row.icon,
+        blocks: row.kind === "page" ? documentBlocks.get(row.id) || [] : [],
+      });
+      if (row.kind === "database") {
+        const properties = databaseDefinitions.get(row.id);
+        await q.query("UPDATE databases SET properties=$2 WHERE resource_id=$1",
+          [cloned.id, json(properties)]);
+        await q.query("DELETE FROM database_views WHERE database_id=$1",
+          [cloned.id]);
+        const views = (await q.query(
+          "SELECT name,config FROM database_views WHERE database_id=$1 ORDER BY name",
+          [row.id],
+        )).rows;
+        for (const sourceView of views)
+          await q.query(
+            "INSERT INTO database_views(id,tenant_id,database_id,name,config)" +
+            " VALUES($1,$2,$3,$4,$5)",
+            [randomUUID(), a.tenant_id, cloned.id,
+              sourceView.name, json(sourceView.config)],
+          );
+      }
+    }
+    ids.set(row.id, cloned.id);
+  }
+
+  for (const row of rows) {
+    const clonedId = ids.get(row.id)!;
+    if (row.kind === "database") {
+      const properties = structuredClone(databaseDefinitions.get(row.id));
+      for (const property of properties)
+        if (property.type === "relation" && property.target_database_id)
+          property.target_database_id =
+            ids.get(property.target_database_id) || property.target_database_id;
+      await q.query("UPDATE databases SET properties=$2 WHERE resource_id=$1",
+        [clonedId, json(properties)]);
+    }
+    if (row.kind === "record") {
+      const original = structuredClone(recordValues.get(row.id));
+      const sourceDatabase = rows.find((candidate: any) =>
+        candidate.id === row.parent_id);
+      const properties = databaseDefinitions.get(sourceDatabase?.id) || [];
+      for (const property of properties.filter((p: any) => p.type === "relation")) {
+        const values = Array.isArray(original[property.id])
+          ? original[property.id] : [];
+        const safe: string[] = [];
+        for (const relatedId of values) {
+          const mapped = ids.get(relatedId);
+          if (mapped) safe.push(mapped);
+          else if (await access(q, a, relatedId)) safe.push(relatedId);
+        }
+        original[property.id] = safe;
+      }
+      const clonedDatabaseId = ids.get(row.parent_id)!;
+      const clonedDefinition = await one(q,
+        "SELECT properties FROM databases WHERE resource_id=$1",
+        [clonedDatabaseId]);
+      await q.query(
+        "UPDATE database_records SET values=$2 WHERE resource_id=$1",
+        [clonedId, json(original)],
+      );
+      const titleProperty = clonedDefinition.properties.find(
+        (p: any) => p.type === "title");
+      await q.query(
+        "UPDATE resources SET title=$2,search_text=$3,updated_at=now(),updated_by=$4 WHERE id=$1",
+        [
+          clonedId,
+          original[titleProperty.id],
+          indexedRecordText(clonedDefinition.properties, original),
+          a.user_id,
+        ],
+      );
+    }
+    if (["page", "record"].includes(row.kind)) {
+      const blocks = remapWorkspaceLinks(
+        structuredClone(documentBlocks.get(row.id) || []), ids);
+      validateBlocks(blocks);
+      await q.query(
+        "UPDATE page_documents SET blocks=$2,plain_text=$3,y_state=$4 WHERE resource_id=$1",
+        [clonedId, json(blocks), textOf(blocks), blocksToState(blocks)],
+      );
+      await q.query(
+        "UPDATE resources SET search_text=$2,updated_at=now(),updated_by=$3 WHERE id=$1",
+        [clonedId, row.search_text, a.user_id],
+      );
+      await syncWorkspaceResourceLinks(q, a.tenant_id, clonedId, blocks);
+    }
+  }
+
+  await emit(q, a, `${source.kind}.duplicated`, ids.get(source.id)!);
+  return {
+    ...(await one(q, "SELECT * FROM resources WHERE id=$1", [ids.get(source.id)!])),
+    duplicate_report: {
+      resources: rows.length,
+      remapped_internal_ids: [...ids.keys()].length,
+      external_relations_preserved_when_accessible: true,
+      acl_copied: false,
+    },
+  };
+}
+
 export async function purgeDeletedResource(
   q: Query,
   tenantId: string,

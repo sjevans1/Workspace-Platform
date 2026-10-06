@@ -1189,6 +1189,157 @@ test("canonical replacement, body search, versions and restore", async () => {
   });
   assert.equal((await ok("GET", `/pages/${page.id}/content`)).epoch, 3);
 });
+test("W15 templates and subtree duplication remap links and relations without copying ACLs", async () => {
+  const catalog = await ok("GET", "/templates");
+  const projectSpaceTemplate = catalog.find((item: any) =>
+    item.id === "project-space");
+  assert.deepEqual(
+    {
+      kind: projectSpaceTemplate.kind,
+      title: projectSpaceTemplate.title,
+      icon: projectSpaceTemplate.icon,
+    },
+    { kind: "space", title: "Project space", icon: "◈" },
+  );
+
+  const templated = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "Guided project",
+    template: "project-space",
+  });
+  const templatedChildren = await ok(
+    "GET", `/resources?parent_id=${templated.id}&limit=20`);
+  assert.deepEqual(
+    templatedChildren.map((item: any) => [item.kind, item.title]).sort(),
+    [
+      ["database", "Tasks"],
+      ["page", "Decision log"],
+      ["page", "Project plan"],
+    ].sort(),
+    "The server-owned space template must materialize its guided starter children",
+  );
+
+  const sourceSpace = await ok("POST", "/resources", {
+    kind: "space", parent_id: root.id, title: "W15 clone source",
+  });
+  const linkedTarget = await ok("POST", "/resources", {
+    kind: "page", parent_id: sourceSpace.id, title: "Linked target",
+  });
+  const linkingPage = await ok("POST", "/resources", {
+    kind: "page", parent_id: sourceSpace.id, title: "Linking page",
+  });
+  await ok("PATCH", `/pages/${linkingPage.id}/content`, {
+    blocks: [{
+      type: "paragraph",
+      content: [{
+        type: "link",
+        href: "/?page=" + linkedTarget.id,
+        content: [{ type: "text", text: "Linked target", styles: {} }],
+      }],
+    }],
+    expected_revision: 1,
+  });
+
+  const relationTargetDb = await ok("POST", "/resources", {
+    kind: "database", parent_id: sourceSpace.id, title: "Relation target",
+  });
+  const relationSourceDb = await ok("POST", "/resources", {
+    kind: "database", parent_id: sourceSpace.id, title: "Relation source",
+  });
+  await ok("PATCH", `/databases/${relationSourceDb.id}`, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      {
+        id: "related",
+        name: "Related",
+        type: "relation",
+        target_database_id: relationTargetDb.id,
+      },
+    ],
+  });
+  const targetRecord = await ok(
+    "POST", `/databases/${relationTargetDb.id}/records`, {
+      values: { name: "Target record" },
+    });
+  await ok("POST", `/databases/${relationSourceDb.id}/records`, {
+    values: { name: "Source record", related: [targetRecord.id] },
+  });
+
+  await permissionPatch(`/resources/${linkingPage.id}/permissions`, {
+    inherit: false, grants: [],
+  });
+
+  const rootBefore = await ok("GET",
+    `/resources?parent_id=${root.id}&limit=200`, undefined, member);
+  const denied = await req(
+    "POST", `/resources/${sourceSpace.id}/duplicate`, {}, member);
+  assert.equal(denied.statusCode, 404,
+    "A caller missing any child in the subtree must not receive a partial clone");
+  const rootAfter = await ok("GET",
+    `/resources?parent_id=${root.id}&limit=200`, undefined, member);
+  assert.deepEqual(
+    rootAfter.map((item: any) => item.id).sort(),
+    rootBefore.map((item: any) => item.id).sort(),
+    "Failed duplication must roll back all newly created subtree resources",
+  );
+  assert.equal(
+    (await req("POST", `/resources/${sourceSpace.id}/duplicate`, {}, other))
+      .statusCode,
+    404,
+    "Cross-tenant duplication fails without resource disclosure",
+  );
+
+  const clone = await ok(
+    "POST", `/resources/${sourceSpace.id}/duplicate`, {});
+  assert.equal(clone.title, "W15 clone source (copy)");
+  assert.equal(clone.duplicate_report.acl_copied, false);
+  assert.equal(clone.duplicate_report.resources, 7);
+
+  const clonedChildren = await ok(
+    "GET", `/resources?parent_id=${clone.id}&limit=50`);
+  const byTitle = new Map<string, any>(
+    clonedChildren.map((item: any) => [item.title, item]));
+  const clonedTargetPage = byTitle.get("Linked target");
+  const clonedLinkingPage = byTitle.get("Linking page");
+  const clonedTargetDb = byTitle.get("Relation target");
+  const clonedSourceDb = byTitle.get("Relation source");
+  assert.ok(clonedTargetPage && clonedLinkingPage &&
+    clonedTargetDb && clonedSourceDb);
+
+  const clonedBody = await ok(
+    "GET", `/pages/${clonedLinkingPage.id}/content`);
+  assert.match(JSON.stringify(clonedBody.blocks),
+    new RegExp(clonedTargetPage.id));
+  assert.doesNotMatch(JSON.stringify(clonedBody.blocks),
+    new RegExp(linkedTarget.id),
+    "Internal page links must be rewritten to the cloned target");
+
+  const clonedSourceDefinition = await ok(
+    "GET", `/databases/${clonedSourceDb.id}`);
+  const clonedRelation = clonedSourceDefinition.properties.find(
+    (property: any) => property.id === "related");
+  assert.equal(clonedRelation.target_database_id, clonedTargetDb.id,
+    "Relation schema must point to the cloned target database");
+
+  const clonedTargetRecords = await ok(
+    "GET", `/databases/${clonedTargetDb.id}/records`);
+  const clonedSourceRecords = await ok(
+    "GET", `/databases/${clonedSourceDb.id}/records`);
+  assert.equal(clonedTargetRecords.length, 1);
+  assert.equal(clonedSourceRecords.length, 1);
+  assert.deepEqual(
+    clonedSourceRecords[0].values.related,
+    [clonedTargetRecords[0].id],
+    "Relation values must point at cloned records when both sides were cloned",
+  );
+
+  const memberClonePage = await req(
+    "GET", `/resources/${clonedLinkingPage.id}`, undefined, member);
+  assert.equal(memberClonePage.statusCode, 200,
+    "Clone ACLs must inherit from the destination instead of copying source denial");
+});
+
 test("W14 search is ranked, paginated and permission-live without metadata leakage", async () => {
   const token = "w14-prism-keep-exact";
   const privatePage = await ok("POST", "/resources", {

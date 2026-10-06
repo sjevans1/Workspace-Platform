@@ -169,7 +169,7 @@ export default function Resource({
                     </a>
                   </>
                 )}
-                {editable && node.kind === "page" && (
+                {editable && ["page", "database", "space"].includes(node.kind) && (
                   <button
                     onClick={() =>
                       run(async () => {
@@ -179,11 +179,14 @@ export default function Resource({
                           {},
                         );
                         changed();
+                        notify(
+                          `Duplicated ${p.duplicate_report?.resources || 1} item${p.duplicate_report?.resources === 1 ? "" : "s"}.`,
+                        );
                         go(p.id);
                       })
                     }
                   >
-                    Duplicate page
+                    Duplicate {node.kind}
                   </button>
                 )}
                 {editable && !["record", "workspace"].includes(node.kind) && (
