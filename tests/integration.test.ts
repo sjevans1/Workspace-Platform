@@ -1285,7 +1285,7 @@ test("page backlinks use live canonical links and never reveal restricted source
     "Soft-delete retains graph candidates; stale index edges stay inert and GET remains read-only");
   await linkOk("POST",`/resources/${target.id}/restore`);
   ownerBacklinks=await linkOk("GET",`/resources/${target.id}/backlinks`);
-  assert.deepEqual(ownerBacklinks.map((x:any)=>x.id).sort(),
+  assert.deepEqual(ownerBacklinks.items.map((x:any)=>x.id).sort(),
     [source.id,privateSource.id].sort(),
     "Restoring target restores backlink visibility without source rewrites");
   const policy = await linkOk("GET",
