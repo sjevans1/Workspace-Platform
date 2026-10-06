@@ -8,16 +8,18 @@ import { createServer } from "node:http";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
 import { testPostgres } from "../scripts/test-postgres.ts";
+import {
+  inspectPortableArchive,
+  PORTABLE_ARCHIVE_FORMAT,
+  PORTABLE_ARCHIVE_VERSION,
+} from "../packages/portable-archive/index.ts";
 import { migrate } from "../packages/database/migrate.ts";
 import { Database, one } from "../packages/database/index.ts";
 import { buildApp } from "../apps/api/src/app.ts";
 import { createCollab } from "../apps/collab/src/server.ts";
 import { tick } from "../apps/worker/src/worker.ts";
 import { createSession, csrf, hash } from "../packages/auth/index.ts";
-import type {
-  OidcProfile,
-  OidcProvider,
-} from "../packages/auth/oidc.ts";
+import type { OidcProfile, OidcProvider } from "../packages/auth/oidc.ts";
 import { decrypt, signature } from "../packages/events/index.ts";
 import {
   AntivirusUnavailableError,
@@ -106,11 +108,15 @@ const ok = async (method: string, path: string, data?: any, actor = owner) => {
     // Integration tests share one real server-side request budget. Exercise
     // the real limit, honor Retry-After, and retry once; never weaken or
     // disable the production limiter to make the acceptance suite green.
-    const retry=Number(r.headers["retry-after"]);
-    assert.ok(Number.isFinite(retry) && retry>=0 && retry<=60,
-      "Rate-limit response must provide a bounded Retry-After");
-    await new Promise<void>((resolve)=>setTimeout(resolve,(retry+1)*1000));
-    r=await req(method,path,data,actor);
+    const retry = Number(r.headers["retry-after"]);
+    assert.ok(
+      Number.isFinite(retry) && retry >= 0 && retry <= 60,
+      "Rate-limit response must provide a bounded Retry-After",
+    );
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, (retry + 1) * 1000),
+    );
+    r = await req(method, path, data, actor);
   }
   assert.ok(r.statusCode < 300, `${method} ${path}: ${r.statusCode} ${r.body}`);
   return r.json();
@@ -281,9 +287,10 @@ before(async () => {
   guest = await invite("guest");
   const tenant = randomUUID();
   await db.tenant(tenant, async (q) => {
-    await q.query("INSERT INTO organisations(id,name) VALUES($1,'Other tenant')", [
-      tenant,
-    ]);
+    await q.query(
+      "INSERT INTO organisations(id,name) VALUES($1,'Other tenant')",
+      [tenant],
+    );
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'owner')",
       [tenant, owner.id],
@@ -314,7 +321,9 @@ test("metrics endpoint is bearer-protected and excludes tenant identifiers", asy
   const wrong = await app.inject({
     method: "GET",
     url: "/metrics",
-    headers: { authorization: "Bearer incorrect-metrics-token-0123456789abcdef" },
+    headers: {
+      authorization: "Bearer incorrect-metrics-token-0123456789abcdef",
+    },
   });
   assert.equal(wrong.statusCode, 401, wrong.body);
 
@@ -322,15 +331,11 @@ test("metrics endpoint is bearer-protected and excludes tenant identifiers", asy
     method: "GET",
     url: "/metrics",
     headers: {
-      authorization:
-        "Bearer metrics-test-token-0123456789abcdef",
+      authorization: "Bearer metrics-test-token-0123456789abcdef",
     },
   });
   assert.equal(accepted.statusCode, 200, accepted.body);
-  assert.match(
-    String(accepted.headers["content-type"]),
-    /text\/plain/,
-  );
+  assert.match(String(accepted.headers["content-type"]), /text\/plain/);
   assert.match(accepted.body, /workspace_up 1/);
   assert.match(
     accepted.body,
@@ -439,7 +444,7 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
 
   const filtered = await scim(
     "GET",
-    '/Users?filter=userName%20eq%20%22directory.user%40example.test%22',
+    "/Users?filter=userName%20eq%20%22directory.user%40example.test%22",
   );
   assert.equal(filtered.statusCode, 200, filtered.body);
   assert.equal(filtered.json().totalResults, 1);
@@ -465,7 +470,10 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
       cookie: `workspace_session=${tenantToken}`,
       csrf: csrf(tenantToken),
     };
-  assert.equal((await req("GET", "/me", undefined, tenantActor)).statusCode, 200);
+  assert.equal(
+    (await req("GET", "/me", undefined, tenantActor)).statusCode,
+    200,
+  );
 
   await db.tenant(other.tenant, async (q) => {
     await q.query(
@@ -480,7 +488,10 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
       cookie: `workspace_session=${otherToken}`,
       csrf: csrf(otherToken),
     };
-  assert.equal((await req("GET", "/me", undefined, otherActor)).statusCode, 200);
+  assert.equal(
+    (await req("GET", "/me", undefined, otherActor)).statusCode,
+    200,
+  );
 
   const deactivated = await scim("PATCH", `/Users/${created.id}`, {
     schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
@@ -533,8 +544,14 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
   assert.equal(otherState.membership.active, true);
   assert.equal(otherState.sessions, 1);
 
-  assert.equal((await req("GET", "/me", undefined, tenantActor)).statusCode, 401);
-  assert.equal((await req("GET", "/me", undefined, otherActor)).statusCode, 200);
+  assert.equal(
+    (await req("GET", "/me", undefined, tenantActor)).statusCode,
+    401,
+  );
+  assert.equal(
+    (await req("GET", "/me", undefined, otherActor)).statusCode,
+    200,
+  );
 
   const deactivationAudit = await db.tenant(owner.tenant, (q) =>
     one(
@@ -558,7 +575,10 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
       cookie: `workspace_session=${freshToken}`,
       csrf: csrf(freshToken),
     };
-  assert.equal((await req("GET", "/me", undefined, freshActor)).statusCode, 200);
+  assert.equal(
+    (await req("GET", "/me", undefined, freshActor)).statusCode,
+    200,
+  );
 
   const immutable = await scim("PATCH", `/Users/${created.id}`, {
     schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
@@ -581,7 +601,10 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
   const types = await scim("GET", "/ResourceTypes");
   assert.equal(types.statusCode, 200, types.body);
   assert.deepEqual(
-    types.json().Resources.map((item: any) => item.id).sort(),
+    types
+      .json()
+      .Resources.map((item: any) => item.id)
+      .sort(),
     ["Group", "User"],
   );
 
@@ -617,7 +640,7 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
 
   const filteredGroup = await scim(
     "GET",
-    '/Groups?filter=displayName%20eq%20%22Directory%20Guests%22',
+    "/Groups?filter=displayName%20eq%20%22Directory%20Guests%22",
   );
   assert.equal(filteredGroup.statusCode, 200, filteredGroup.body);
   assert.equal(filteredGroup.json().totalResults, 1);
@@ -697,7 +720,9 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
   assert.equal(groupedMembership.active, true);
 
   const groupList = await ok("GET", "/scim/groups");
-  const guestGroupAdmin = groupList.find((item: any) => item.id === guestGroup.id);
+  const guestGroupAdmin = groupList.find(
+    (item: any) => item.id === guestGroup.id,
+  );
   assert.equal(guestGroupAdmin.member_count, 1);
   assert.equal(guestGroupAdmin.mapped_role, null);
 
@@ -708,8 +733,14 @@ test("SCIM provisions tenant users and active=false immediately revokes only tha
 
   const deleted = await scim("DELETE", `/Users/${created.id}`);
   assert.equal(deleted.statusCode, 204, deleted.body);
-  assert.equal((await req("GET", "/me", undefined, freshActor)).statusCode, 401);
-  assert.equal((await req("GET", "/me", undefined, otherActor)).statusCode, 200);
+  assert.equal(
+    (await req("GET", "/me", undefined, freshActor)).statusCode,
+    401,
+  );
+  assert.equal(
+    (await req("GET", "/me", undefined, otherActor)).statusCode,
+    200,
+  );
   assert.equal((await scim("GET", `/Users/${created.id}`)).statusCode, 404);
 
   const connectorList = await ok("GET", "/scim/connectors");
@@ -818,10 +849,7 @@ test("organisation switching cannot downgrade an OIDC session to unbound local c
     (await ok("GET", "/me", undefined, destination)).organisation.id,
     other.tenant,
   );
-  assert.equal(
-    (await req("GET", "/me", undefined, local)).statusCode,
-    401,
-  );
+  assert.equal((await req("GET", "/me", undefined, local)).statusCode, 401);
 });
 
 test("OIDC back-channel logout revokes OIDC sessions but preserves local break-glass session", async () => {
@@ -992,20 +1020,23 @@ test("calendar saved views filter month dates and reject invalid date bindings",
     name: "Due-date calendar",
     config: { type: "calendar", dateBy: "due" },
   });
-  const recordsPath = "/databases/" + calendarDb.id + "/records?view=" + view.id;
+  const recordsPath =
+    "/databases/" + calendarDb.id + "/records?view=" + view.id;
   const march = await ok("GET", recordsPath + "&month=2026-03");
+  assert.deepEqual(march.map((row: any) => row.title).sort(), [
+    "March first",
+    "March last",
+  ]);
   assert.deepEqual(
-    march.map((row: any) => row.title).sort(),
-    ["March first", "March last"],
-  );
-  assert.deepEqual(
-    (await ok("GET", recordsPath + "&month=2026-02"))
-      .map((row: any) => row.title),
+    (await ok("GET", recordsPath + "&month=2026-02")).map(
+      (row: any) => row.title,
+    ),
     ["February"],
   );
   assert.deepEqual(
-    (await ok("GET", recordsPath + "&month=2026-04"))
-      .map((row: any) => row.title),
+    (await ok("GET", recordsPath + "&month=2026-04")).map(
+      (row: any) => row.title,
+    ),
     ["April"],
   );
   for (const invalid of [
@@ -1017,18 +1048,26 @@ test("calendar saved views filter month dates and reject invalid date bindings",
     const response = await req("GET", invalid);
     assert.equal(response.statusCode, 400, response.body);
   }
-  const tableView = (await ok("GET", "/databases/" + calendarDb.id)).views
-    .find((v: any) => v.config.type === "table");
+  const tableView = (await ok("GET", "/databases/" + calendarDb.id)).views.find(
+    (v: any) => v.config.type === "table",
+  );
   assert.ok(tableView);
   const nonCalendarMonth = await req(
     "GET",
-    "/databases/" + calendarDb.id + "/records?view=" + tableView.id +
+    "/databases/" +
+      calendarDb.id +
+      "/records?view=" +
+      tableView.id +
       "&month=2026-03",
   );
   assert.equal(nonCalendarMonth.statusCode, 400, nonCalendarMonth.body);
   assert.equal(
-    (await ok("GET", "/databases/" + calendarDb.id + "/records?view=" + tableView.id))
-      .length,
+    (
+      await ok(
+        "GET",
+        "/databases/" + calendarDb.id + "/records?view=" + tableView.id,
+      )
+    ).length,
     4,
   );
 });
@@ -1091,27 +1130,28 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
     "array",
   );
   const backlinksSpec = spec.paths["/api/v1/resources/{id}/backlinks"].get;
-  assert.equal(backlinksSpec.responses["200"].content["application/json"]
-    .schema.type, "object");
+  assert.equal(
+    backlinksSpec.responses["200"].content["application/json"].schema.type,
+    "object",
+  );
   assert.deepEqual(
-    backlinksSpec.responses["200"].content["application/json"]
-      .schema.required,
+    backlinksSpec.responses["200"].content["application/json"].schema.required,
     ["items", "next_cursor", "has_more"],
   );
   assert.equal(
-    backlinksSpec.parameters.find((p:any)=>p.name==="limit")
-      ?.schema.maximum,
+    backlinksSpec.parameters.find((p: any) => p.name === "limit")?.schema
+      .maximum,
     40,
   );
   assert.equal(
-    backlinksSpec.responses["200"].content["application/json"]
-      .schema.properties.items.maxItems,
+    backlinksSpec.responses["200"].content["application/json"].schema.properties
+      .items.maxItems,
     40,
   );
   const linkReconcileSpec = spec.paths["/api/v1/resource-links/reconcile"].post;
   assert.deepEqual(
-    linkReconcileSpec.responses["200"].content["application/json"]
-      .schema.required,
+    linkReconcileSpec.responses["200"].content["application/json"].schema
+      .required,
     ["processed", "next_cursor", "has_more"],
   );
   const cursorSpec = spec.paths["/api/v1/events/cursor"].get;
@@ -1120,10 +1160,21 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
     ["events", "next_cursor", "has_more"],
   );
   const prepared = spec.paths["/api/v1/webhooks/{id}/secret-rotation"].post;
-  assert.deepEqual(prepared.requestBody.content["application/json"].schema.required, ["expected_revision"]);
-  assert.ok(prepared.responses["200"].content["application/json"].schema.properties.secret);
-  const activated = spec.paths["/api/v1/webhooks/{id}/secret-rotation/activate"].post;
-  assert.equal(activated.responses["200"].content["application/json"].schema.properties.secret, undefined);
+  assert.deepEqual(
+    prepared.requestBody.content["application/json"].schema.required,
+    ["expected_revision"],
+  );
+  assert.ok(
+    prepared.responses["200"].content["application/json"].schema.properties
+      .secret,
+  );
+  const activated =
+    spec.paths["/api/v1/webhooks/{id}/secret-rotation/activate"].post;
+  assert.equal(
+    activated.responses["200"].content["application/json"].schema.properties
+      .secret,
+    undefined,
+  );
 });
 
 test("native row-level policies and known IDs isolate tenants", async () => {
@@ -1171,8 +1222,9 @@ test("canonical replacement, body search, versions and restore", async () => {
     expected_revision: 1,
   });
   assert(
-    (await ok("GET", "/search?q=Orion")).items
-      .some((x: any) => x.id === page.id),
+    (await ok("GET", "/search?q=Orion")).items.some(
+      (x: any) => x.id === page.id,
+    ),
   );
   assert.equal(
     (
@@ -1191,8 +1243,9 @@ test("canonical replacement, body search, versions and restore", async () => {
 });
 test("W15 templates and subtree duplication remap links and relations without copying ACLs", async () => {
   const catalog = await ok("GET", "/templates");
-  const projectSpaceTemplate = catalog.find((item: any) =>
-    item.id === "project-space");
+  const projectSpaceTemplate = catalog.find(
+    (item: any) => item.id === "project-space",
+  );
   assert.deepEqual(
     {
       kind: projectSpaceTemplate.kind,
@@ -1209,7 +1262,9 @@ test("W15 templates and subtree duplication remap links and relations without co
     template: "project-space",
   });
   const templatedChildren = await ok(
-    "GET", `/resources?parent_id=${templated.id}&limit=20`);
+    "GET",
+    `/resources?parent_id=${templated.id}&limit=20`,
+  );
   assert.deepEqual(
     templatedChildren.map((item: any) => [item.kind, item.title]).sort(),
     [
@@ -1221,31 +1276,45 @@ test("W15 templates and subtree duplication remap links and relations without co
   );
 
   const sourceSpace = await ok("POST", "/resources", {
-    kind: "space", parent_id: root.id, title: "W15 clone source",
+    kind: "space",
+    parent_id: root.id,
+    title: "W15 clone source",
   });
   const linkedTarget = await ok("POST", "/resources", {
-    kind: "page", parent_id: sourceSpace.id, title: "Linked target",
+    kind: "page",
+    parent_id: sourceSpace.id,
+    title: "Linked target",
   });
   const linkingPage = await ok("POST", "/resources", {
-    kind: "page", parent_id: sourceSpace.id, title: "Linking page",
+    kind: "page",
+    parent_id: sourceSpace.id,
+    title: "Linking page",
   });
   await ok("PATCH", `/pages/${linkingPage.id}/content`, {
-    blocks: [{
-      type: "paragraph",
-      content: [{
-        type: "link",
-        href: "/?page=" + linkedTarget.id,
-        content: [{ type: "text", text: "Linked target", styles: {} }],
-      }],
-    }],
+    blocks: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "link",
+            href: "/?page=" + linkedTarget.id,
+            content: [{ type: "text", text: "Linked target", styles: {} }],
+          },
+        ],
+      },
+    ],
     expected_revision: 1,
   });
 
   const relationTargetDb = await ok("POST", "/resources", {
-    kind: "database", parent_id: sourceSpace.id, title: "Relation target",
+    kind: "database",
+    parent_id: sourceSpace.id,
+    title: "Relation target",
   });
   const relationSourceDb = await ok("POST", "/resources", {
-    kind: "database", parent_id: sourceSpace.id, title: "Relation source",
+    kind: "database",
+    parent_id: sourceSpace.id,
+    title: "Relation source",
   });
   await ok("PATCH", `/databases/${relationSourceDb.id}`, {
     properties: [
@@ -1259,25 +1328,44 @@ test("W15 templates and subtree duplication remap links and relations without co
     ],
   });
   const targetRecord = await ok(
-    "POST", `/databases/${relationTargetDb.id}/records`, {
+    "POST",
+    `/databases/${relationTargetDb.id}/records`,
+    {
       values: { name: "Target record" },
-    });
+    },
+  );
   await ok("POST", `/databases/${relationSourceDb.id}/records`, {
     values: { name: "Source record", related: [targetRecord.id] },
   });
 
   await permissionPatch(`/resources/${linkingPage.id}/permissions`, {
-    inherit: false, grants: [],
+    inherit: false,
+    grants: [],
   });
 
-  const rootBefore = await ok("GET",
-    `/resources?parent_id=${root.id}&limit=200`, undefined, member);
+  const rootBefore = await ok(
+    "GET",
+    `/resources?parent_id=${root.id}&limit=200`,
+    undefined,
+    member,
+  );
   const denied = await req(
-    "POST", `/resources/${sourceSpace.id}/duplicate`, {}, member);
-  assert.equal(denied.statusCode, 404,
-    "A caller missing any child in the subtree must not receive a partial clone");
-  const rootAfter = await ok("GET",
-    `/resources?parent_id=${root.id}&limit=200`, undefined, member);
+    "POST",
+    `/resources/${sourceSpace.id}/duplicate`,
+    {},
+    member,
+  );
+  assert.equal(
+    denied.statusCode,
+    404,
+    "A caller missing any child in the subtree must not receive a partial clone",
+  );
+  const rootAfter = await ok(
+    "GET",
+    `/resources?parent_id=${root.id}&limit=200`,
+    undefined,
+    member,
+  );
   assert.deepEqual(
     rootAfter.map((item: any) => item.id).sort(),
     rootBefore.map((item: any) => item.id).sort(),
@@ -1290,42 +1378,58 @@ test("W15 templates and subtree duplication remap links and relations without co
     "Cross-tenant duplication fails without resource disclosure",
   );
 
-  const clone = await ok(
-    "POST", `/resources/${sourceSpace.id}/duplicate`, {});
+  const clone = await ok("POST", `/resources/${sourceSpace.id}/duplicate`, {});
   assert.equal(clone.title, "W15 clone source (copy)");
   assert.equal(clone.duplicate_report.acl_copied, false);
   assert.equal(clone.duplicate_report.resources, 7);
 
   const clonedChildren = await ok(
-    "GET", `/resources?parent_id=${clone.id}&limit=50`);
+    "GET",
+    `/resources?parent_id=${clone.id}&limit=50`,
+  );
   const byTitle = new Map<string, any>(
-    clonedChildren.map((item: any) => [item.title, item]));
+    clonedChildren.map((item: any) => [item.title, item]),
+  );
   const clonedTargetPage = byTitle.get("Linked target");
   const clonedLinkingPage = byTitle.get("Linking page");
   const clonedTargetDb = byTitle.get("Relation target");
   const clonedSourceDb = byTitle.get("Relation source");
-  assert.ok(clonedTargetPage && clonedLinkingPage &&
-    clonedTargetDb && clonedSourceDb);
+  assert.ok(
+    clonedTargetPage && clonedLinkingPage && clonedTargetDb && clonedSourceDb,
+  );
 
-  const clonedBody = await ok(
-    "GET", `/pages/${clonedLinkingPage.id}/content`);
-  assert.match(JSON.stringify(clonedBody.blocks),
-    new RegExp(clonedTargetPage.id));
-  assert.doesNotMatch(JSON.stringify(clonedBody.blocks),
+  const clonedBody = await ok("GET", `/pages/${clonedLinkingPage.id}/content`);
+  assert.match(
+    JSON.stringify(clonedBody.blocks),
+    new RegExp(clonedTargetPage.id),
+  );
+  assert.doesNotMatch(
+    JSON.stringify(clonedBody.blocks),
     new RegExp(linkedTarget.id),
-    "Internal page links must be rewritten to the cloned target");
+    "Internal page links must be rewritten to the cloned target",
+  );
 
   const clonedSourceDefinition = await ok(
-    "GET", `/databases/${clonedSourceDb.id}`);
+    "GET",
+    `/databases/${clonedSourceDb.id}`,
+  );
   const clonedRelation = clonedSourceDefinition.properties.find(
-    (property: any) => property.id === "related");
-  assert.equal(clonedRelation.target_database_id, clonedTargetDb.id,
-    "Relation schema must point to the cloned target database");
+    (property: any) => property.id === "related",
+  );
+  assert.equal(
+    clonedRelation.target_database_id,
+    clonedTargetDb.id,
+    "Relation schema must point to the cloned target database",
+  );
 
   const clonedTargetRecords = await ok(
-    "GET", `/databases/${clonedTargetDb.id}/records`);
+    "GET",
+    `/databases/${clonedTargetDb.id}/records`,
+  );
   const clonedSourceRecords = await ok(
-    "GET", `/databases/${clonedSourceDb.id}/records`);
+    "GET",
+    `/databases/${clonedSourceDb.id}/records`,
+  );
   assert.equal(clonedTargetRecords.length, 1);
   assert.equal(clonedSourceRecords.length, 1);
   assert.deepEqual(
@@ -1335,28 +1439,40 @@ test("W15 templates and subtree duplication remap links and relations without co
   );
 
   const memberClonePage = await req(
-    "GET", `/resources/${clonedLinkingPage.id}`, undefined, member);
-  assert.equal(memberClonePage.statusCode, 200,
-    "Clone ACLs must inherit from the destination instead of copying source denial");
+    "GET",
+    `/resources/${clonedLinkingPage.id}`,
+    undefined,
+    member,
+  );
+  assert.equal(
+    memberClonePage.statusCode,
+    200,
+    "Clone ACLs must inherit from the destination instead of copying source denial",
+  );
 });
 
 test("W14 search is ranked, paginated and permission-live without metadata leakage", async () => {
   const token = "w14-prism-keep-exact";
   const privatePage = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "Secret W14 prism",
+    kind: "page",
+    parent_id: space.id,
+    title: "Secret W14 prism",
   });
   await ok("PATCH", `/pages/${privatePage.id}/content`, {
     blocks: [{ type: "paragraph", content: token + " private-body-marker" }],
     expected_revision: 1,
   });
   await permissionPatch(`/resources/${privatePage.id}/permissions`, {
-    inherit: false, grants: [],
+    inherit: false,
+    grants: [],
   });
 
   const visiblePages: any[] = [];
   for (let i = 0; i < 3; i++) {
     const item = await ok("POST", "/resources", {
-      kind: "page", parent_id: space.id, title: "Public W14 prism",
+      kind: "page",
+      parent_id: space.id,
+      title: "Public W14 prism",
     });
     await ok("PATCH", `/pages/${item.id}/content`, {
       blocks: [{ type: "paragraph", content: token + " public-body-marker" }],
@@ -1377,26 +1493,40 @@ test("W14 search is ranked, paginated and permission-live without metadata leaka
   });
 
   const ownerSearch = await ok(
-    "GET", `/search?q=${encodeURIComponent(token)}&kind=page&limit=1`);
+    "GET",
+    `/search?q=${encodeURIComponent(token)}&kind=page&limit=1`,
+  );
   assert.equal(ownerSearch.items.length, 1);
   assert.equal(ownerSearch.has_more, true);
   assert.equal(typeof ownerSearch.next_cursor, "string");
-  assert.equal(ownerSearch.items[0].id, visiblePages[2].id,
-    "Equal-ranked results use updated_at/id keyset ordering");
+  assert.equal(
+    ownerSearch.items[0].id,
+    visiblePages[2].id,
+    "Equal-ranked results use updated_at/id keyset ordering",
+  );
 
   const memberSearch = await ok(
-    "GET", `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
-    undefined, member);
+    "GET",
+    `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
+    undefined,
+    member,
+  );
   assert.deepEqual(
     memberSearch.items.map((x: any) => x.id).sort(),
     visiblePages.map((x: any) => x.id).sort(),
   );
-  assert.doesNotMatch(JSON.stringify(memberSearch), /Secret W14 prism|private-body-marker/,
-    "Unauthorized title/snippet/metadata must never enter the response");
+  assert.doesNotMatch(
+    JSON.stringify(memberSearch),
+    /Secret W14 prism|private-body-marker/,
+    "Unauthorized title/snippet/metadata must never enter the response",
+  );
 
   const otherTenantSearch = await ok(
-    "GET", `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
-    undefined, other);
+    "GET",
+    `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
+    undefined,
+    other,
+  );
   assert.deepEqual(otherTenantSearch.items, []);
   assert.equal(otherTenantSearch.has_more, false);
   assert.equal(otherTenantSearch.next_cursor, null);
@@ -1408,39 +1538,75 @@ test("W14 search is ranked, paginated and permission-live without metadata leaka
   assert.equal(second.items[0].id, visiblePages[1].id);
   assert.equal(second.has_more, true);
 
-  const tampered = ownerSearch.next_cursor.slice(0, -1) +
+  const tampered =
+    ownerSearch.next_cursor.slice(0, -1) +
     (ownerSearch.next_cursor.endsWith("A") ? "B" : "A");
-  assert.equal((await req("GET",
-    `/search?q=${encodeURIComponent(token)}&kind=page&limit=1&cursor=${encodeURIComponent(tampered)}`
-  )).statusCode, 400);
-  assert.equal((await req("GET",
-    `/search?q=${encodeURIComponent(token)}&kind=page&limit=1&cursor=${encodeURIComponent(ownerSearch.next_cursor)}`,
-    undefined, member)).statusCode, 400,
-    "Search cursor is bound to the issuing principal");
-  assert.equal((await req("GET",
-    `/search?q=${encodeURIComponent(token)}&kind=record&limit=1&cursor=${encodeURIComponent(ownerSearch.next_cursor)}`
-  )).statusCode, 400,
-    "Search cursor is bound to its query/filter contract");
+  assert.equal(
+    (
+      await req(
+        "GET",
+        `/search?q=${encodeURIComponent(token)}&kind=page&limit=1&cursor=${encodeURIComponent(tampered)}`,
+      )
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        `/search?q=${encodeURIComponent(token)}&kind=page&limit=1&cursor=${encodeURIComponent(ownerSearch.next_cursor)}`,
+        undefined,
+        member,
+      )
+    ).statusCode,
+    400,
+    "Search cursor is bound to the issuing principal",
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        `/search?q=${encodeURIComponent(token)}&kind=record&limit=1&cursor=${encodeURIComponent(ownerSearch.next_cursor)}`,
+      )
+    ).statusCode,
+    400,
+    "Search cursor is bound to its query/filter contract",
+  );
 
   await ok("DELETE", `/resources/${visiblePages[1].id}`);
   const afterTrash = await ok(
-    "GET", `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`);
-  assert.ok(!afterTrash.items.some((x: any) => x.id === visiblePages[1].id),
-    "Trash must remove a result immediately without index repair");
+    "GET",
+    `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
+  );
+  assert.ok(
+    !afterTrash.items.some((x: any) => x.id === visiblePages[1].id),
+    "Trash must remove a result immediately without index repair",
+  );
   await ok("POST", `/resources/${visiblePages[1].id}/restore`);
   const afterRestore = await ok(
-    "GET", `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`);
+    "GET",
+    `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
+  );
   assert.ok(afterRestore.items.some((x: any) => x.id === visiblePages[1].id));
 
   await permissionPatch(`/resources/${visiblePages[0].id}/permissions`, {
-    inherit: false, grants: [],
+    inherit: false,
+    grants: [],
   });
   const afterRevoke = await ok(
-    "GET", `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
-    undefined, member);
-  assert.ok(!afterRevoke.items.some((x: any) => x.id === visiblePages[0].id),
-    "Revocation must take effect on the next search page/read");
-  assert.doesNotMatch(JSON.stringify(afterRevoke), new RegExp(visiblePages[0].id));
+    "GET",
+    `/search?q=${encodeURIComponent(token)}&kind=page&limit=10`,
+    undefined,
+    member,
+  );
+  assert.ok(
+    !afterRevoke.items.some((x: any) => x.id === visiblePages[0].id),
+    "Revocation must take effect on the next search page/read",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(afterRevoke),
+    new RegExp(visiblePages[0].id),
+  );
 });
 
 test("W14 indexed search remains bounded at multi-thousand-resource scale", async () => {
@@ -1448,38 +1614,52 @@ test("W14 indexed search remains bounded at multi-thousand-resource scale", asyn
   await db.tenant(owner.tenant, async (q) => {
     await q.query(
       "INSERT INTO resources(id,tenant_id,parent_id,kind,title,search_text,position)" +
-      " SELECT ($3||lpad(i::text,12,'0'))::uuid,$1,$2,'page'," +
-      " 'W14 scale page '||i," +
-      " CASE WHEN i=1999 THEN 'w14-scale-needle-keep-exact' ELSE 'ordinary searchable body' END,i" +
-      " FROM generate_series(1,2500) i ON CONFLICT DO NOTHING",
+        " SELECT ($3||lpad(i::text,12,'0'))::uuid,$1,$2,'page'," +
+        " 'W14 scale page '||i," +
+        " CASE WHEN i=1999 THEN 'w14-scale-needle-keep-exact' ELSE 'ordinary searchable body' END,i" +
+        " FROM generate_series(1,2500) i ON CONFLICT DO NOTHING",
       [owner.tenant, space.id, prefix],
     );
   });
   try {
     const started = performance.now();
-    const result = await ok("GET",
-      "/search?q=w14-scale-needle-keep-exact&kind=page&limit=20");
+    const result = await ok(
+      "GET",
+      "/search?q=w14-scale-needle-keep-exact&kind=page&limit=20",
+    );
     const elapsed = performance.now() - started;
     assert.equal(result.items.length, 1);
     assert.match(result.items[0].snippet, /w14-scale-needle-keep-exact/);
     assert.equal(result.has_more, false);
     if (!pg.emulated)
-      assert.ok(elapsed < 1500,
-        `Indexed W14 search exceeded 1500ms budget: ${elapsed.toFixed(1)}ms`);
+      assert.ok(
+        elapsed < 1500,
+        `Indexed W14 search exceeded 1500ms budget: ${elapsed.toFixed(1)}ms`,
+      );
   } finally {
-    await db.tenant(owner.tenant, (q) => q.query(
-      "DELETE FROM resources WHERE id::text LIKE 'f14e0000-0000-4000-8000-%'",
-    ));
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "DELETE FROM resources WHERE id::text LIKE 'f14e0000-0000-4000-8000-%'",
+      ),
+    );
   }
 });
 
 test("page backlinks use live canonical links and never reveal restricted sources", async () => {
   // Preserve full production Fastify rate limits, with an independent
   // disposable instance so this test never exhausts another test's budget.
-  const linksApp = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
+  const linksApp = await buildApp(
+    db,
+    undefined,
+    false,
+    fakeOidc,
+    fakeAntivirus,
+  );
   const linkReq = async (
     method: "GET" | "POST" | "PATCH" | "DELETE",
-    path: string, data?: any, actor: any = owner,
+    path: string,
+    data?: any,
+    actor: any = owner,
   ): Promise<{ statusCode: number; body: string; json: () => any }> =>
     linksApp.inject({
       method,
@@ -1493,172 +1673,312 @@ test("page backlinks use live canonical links and never reveal restricted source
     });
   const linkOk = async (
     method: "GET" | "POST" | "PATCH" | "DELETE",
-    path: string, data?: any, actor: any = owner,
+    path: string,
+    data?: any,
+    actor: any = owner,
   ) => {
     const response = await linkReq(method, path, data, actor);
-    assert.ok(response.statusCode < 300,
-      `${method} ${path}: ${response.statusCode} ${response.body}`);
+    assert.ok(
+      response.statusCode < 300,
+      `${method} ${path}: ${response.statusCode} ${response.body}`,
+    );
     return response.json();
   };
   try {
-  const target = await linkOk("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "Link target",
-  });
-  const source = await linkOk("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "Accessible source",
-  });
-  const privateSource = await linkOk("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "Secret referencing source",
-  });
-  const textOnly = await linkOk("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "Plain mention source",
-  });
-  const external = await linkOk("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "External URL source",
-  });
-  const link = { type: "link", href: "/?page=" + target.id,
-    content: [{ type: "text", text: "Linked page", styles: {} }] };
-  for (const src of [source, privateSource]) {
-    await linkOk("PATCH", `/pages/${src.id}/content`, {
-      blocks: [{ type: "paragraph", content: [link] }],
+    const target = await linkOk("POST", "/resources", {
+      kind: "page",
+      parent_id: space.id,
+      title: "Link target",
+    });
+    const source = await linkOk("POST", "/resources", {
+      kind: "page",
+      parent_id: space.id,
+      title: "Accessible source",
+    });
+    const privateSource = await linkOk("POST", "/resources", {
+      kind: "page",
+      parent_id: space.id,
+      title: "Secret referencing source",
+    });
+    const textOnly = await linkOk("POST", "/resources", {
+      kind: "page",
+      parent_id: space.id,
+      title: "Plain mention source",
+    });
+    const external = await linkOk("POST", "/resources", {
+      kind: "page",
+      parent_id: space.id,
+      title: "External URL source",
+    });
+    const link = {
+      type: "link",
+      href: "/?page=" + target.id,
+      content: [{ type: "text", text: "Linked page", styles: {} }],
+    };
+    for (const src of [source, privateSource]) {
+      await linkOk("PATCH", `/pages/${src.id}/content`, {
+        blocks: [{ type: "paragraph", content: [link] }],
+        expected_revision: 1,
+      });
+    }
+    await linkOk("PATCH", `/pages/${textOnly.id}/content`, {
+      blocks: [
+        { type: "paragraph", content: "Plain mention /?page=" + target.id },
+      ],
       expected_revision: 1,
     });
-  }
-  await linkOk("PATCH", `/pages/${textOnly.id}/content`, {
-    blocks: [{ type: "paragraph", content: "Plain mention /?page=" + target.id }],
-    expected_revision: 1,
-  });
-  await linkOk("PATCH", `/pages/${external.id}/content`, {
-    blocks: [{ type: "paragraph", content: [{
-      type: "link",
-      href: "https://external.example.test/?page=" + target.id,
-      content: "Not a Workspace reference",
-    }] }],
-    expected_revision: 1,
-  });
-  const indexed = (await db.tenant(owner.tenant,(q)=>q.query(
-    "SELECT source_id,target_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
-    [target.id],
-  ))).rows;
-  assert.deepEqual(indexed.map((x:any)=>x.source_id).sort(),
-    [source.id,privateSource.id].sort(),
-    "Only canonical internal links enter the materialized graph");
-  assert.equal((await db.tenant(other.tenant,(q)=>q.query(
-    "SELECT 1 FROM resource_links WHERE target_id=$1",[target.id],
-  ))).rowCount,0,"Tenant RLS hides the link graph across organisations");
-  // Simulate a conservative migration/backfill false positive. The indexed
-  // row is only a candidate: canonical blocks remain the disclosure authority.
-  await db.tenant(owner.tenant,(q)=>q.query(
-    "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-    [owner.tenant,textOnly.id,target.id],
-  ));
-  let ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
-  assert.deepEqual(
-    ownerBacklinks.items.map((x: any) => x.id).sort(),
-    [source.id, privateSource.id].sort(),
-  );
-  await linkOk("DELETE",`/resources/${target.id}`);
-  assert.equal((await linkReq("GET",
-    `/resources/${target.id}/backlinks`)).statusCode,404,
-    "Trashed target is not discoverable");
-  const retainedCandidates=(await db.tenant(owner.tenant,(q)=>q.query(
-    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
-    [target.id],
-  ))).rows.map((x:any)=>x.source_id).sort();
-  assert.deepEqual(retainedCandidates,
-    [source.id,privateSource.id,textOnly.id].sort(),
-    "Soft-delete retains graph candidates; stale index edges stay inert and GET remains read-only");
-  await linkOk("POST",`/resources/${target.id}/restore`);
-  ownerBacklinks=await linkOk("GET",`/resources/${target.id}/backlinks`);
-  assert.deepEqual(ownerBacklinks.items.map((x:any)=>x.id).sort(),
-    [source.id,privateSource.id].sort(),
-    "Restoring target restores backlink visibility without source rewrites");
-  const policy = await linkOk("GET",
-    `/resources/${privateSource.id}/permissions`);
-  await linkOk("PATCH", `/resources/${privateSource.id}/permissions`, {
-    inherit: false, grants: [], expected_revision: policy.revision,
-  });
-  const memberBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`,
-    undefined, member);
-  assert.deepEqual(memberBacklinks.items.map((x: any) => x.id), [source.id]);
-  assert.doesNotMatch(JSON.stringify(memberBacklinks.items), /Secret referencing source/);
-  assert.equal((await linkReq("GET",
-    `/resources/${target.id}/backlinks`, undefined, guest)).statusCode, 404);
-  assert.equal((await linkReq("GET",
-    `/resources/${target.id}/backlinks`, undefined, other)).statusCode, 404);
-  assert.equal((await linkReq("GET",
-    `/resources/${randomUUID()}/backlinks`)).statusCode, 404);
-  assert.equal((await linkReq("GET",
-    `/resources/${space.id}/backlinks`)).statusCode, 404);
-  // Removing a link immediately removes the backlink on the next read.
-  await linkOk("PATCH", `/pages/${source.id}/content`, {
-    blocks: [{ type: "paragraph", content: "Link removed" }],
-    expected_revision: 2,
-  });
-  const after = await linkOk("GET", `/resources/${target.id}/backlinks`,
-    undefined, member);
-  assert.deepEqual(after.items, []);
-  assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
-    "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
-    [source.id,target.id],
-  ))).rowCount,0,"Content replacement removes the stale graph edge");
-
-  // The version written before link removal contains the canonical link.
-  // Restoring it must restore the graph transactionally as well.
-  const versions=await linkOk("GET",`/pages/${source.id}/versions`);
-  const linkedVersion=versions.find((v:any)=>v.revision===2);
-  assert.ok(linkedVersion);
-  await linkOk("POST",
-    `/pages/${source.id}/versions/${linkedVersion.id}/restore`,{
-      expected_revision:3,
+    await linkOk("PATCH", `/pages/${external.id}/content`, {
+      blocks: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "link",
+              href: "https://external.example.test/?page=" + target.id,
+              content: "Not a Workspace reference",
+            },
+          ],
+        },
+      ],
+      expected_revision: 1,
     });
-  assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
-    "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
-    [source.id,target.id],
-  ))).rowCount,1,"Version restore restores the canonical graph edge");
-  const restored=await linkOk("GET",`/resources/${target.id}/backlinks`,
-    undefined,member);
-  assert.deepEqual(restored.items.map((x:any)=>x.id),[source.id]);
+    const indexed = (
+      await db.tenant(owner.tenant, (q) =>
+        q.query(
+          "SELECT source_id,target_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+          [target.id],
+        ),
+      )
+    ).rows;
+    assert.deepEqual(
+      indexed.map((x: any) => x.source_id).sort(),
+      [source.id, privateSource.id].sort(),
+      "Only canonical internal links enter the materialized graph",
+    );
+    assert.equal(
+      (
+        await db.tenant(other.tenant, (q) =>
+          q.query("SELECT 1 FROM resource_links WHERE target_id=$1", [
+            target.id,
+          ]),
+        )
+      ).rowCount,
+      0,
+      "Tenant RLS hides the link graph across organisations",
+    );
+    // Simulate a conservative migration/backfill false positive. The indexed
+    // row is only a candidate: canonical blocks remain the disclosure authority.
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+        [owner.tenant, textOnly.id, target.id],
+      ),
+    );
+    let ownerBacklinks = await linkOk(
+      "GET",
+      `/resources/${target.id}/backlinks`,
+    );
+    assert.deepEqual(
+      ownerBacklinks.items.map((x: any) => x.id).sort(),
+      [source.id, privateSource.id].sort(),
+    );
+    await linkOk("DELETE", `/resources/${target.id}`);
+    assert.equal(
+      (await linkReq("GET", `/resources/${target.id}/backlinks`)).statusCode,
+      404,
+      "Trashed target is not discoverable",
+    );
+    const retainedCandidates = (
+      await db.tenant(owner.tenant, (q) =>
+        q.query(
+          "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+          [target.id],
+        ),
+      )
+    ).rows
+      .map((x: any) => x.source_id)
+      .sort();
+    assert.deepEqual(
+      retainedCandidates,
+      [source.id, privateSource.id, textOnly.id].sort(),
+      "Soft-delete retains graph candidates; stale index edges stay inert and GET remains read-only",
+    );
+    await linkOk("POST", `/resources/${target.id}/restore`);
+    ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
+    assert.deepEqual(
+      ownerBacklinks.items.map((x: any) => x.id).sort(),
+      [source.id, privateSource.id].sort(),
+      "Restoring target restores backlink visibility without source rewrites",
+    );
+    const policy = await linkOk(
+      "GET",
+      `/resources/${privateSource.id}/permissions`,
+    );
+    await linkOk("PATCH", `/resources/${privateSource.id}/permissions`, {
+      inherit: false,
+      grants: [],
+      expected_revision: policy.revision,
+    });
+    const memberBacklinks = await linkOk(
+      "GET",
+      `/resources/${target.id}/backlinks`,
+      undefined,
+      member,
+    );
+    assert.deepEqual(
+      memberBacklinks.items.map((x: any) => x.id),
+      [source.id],
+    );
+    assert.doesNotMatch(
+      JSON.stringify(memberBacklinks.items),
+      /Secret referencing source/,
+    );
+    assert.equal(
+      (
+        await linkReq(
+          "GET",
+          `/resources/${target.id}/backlinks`,
+          undefined,
+          guest,
+        )
+      ).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await linkReq(
+          "GET",
+          `/resources/${target.id}/backlinks`,
+          undefined,
+          other,
+        )
+      ).statusCode,
+      404,
+    );
+    assert.equal(
+      (await linkReq("GET", `/resources/${randomUUID()}/backlinks`)).statusCode,
+      404,
+    );
+    assert.equal(
+      (await linkReq("GET", `/resources/${space.id}/backlinks`)).statusCode,
+      404,
+    );
+    // Removing a link immediately removes the backlink on the next read.
+    await linkOk("PATCH", `/pages/${source.id}/content`, {
+      blocks: [{ type: "paragraph", content: "Link removed" }],
+      expected_revision: 2,
+    });
+    const after = await linkOk(
+      "GET",
+      `/resources/${target.id}/backlinks`,
+      undefined,
+      member,
+    );
+    assert.deepEqual(after.items, []);
+    assert.equal(
+      (
+        await db.tenant(owner.tenant, (q) =>
+          q.query(
+            "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
+            [source.id, target.id],
+          ),
+        )
+      ).rowCount,
+      0,
+      "Content replacement removes the stale graph edge",
+    );
+
+    // The version written before link removal contains the canonical link.
+    // Restoring it must restore the graph transactionally as well.
+    const versions = await linkOk("GET", `/pages/${source.id}/versions`);
+    const linkedVersion = versions.find((v: any) => v.revision === 2);
+    assert.ok(linkedVersion);
+    await linkOk(
+      "POST",
+      `/pages/${source.id}/versions/${linkedVersion.id}/restore`,
+      {
+        expected_revision: 3,
+      },
+    );
+    assert.equal(
+      (
+        await db.tenant(owner.tenant, (q) =>
+          q.query(
+            "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
+            [source.id, target.id],
+          ),
+        )
+      ).rowCount,
+      1,
+      "Version restore restores the canonical graph edge",
+    );
+    const restored = await linkOk(
+      "GET",
+      `/resources/${target.id}/backlinks`,
+      undefined,
+      member,
+    );
+    assert.deepEqual(
+      restored.items.map((x: any) => x.id),
+      [source.id],
+    );
   } finally {
     await linksApp.close();
   }
 });
 test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async () => {
   const target = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c cursor target",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c cursor target",
   });
   const sourceA = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c first source",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c first source",
   });
   const sourceB = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c second source",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c second source",
   });
   const staleSource = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c stale source",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c stale source",
   });
-  const linkedBlocks = [{
-    type: "paragraph",
-    content: [{
-      type: "link",
-      href: "/?page=" + target.id,
-      content: [{ type: "text", text: "Target", styles: {} }],
-    }],
-  }];
+  const linkedBlocks = [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "link",
+          href: "/?page=" + target.id,
+          content: [{ type: "text", text: "Target", styles: {} }],
+        },
+      ],
+    },
+  ];
   for (const source of [sourceA, sourceB])
     await ok("PATCH", `/pages/${source.id}/content`, {
-      blocks: linkedBlocks, expected_revision: 1,
+      blocks: linkedBlocks,
+      expected_revision: 1,
     });
   await ok("PATCH", `/resources/${sourceA.id}`, {
     title: "W13c renamed first source",
   });
   await ok("DELETE", `/resources/${sourceA.id}`);
   let visible = await ok("GET", `/resources/${target.id}/backlinks`);
-  assert.ok(!visible.items.some((x:any)=>x.id===sourceA.id),
-    "A trashed source must immediately leave backlink results");
+  assert.ok(
+    !visible.items.some((x: any) => x.id === sourceA.id),
+    "A trashed source must immediately leave backlink results",
+  );
   await ok("POST", `/resources/${sourceA.id}/restore`);
   visible = await ok("GET", `/resources/${target.id}/backlinks`);
-  assert.ok(visible.items.some((x:any)=>x.id===sourceA.id),
-    "Restoring a source recovers its retained canonical backlink");
+  assert.ok(
+    visible.items.some((x: any) => x.id === sourceA.id),
+    "Restoring a source recovers its retained canonical backlink",
+  );
   // Keep both sources inside the same JavaScript millisecond while preserving
   // PostgreSQL microsecond ordering. A cursor that rounded through Date would
   // skip the second source; the opaque cursor must retain the exact DB key.
@@ -1673,48 +1993,95 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     );
   });
 
-  const first = await ok("GET",
+  const first = await ok(
+    "GET",
     `/resources/${target.id}/backlinks?limit=1`,
-    undefined, member);
-  assert.deepEqual(first.items.map((x:any)=>x.id), [sourceA.id]);
-  assert.equal(first.items[0].title, "W13c renamed first source",
-    "Backlinks resolve the source's current title without re-indexing IDs");
+    undefined,
+    member,
+  );
+  assert.deepEqual(
+    first.items.map((x: any) => x.id),
+    [sourceA.id],
+  );
+  assert.equal(
+    first.items[0].title,
+    "W13c renamed first source",
+    "Backlinks resolve the source's current title without re-indexing IDs",
+  );
   assert.equal(first.has_more, true);
   assert.equal(typeof first.next_cursor, "string");
   assert.ok(!first.next_cursor.includes(sourceA.id));
   assert.ok(!first.next_cursor.includes(sourceB.id));
 
-  const altered = first.next_cursor.slice(0, -1) +
+  const altered =
+    first.next_cursor.slice(0, -1) +
     (first.next_cursor.endsWith("A") ? "B" : "A");
-  assert.equal((await req("GET",
-    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(altered)}`,
-    undefined, member)).statusCode, 400,
-    "Tampered backlink cursors must fail closed");
-  assert.equal((await req("GET",
-    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
-    undefined, owner)).statusCode, 400,
-    "A cursor is bound to the issuing principal");
-  assert.equal((await req("GET",
-    `/resources/${target.id}/backlinks?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
-    undefined, member)).statusCode, 400,
-    "A cursor cannot be replayed under a different page-size contract");
+  assert.equal(
+    (
+      await req(
+        "GET",
+        `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(altered)}`,
+        undefined,
+        member,
+      )
+    ).statusCode,
+    400,
+    "Tampered backlink cursors must fail closed",
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+        undefined,
+        owner,
+      )
+    ).statusCode,
+    400,
+    "A cursor is bound to the issuing principal",
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        `/resources/${target.id}/backlinks?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+        undefined,
+        member,
+      )
+    ).statusCode,
+    400,
+    "A cursor cannot be replayed under a different page-size contract",
+  );
 
-  const preciseContinuation = await ok("GET",
+  const preciseContinuation = await ok(
+    "GET",
     `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
-    undefined, member);
-  assert.deepEqual(preciseContinuation.items.map((x:any)=>x.id), [sourceB.id],
-    "Microsecond-distinct backlinks in one JS millisecond must not be skipped");
+    undefined,
+    member,
+  );
+  assert.deepEqual(
+    preciseContinuation.items.map((x: any) => x.id),
+    [sourceB.id],
+    "Microsecond-distinct backlinks in one JS millisecond must not be skipped",
+  );
   assert.equal(preciseContinuation.has_more, false);
   assert.equal(preciseContinuation.next_cursor, null);
 
   await permissionPatch(`/resources/${sourceB.id}/permissions`, {
-    inherit: false, grants: [],
+    inherit: false,
+    grants: [],
   });
-  const continued = await ok("GET",
+  const continued = await ok(
+    "GET",
     `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
-    undefined, member);
-  assert.deepEqual(continued.items, [],
-    "Revoked source must disappear on the next page without graph rebuild");
+    undefined,
+    member,
+  );
+  assert.deepEqual(
+    continued.items,
+    [],
+    "Revoked source must disappear on the next page without graph rebuild",
+  );
   assert.equal(continued.has_more, false);
   assert.equal(continued.next_cursor, null);
 
@@ -1729,18 +2096,32 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     );
   });
   const beforeRepair = await ok("GET", `/resources/${target.id}/backlinks`);
-  assert.deepEqual(beforeRepair.items.map((x:any)=>x.id), [sourceB.id],
-    "Read path stays side-effect free: missing canonical edge is not synthesized and stale edge is inert");
+  assert.deepEqual(
+    beforeRepair.items.map((x: any) => x.id),
+    [sourceB.id],
+    "Read path stays side-effect free: missing canonical edge is not synthesized and stale edge is inert",
+  );
 
   const firstRepairPage = await ok("POST", "/resource-links/reconcile", {
     limit: 1,
   });
   assert.equal(firstRepairPage.has_more, true);
   assert.equal(typeof firstRepairPage.next_cursor, "string");
-  assert.equal((await req("POST", "/resource-links/reconcile", {
-    limit: 1, cursor: firstRepairPage.next_cursor,
-  }, other)).statusCode, 400,
-  "Rebuild continuation is tenant/principal bound");
+  assert.equal(
+    (
+      await req(
+        "POST",
+        "/resource-links/reconcile",
+        {
+          limit: 1,
+          cursor: firstRepairPage.next_cursor,
+        },
+        other,
+      )
+    ).statusCode,
+    400,
+    "Rebuild continuation is tenant/principal bound",
+  );
 
   let reconcileCursor: string | null = null;
   let pages = 0;
@@ -1757,15 +2138,27 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
       break;
     }
     assert.equal(typeof reconcileCursor, "string");
-    assert.ok(pages < 50, "Resource-link repair must make bounded forward progress");
+    assert.ok(
+      pages < 50,
+      "Resource-link repair must make bounded forward progress",
+    );
   } while (reconcileCursor);
 
-  const repairedEdges = (await db.tenant(owner.tenant, (q) => q.query(
-    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
-    [target.id],
-  ))).rows.map((x:any)=>x.source_id).sort();
-  assert.deepEqual(repairedEdges, [sourceA.id, sourceB.id].sort(),
-    "Explicit repair restores canonical edges and removes stale candidates");
+  const repairedEdges = (
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+        [target.id],
+      ),
+    )
+  ).rows
+    .map((x: any) => x.source_id)
+    .sort();
+  assert.deepEqual(
+    repairedEdges,
+    [sourceA.id, sourceB.id].sort(),
+    "Explicit repair restores canonical edges and removes stale candidates",
+  );
 
   const snapshot = JSON.stringify(repairedEdges);
   reconcileCursor = null;
@@ -1780,37 +2173,62 @@ test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async
     if (!repeated.has_more) break;
     assert.ok(pages < 50, "Repeated repair must remain resumable");
   } while (reconcileCursor);
-  const afterRepeat = (await db.tenant(owner.tenant, (q) => q.query(
-    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
-    [target.id],
-  ))).rows.map((x:any)=>x.source_id).sort();
-  assert.equal(JSON.stringify(afterRepeat), snapshot,
-    "Resource-link reconciliation is idempotent");
+  const afterRepeat = (
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+        [target.id],
+      ),
+    )
+  ).rows
+    .map((x: any) => x.source_id)
+    .sort();
+  assert.equal(
+    JSON.stringify(afterRepeat),
+    snapshot,
+    "Resource-link reconciliation is idempotent",
+  );
 
-  const foreignRepair = await ok("POST", "/resource-links/reconcile",
-    { limit: 1 }, other);
-  assert.equal(foreignRepair.processed, 0,
-    "A different tenant cannot enumerate or repair this tenant's documents");
+  const foreignRepair = await ok(
+    "POST",
+    "/resource-links/reconcile",
+    { limit: 1 },
+    other,
+  );
+  assert.equal(
+    foreignRepair.processed,
+    0,
+    "A different tenant cannot enumerate or repair this tenant's documents",
+  );
 });
 
 test("W13c scoped cursor metadata excludes source kinds outside token scope", async () => {
   const target = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c scoped target",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c scoped target",
   });
   const pageSource = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c scoped page source",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c scoped page source",
   });
   const recordSource = randomUUID();
-  const blocks = [{
-    type: "paragraph",
-    content: [{
-      type: "link",
-      href: "/?page=" + target.id,
-      content: [{ type: "text", text: "Scoped target", styles: {} }],
-    }],
-  }];
+  const blocks = [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "link",
+          href: "/?page=" + target.id,
+          content: [{ type: "text", text: "Scoped target", styles: {} }],
+        },
+      ],
+    },
+  ];
   await ok("PATCH", `/pages/${pageSource.id}/content`, {
-    blocks, expected_revision: 1,
+    blocks,
+    expected_revision: 1,
   });
   const serviceId = randomUUID();
   await db.tenant(owner.tenant, async (q) => {
@@ -1824,12 +2242,12 @@ test("W13c scoped cursor metadata excludes source kinds outside token scope", as
     );
     await q.query(
       "INSERT INTO resources(id,tenant_id,parent_id,kind,title,updated_at)" +
-      " VALUES($1,$2,$3,'record','W13c hidden-by-scope record',now()-interval '1 second')",
+        " VALUES($1,$2,$3,'record','W13c hidden-by-scope record',now()-interval '1 second')",
       [recordSource, owner.tenant, space.id],
     );
     await q.query(
       "INSERT INTO page_documents(tenant_id,resource_id,blocks,plain_text,y_state)" +
-      " VALUES($1,$2,$3,'',decode('00','hex'))",
+        " VALUES($1,$2,$3,'',decode('00','hex'))",
       [owner.tenant, recordSource, JSON.stringify(blocks)],
     );
     await q.query(
@@ -1839,80 +2257,116 @@ test("W13c scoped cursor metadata excludes source kinds outside token scope", as
     for (const resourceId of [root.id, target.id, pageSource.id, recordSource])
       await q.query(
         "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-        " VALUES($1,$2,$3,1) ON CONFLICT(tenant_id,resource_id,principal_id)" +
-        " DO UPDATE SET level=EXCLUDED.level",
+          " VALUES($1,$2,$3,1) ON CONFLICT(tenant_id,resource_id,principal_id)" +
+          " DO UPDATE SET level=EXCLUDED.level",
         [owner.tenant, resourceId, serviceId],
       );
-    await q.query("UPDATE resources SET updated_at=now() WHERE id=$1",
-      [pageSource.id]);
+    await q.query("UPDATE resources SET updated_at=now() WHERE id=$1", [
+      pageSource.id,
+    ]);
   });
   const serviceToken = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, serviceId, ["pages.read"], "W13 scoped reader"));
-  const response = await req("GET",
+    createSession(
+      q,
+      owner.tenant,
+      serviceId,
+      ["pages.read"],
+      "W13 scoped reader",
+    ),
+  );
+  const response = await req(
+    "GET",
     `/resources/${target.id}/backlinks?limit=1`,
-    undefined, null, { authorization: "Bearer " + serviceToken });
+    undefined,
+    null,
+    { authorization: "Bearer " + serviceToken },
+  );
   assert.equal(response.statusCode, 200, response.body);
   const result = response.json();
-  assert.deepEqual(result.items.map((x:any)=>x.id), [pageSource.id]);
-  assert.equal(result.has_more, false,
-    "Scope-inaccessible record candidates must not influence continuation metadata");
+  assert.deepEqual(
+    result.items.map((x: any) => x.id),
+    [pageSource.id],
+  );
+  assert.equal(
+    result.has_more,
+    false,
+    "Scope-inaccessible record candidates must not influence continuation metadata",
+  );
   assert.equal(result.next_cursor, null);
-  assert.doesNotMatch(JSON.stringify(result), new RegExp(recordSource),
-    "Scoped result/cursor metadata must not reveal excluded record IDs");
-  assert.doesNotMatch(JSON.stringify(result), /hidden-by-scope record/,
-    "Scoped result must not reveal excluded record titles");
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    new RegExp(recordSource),
+    "Scoped result/cursor metadata must not reveal excluded record IDs",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /hidden-by-scope record/,
+    "Scoped result must not reveal excluded record titles",
+  );
 });
 
 test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async () => {
   const target = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c 10k backlink target",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c 10k backlink target",
   });
   const probeTarget = await ok("POST", "/resources", {
-    kind: "page", parent_id: space.id, title: "W13c index probe target",
+    kind: "page",
+    parent_id: space.id,
+    title: "W13c index probe target",
   });
-  const size = 10000, hiddenCount = 5000, staleCount = 300;
+  const size = 10000,
+    hiddenCount = 5000,
+    staleCount = 300;
   const ids = Array.from({ length: size }, () => randomUUID());
   const staleIds = ids.slice(hiddenCount, hiddenCount + staleCount);
   const restoreProbe = ids[hiddenCount + staleCount];
-  const blocks = JSON.stringify([{
-    type: "paragraph",
-    content: [{
-      type: "link",
-      href: "/?page=" + target.id,
-      content: [{ type: "text", text: "Target", styles: {} }],
-    }],
-  }]);
-  const staleBlocks = JSON.stringify([{
-    type: "paragraph",
-    content: "Conservative migration candidate /?page=" + target.id,
-  }]);
+  const blocks = JSON.stringify([
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "link",
+          href: "/?page=" + target.id,
+          content: [{ type: "text", text: "Target", styles: {} }],
+        },
+      ],
+    },
+  ]);
+  const staleBlocks = JSON.stringify([
+    {
+      type: "paragraph",
+      content: "Conservative migration candidate /?page=" + target.id,
+    },
+  ]);
   const fixtureStarted = Date.now();
   try {
     await db.tenant(owner.tenant, async (q) => {
       await q.query(
         "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position,updated_at)" +
-        " SELECT x.id,$2::uuid,$3::uuid,'page'," +
-        " 'W13c source '||x.n::text,x.n::float8," +
-        " now()-(x.n::text||' milliseconds')::interval" +
-        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+          " SELECT x.id,$2::uuid,$3::uuid,'page'," +
+          " 'W13c source '||x.n::text,x.n::float8," +
+          " now()-(x.n::text||' milliseconds')::interval" +
+          " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
         [ids, owner.tenant, space.id],
       );
       await q.query(
         "INSERT INTO page_documents(tenant_id,resource_id,blocks,plain_text,y_state)" +
-        " SELECT $2::uuid,x.id,$3::jsonb,'',decode('00','hex')" +
-        " FROM unnest($1::uuid[]) AS x(id)",
+          " SELECT $2::uuid,x.id,$3::jsonb,'',decode('00','hex')" +
+          " FROM unnest($1::uuid[]) AS x(id)",
         [ids, owner.tenant, blocks],
       );
       await q.query(
         "UPDATE page_documents SET blocks=$2::jsonb" +
-        " WHERE resource_id=ANY($1::uuid[])",
+          " WHERE resource_id=ANY($1::uuid[])",
         [staleIds, staleBlocks],
       );
       await q.query(
         "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-        " SELECT $2::uuid,x.id,$3::text,0" +
-        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
-        " WHERE x.n<=$4",
+          " SELECT $2::uuid,x.id,$3::text,0" +
+          " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+          " WHERE x.n<=$4",
         [ids, owner.tenant, member.id, hiddenCount],
       );
     });
@@ -1933,12 +2387,15 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
       " AND linked_target.kind IN ('page','record')" +
       " WHERE d.resource_id<>(match.ids)[1]::uuid" +
       " ON CONFLICT DO NOTHING";
-    let backfillLocks: any[] = [], concurrentReadMs = 0;
+    let backfillLocks: any[] = [],
+      concurrentReadMs = 0;
     if (!pg.emulated) {
       const planned = await db.tenant(owner.tenant, (q) =>
-        q.query("EXPLAIN (FORMAT JSON) " + backfillSql));
-      console.info("W13_BACKFILL_PLAN " +
-        JSON.stringify(planned.rows[0]["QUERY PLAN"]));
+        q.query("EXPLAIN (FORMAT JSON) " + backfillSql),
+      );
+      console.info(
+        "W13_BACKFILL_PLAN " + JSON.stringify(planned.rows[0]["QUERY PLAN"]),
+      );
     }
     const backfillStarted = Date.now();
     await db.tenant(owner.tenant, async (q) => {
@@ -1949,59 +2406,102 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
         const evidence = await db.tenant(owner.tenant, async (probe) => {
           const read = await probe.query(
             "SELECT count(*)::int n FROM resource_links" +
-            " WHERE tenant_id=$1 AND target_id=$2",
+              " WHERE tenant_id=$1 AND target_id=$2",
             [owner.tenant, target.id],
           );
           const locks = await probe.query(
             "SELECT mode,granted FROM pg_locks" +
-            " WHERE pid=$1 AND relation='resource_links'::regclass",
+              " WHERE pid=$1 AND relation='resource_links'::regclass",
             [pid],
           );
           return { read: read.rows[0].n, locks: locks.rows };
         });
         concurrentReadMs = Date.now() - readStarted;
         backfillLocks = evidence.locks;
-        assert.ok(concurrentReadMs < 5000,
-          "Migration backfill must not block concurrent backlink reads");
-        assert.ok(backfillLocks.some((lock:any) =>
-          lock.granted && lock.mode === "RowExclusiveLock"),
-          "Backfill evidence must capture the expected insert lock");
-        assert.ok(!backfillLocks.some((lock:any) =>
-          lock.granted && lock.mode === "AccessExclusiveLock"),
-          "Backfill must not require an AccessExclusive lock on resource_links");
+        assert.ok(
+          concurrentReadMs < 5000,
+          "Migration backfill must not block concurrent backlink reads",
+        );
+        assert.ok(
+          backfillLocks.some(
+            (lock: any) => lock.granted && lock.mode === "RowExclusiveLock",
+          ),
+          "Backfill evidence must capture the expected insert lock",
+        );
+        assert.ok(
+          !backfillLocks.some(
+            (lock: any) => lock.granted && lock.mode === "AccessExclusiveLock",
+          ),
+          "Backfill must not require an AccessExclusive lock on resource_links",
+        );
       }
     });
     const backfillMs = Date.now() - backfillStarted;
-    const edgeCount = await db.tenant(owner.tenant, (q) => one(q,
-      "SELECT count(*)::int n FROM resource_links WHERE target_id=$1",
-      [target.id]));
-    assert.equal(edgeCount.n, size,
-      "Set-based W13 migration/backfill must materialize canonical and conservative candidates");
-    const staleEdgeCount = await db.tenant(owner.tenant, (q) => one(q,
-      "SELECT count(*)::int n FROM resource_links" +
-      " WHERE target_id=$1 AND source_id=ANY($2::uuid[])",
-      [target.id, staleIds]));
-    assert.equal(staleEdgeCount.n, staleCount,
-      "Conservative backfill must include false-positive candidates for read-time canonical filtering");
-    assert.ok(backfillMs < 60000,
-      "10k W13 backfill exceeded provisional 60s CI budget: " + backfillMs + "ms");
+    const edgeCount = await db.tenant(owner.tenant, (q) =>
+      one(q, "SELECT count(*)::int n FROM resource_links WHERE target_id=$1", [
+        target.id,
+      ]),
+    );
+    assert.equal(
+      edgeCount.n,
+      size,
+      "Set-based W13 migration/backfill must materialize canonical and conservative candidates",
+    );
+    const staleEdgeCount = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT count(*)::int n FROM resource_links" +
+          " WHERE target_id=$1 AND source_id=ANY($2::uuid[])",
+        [target.id, staleIds],
+      ),
+    );
+    assert.equal(
+      staleEdgeCount.n,
+      staleCount,
+      "Conservative backfill must include false-positive candidates for read-time canonical filtering",
+    );
+    assert.ok(
+      backfillMs < 60000,
+      "10k W13 backfill exceeded provisional 60s CI budget: " +
+        backfillMs +
+        "ms",
+    );
 
     await ok("DELETE", `/resources/${restoreProbe}`);
-    const deletedPage = await ok("GET",
-      `/resources/${target.id}/backlinks?limit=40`, undefined, member);
-    assert.ok(!deletedPage.items.some((row:any)=>row.id===restoreProbe),
-      "Deleted hot-target sources must disappear without graph cleanup");
-    const retainedProbe = await db.tenant(owner.tenant, (q) => one(q,
-      "SELECT count(*)::int n FROM resource_links" +
-      " WHERE source_id=$1 AND target_id=$2",
-      [restoreProbe, target.id]));
-    assert.equal(retainedProbe.n, 1,
-      "Soft delete retains the candidate edge so restore stays cheap");
+    const deletedPage = await ok(
+      "GET",
+      `/resources/${target.id}/backlinks?limit=40`,
+      undefined,
+      member,
+    );
+    assert.ok(
+      !deletedPage.items.some((row: any) => row.id === restoreProbe),
+      "Deleted hot-target sources must disappear without graph cleanup",
+    );
+    const retainedProbe = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT count(*)::int n FROM resource_links" +
+          " WHERE source_id=$1 AND target_id=$2",
+        [restoreProbe, target.id],
+      ),
+    );
+    assert.equal(
+      retainedProbe.n,
+      1,
+      "Soft delete retains the candidate edge so restore stays cheap",
+    );
     await ok("POST", `/resources/${restoreProbe}/restore`);
-    const restoredPage = await ok("GET",
-      `/resources/${target.id}/backlinks?limit=40`, undefined, member);
-    assert.ok(restoredPage.items.some((row:any)=>row.id===restoreProbe),
-      "Restored hot-target source must recover on the next read");
+    const restoredPage = await ok(
+      "GET",
+      `/resources/${target.id}/backlinks?limit=40`,
+      undefined,
+      member,
+    );
+    assert.ok(
+      restoredPage.items.some((row: any) => row.id === restoreProbe),
+      "Restored hot-target source must recover on the next read",
+    );
 
     const hidden = new Set(ids.slice(0, hiddenCount));
     const stale = new Set(staleIds);
@@ -2011,71 +2511,100 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
     const pageStarted = Date.now();
     for (let segment = 0; segment < 5; segment++) {
       const started = Date.now();
-      const result = await ok("GET",
+      const result = await ok(
+        "GET",
         `/resources/${target.id}/backlinks?limit=40` +
-        (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
-        undefined, member);
+          (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+        undefined,
+        member,
+      );
       latencies.push(Date.now() - started);
-      assert.equal(result.items.length, 40,
-        "A hot target must return a full permission-filtered page");
-      assert.ok(result.items.every((row:any)=>!hidden.has(row.id)),
-        "Denied source IDs/titles may not enter backlink pages");
-      assert.ok(result.items.every((row:any)=>!stale.has(row.id)),
-        "Conservative false-positive candidates must never become disclosed backlinks");
-      gathered.push(...result.items.map((row:any)=>row.id));
+      assert.equal(
+        result.items.length,
+        40,
+        "A hot target must return a full permission-filtered page",
+      );
+      assert.ok(
+        result.items.every((row: any) => !hidden.has(row.id)),
+        "Denied source IDs/titles may not enter backlink pages",
+      );
+      assert.ok(
+        result.items.every((row: any) => !stale.has(row.id)),
+        "Conservative false-positive candidates must never become disclosed backlinks",
+      );
+      gathered.push(...result.items.map((row: any) => row.id));
       cursor = result.next_cursor;
       assert.equal(result.has_more, true);
       assert.equal(typeof cursor, "string");
     }
     assert.equal(gathered.length, 200);
-    assert.equal(new Set(gathered).size, 200,
-      "Stable backlink cursor pages must not duplicate unchanged sources");
+    assert.equal(
+      new Set(gathered).size,
+      200,
+      "Stable backlink cursor pages must not duplicate unchanged sources",
+    );
     const pageMs = Date.now() - pageStarted;
-    latencies.sort((a,b)=>a-b);
-    const percentile = (p:number) =>
-      latencies[Math.min(latencies.length - 1,
-        Math.ceil(p * latencies.length) - 1)];
-    console.info("W13_10K_BACKLINK_BENCH " + JSON.stringify({
-      source_pages: size,
-      hidden_sources: hiddenCount,
-      stale_false_positive_candidates: staleCount,
-      visible_canonical_sources: size - hiddenCount - staleCount,
-      fixture_ms: fixtureMs,
-      migration_backfill_ms: backfillMs,
-      migration_concurrent_read_ms: concurrentReadMs,
-      migration_lock_modes: backfillLocks.map((lock:any)=>lock.mode).sort(),
-      five_page_ms: pageMs,
-      page_p50_ms: percentile(0.5),
-      page_p95_ms: percentile(0.95),
-      returned: gathered.length,
-    }));
-    assert.ok(pageMs < 30000,
-      "10k W13 paginated ACL workload exceeded provisional 30s CI budget");
+    latencies.sort((a, b) => a - b);
+    const percentile = (p: number) =>
+      latencies[
+        Math.min(latencies.length - 1, Math.ceil(p * latencies.length) - 1)
+      ];
+    console.info(
+      "W13_10K_BACKLINK_BENCH " +
+        JSON.stringify({
+          source_pages: size,
+          hidden_sources: hiddenCount,
+          stale_false_positive_candidates: staleCount,
+          visible_canonical_sources: size - hiddenCount - staleCount,
+          fixture_ms: fixtureMs,
+          migration_backfill_ms: backfillMs,
+          migration_concurrent_read_ms: concurrentReadMs,
+          migration_lock_modes: backfillLocks
+            .map((lock: any) => lock.mode)
+            .sort(),
+          five_page_ms: pageMs,
+          page_p50_ms: percentile(0.5),
+          page_p95_ms: percentile(0.95),
+          returned: gathered.length,
+        }),
+    );
+    assert.ok(
+      pageMs < 30000,
+      "10k W13 paginated ACL workload exceeded provisional 30s CI budget",
+    );
 
     // Use a highly selective target to prove the target/source ordering index
     // is available to the exact lookup predicate used by the API.
-    await db.tenant(owner.tenant, (q) => q.query(
-      "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
-      " VALUES($1,$2,$3)",
-      [owner.tenant, ids[hiddenCount], probeTarget.id],
-    ));
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
+          " VALUES($1,$2,$3)",
+        [owner.tenant, ids[hiddenCount], probeTarget.id],
+      ),
+    );
     if (!pg.emulated) {
-      const explained = await db.tenant(owner.tenant, (q) => q.query(
-        "EXPLAIN (FORMAT JSON) SELECT source_id FROM resource_links" +
-        " WHERE tenant_id=$1 AND target_id=$2" +
-        " ORDER BY source_id LIMIT 100",
-        [owner.tenant, probeTarget.id],
-      ));
+      const explained = await db.tenant(owner.tenant, (q) =>
+        q.query(
+          "EXPLAIN (FORMAT JSON) SELECT source_id FROM resource_links" +
+            " WHERE tenant_id=$1 AND target_id=$2" +
+            " ORDER BY source_id LIMIT 100",
+          [owner.tenant, probeTarget.id],
+        ),
+      );
       const plan = JSON.stringify(explained.rows[0]["QUERY PLAN"]);
-      assert.match(plan, /resource_links_target/,
-        "PostgreSQL must be able to use the W13 target lookup index");
+      assert.match(
+        plan,
+        /resource_links_target/,
+        "PostgreSQL must be able to use the W13 target lookup index",
+      );
       console.info("W13_LINK_INDEX_PLAN " + plan);
     }
   } finally {
     await db.tenant(owner.tenant, async (q) => {
       await q.query("DELETE FROM resources WHERE id=ANY($1::uuid[])", [ids]);
-      await q.query("DELETE FROM resources WHERE id=ANY($1::uuid[])",
-        [[target.id, probeTarget.id]]);
+      await q.query("DELETE FROM resources WHERE id=ANY($1::uuid[])", [
+        [target.id, probeTarget.id],
+      ]);
     });
   }
 });
@@ -2183,90 +2712,143 @@ test("W10c4f native: authenticated structural intents serialize, expire and rech
   // Unlike two browser click promises, this test deliberately waits for a
   // *confirmed* reservation before dispatching the conflicting principal.
   // No test-only server backdoor or disabled security middleware is involved.
-  const targetPage=await ok("POST","/resources",{
-    kind:"page", parent_id:space.id, title:"Structural lease integration",
+  const targetPage = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "Structural lease integration",
   });
-  const endpoint="/pages/"+targetPage.id+"/content";
-  const initial=await ok("GET",endpoint);
-  const ids=[randomUUID(),randomUUID(),randomUUID()];
-  const seeded=await ok("PATCH",endpoint,{
-    expected_revision:initial.revision,blocks:[
-      {id:ids[0],type:"heading",props:{level:2},content:"Lease heading"},
-      {id:ids[1],type:"callout",props:{variant:"warning"},content:"Lease target"},
-      {id:ids[2],type:"quote",content:"Never remove this quote"},
+  const endpoint = "/pages/" + targetPage.id + "/content";
+  const initial = await ok("GET", endpoint);
+  const ids = [randomUUID(), randomUUID(), randomUUID()];
+  const seeded = await ok("PATCH", endpoint, {
+    expected_revision: initial.revision,
+    blocks: [
+      {
+        id: ids[0],
+        type: "heading",
+        props: { level: 2 },
+        content: "Lease heading",
+      },
+      {
+        id: ids[1],
+        type: "callout",
+        props: { variant: "warning" },
+        content: "Lease target",
+      },
+      { id: ids[2], type: "quote", content: "Never remove this quote" },
     ],
   });
-  const a=await connect(owner,targetPage),b=await connect(member,targetPage);
-  type StructuralReply={type:string;reason?:string};
+  const a = await connect(owner, targetPage),
+    b = await connect(member, targetPage);
+  type StructuralReply = { type: string; reason?: string };
   async function reserve(
-    client:typeof a,blockId:string,overrideVector?:string,
-  ):Promise<StructuralReply>{
-    const requestId=randomUUID();
-    return await new Promise<StructuralReply>((resolve,reject)=>{
-      const listener=({payload}:{payload:string})=>{
-        let reply:StructuralReply & {requestId?:string};
-        try {reply=JSON.parse(payload);} catch {return;}
-        if(reply.requestId!==requestId)return;
+    client: typeof a,
+    blockId: string,
+    overrideVector?: string,
+  ): Promise<StructuralReply> {
+    const requestId = randomUUID();
+    return await new Promise<StructuralReply>((resolve, reject) => {
+      const listener = ({ payload }: { payload: string }) => {
+        let reply: StructuralReply & { requestId?: string };
+        try {
+          reply = JSON.parse(payload);
+        } catch {
+          return;
+        }
+        if (reply.requestId !== requestId) return;
         clearTimeout(timer);
-        client.provider.off("stateless",listener);
+        client.provider.off("stateless", listener);
         resolve(reply);
       };
-      const timer=setTimeout(()=>{
-        client.provider.off("stateless",listener);
+      const timer = setTimeout(() => {
+        client.provider.off("stateless", listener);
         reject(Error("Structural reservation did not answer within 6s"));
-      },6000);
-      client.provider.on("stateless",listener);
-      client.provider.sendStateless(JSON.stringify({
-        type:"structural.acquire",requestId,blockId,
-        vector:overrideVector??
-          Buffer.from(Y.encodeStateVector(client.doc)).toString("base64"),
-      }));
+      }, 6000);
+      client.provider.on("stateless", listener);
+      client.provider.sendStateless(
+        JSON.stringify({
+          type: "structural.acquire",
+          requestId,
+          blockId,
+          vector:
+            overrideVector ??
+            Buffer.from(Y.encodeStateVector(client.doc)).toString("base64"),
+        }),
+      );
     });
   }
   try {
-    await until(()=>Buffer.from(Y.encodeStateVector(a.doc)).equals(
-      Buffer.from(Y.encodeStateVector(b.doc))));
-    const originalVector=Buffer.from(Y.encodeStateVector(a.doc)).toString("base64");
-    const first=await reserve(a,ids[1]);
-    assert.equal(first.type,"structural.granted");
-    const competing=await reserve(b,ids[1]);
-    assert.equal(competing.type,"structural.denied");
-    assert.equal(competing.reason,"concurrent-edit",
-      "A confirmed same-block reservation must exclude a second principal");
-    const repeat=await reserve(a,ids[0]);
-    assert.equal(repeat.reason,"concurrent-edit",
-      "One connection must not hold multiple reservations");
-    const forged=await reserve(b,randomUUID());
-    assert.equal(forged.reason,"missing-block");
-    const stale=await reserve(b,ids[2],Buffer.from([0]).toString("base64"));
-    assert.equal(stale.reason,"document-changed");
-    assert.deepEqual((await ok("GET",endpoint)).blocks.map((v:any)=>v.id),ids,
-      "Reservation requests alone must not change canonical persisted blocks");
+    await until(() =>
+      Buffer.from(Y.encodeStateVector(a.doc)).equals(
+        Buffer.from(Y.encodeStateVector(b.doc)),
+      ),
+    );
+    const originalVector = Buffer.from(Y.encodeStateVector(a.doc)).toString(
+      "base64",
+    );
+    const first = await reserve(a, ids[1]);
+    assert.equal(first.type, "structural.granted");
+    const competing = await reserve(b, ids[1]);
+    assert.equal(competing.type, "structural.denied");
+    assert.equal(
+      competing.reason,
+      "concurrent-edit",
+      "A confirmed same-block reservation must exclude a second principal",
+    );
+    const repeat = await reserve(a, ids[0]);
+    assert.equal(
+      repeat.reason,
+      "concurrent-edit",
+      "One connection must not hold multiple reservations",
+    );
+    const forged = await reserve(b, randomUUID());
+    assert.equal(forged.reason, "missing-block");
+    const stale = await reserve(b, ids[2], Buffer.from([0]).toString("base64"));
+    assert.equal(stale.reason, "document-changed");
+    assert.deepEqual(
+      (await ok("GET", endpoint)).blocks.map((v: any) => v.id),
+      ids,
+      "Reservation requests alone must not change canonical persisted blocks",
+    );
 
     // A client may crash or disappear after a grant: the next authenticated
     // principal must regain control once the bounded lease expires.
     await pause(8600);
-    const recovered=await reserve(b,ids[1]);
-    assert.equal(recovered.type,"structural.granted",
-      "Expired reservations must not permanently block editing");
-    b.doc.getMap("structural-lease-proof").set("written",randomUUID());
-    await until(async()=>(await ok("GET",endpoint)).revision>seeded.revision);
+    const recovered = await reserve(b, ids[1]);
+    assert.equal(
+      recovered.type,
+      "structural.granted",
+      "Expired reservations must not permanently block editing",
+    );
+    b.doc.getMap("structural-lease-proof").set("written", randomUUID());
+    await until(
+      async () => (await ok("GET", endpoint)).revision > seeded.revision,
+    );
     // A matching document write should release the lease on persistence,
     // not block the room until the full 8-second timeout.
-    const afterWrite=await reserve(a,ids[1]);
-    assert.equal(afterWrite.type,"structural.granted",
-      "Persistence must release an exercised reservation");
-    assert.deepEqual((await ok("GET",endpoint)).blocks.map((v:any)=>v.id),ids);
+    const afterWrite = await reserve(a, ids[1]);
+    assert.equal(
+      afterWrite.type,
+      "structural.granted",
+      "Persistence must release an exercised reservation",
+    );
+    assert.deepEqual(
+      (await ok("GET", endpoint)).blocks.map((v: any) => v.id),
+      ids,
+    );
 
     // Revocation cannot be bypassed with a still-live connection or a
     // previously encoded Yjs state-vector. No unauthorized grant is issued.
-    await permissionPatch("/resources/"+targetPage.id+"/permissions",{
-      inherit:true,grants:[{principal_id:member.id,level:2}],
+    await permissionPatch("/resources/" + targetPage.id + "/permissions", {
+      inherit: true,
+      grants: [{ principal_id: member.id, level: 2 }],
     });
-    const denied=await reserve(b,ids[1],originalVector);
-    assert.equal(denied.type,"structural.denied");
-    assert.ok(["read-only","document-changed"].includes(denied.reason||""),
-      "Permission downgrade or stale document must fail closed");
+    const denied = await reserve(b, ids[1], originalVector);
+    assert.equal(denied.type, "structural.denied");
+    assert.ok(
+      ["read-only", "document-changed"].includes(denied.reason || ""),
+      "Permission downgrade or stale document must fail closed",
+    );
   } finally {
     a.provider.destroy();
     b.provider.destroy();
@@ -2274,189 +2856,368 @@ test("W10c4f native: authenticated structural intents serialize, expire and rech
 });
 
 test("W11a comment anchors require canonical same-page Yjs ID and current revision", async () => {
-  const target=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"W11a canonical comment target",
+  const target = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W11a canonical comment target",
   });
-  const foreign=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"W11a unrelated private page",
+  const foreign = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W11a unrelated private page",
   });
-  const endpoint="/pages/"+target.id+"/content";
-  const first=await ok("GET",endpoint);
-  const anchor=randomUUID(),otherAnchor=randomUUID();
-  const saved=await ok("PATCH",endpoint,{
-    expected_revision:first.revision,
-    blocks:[{id:anchor,type:"heading",props:{level:2},
-      content:"Target block must be anchored by ID"}],
+  const endpoint = "/pages/" + target.id + "/content";
+  const first = await ok("GET", endpoint);
+  const anchor = randomUUID(),
+    otherAnchor = randomUUID();
+  const saved = await ok("PATCH", endpoint, {
+    expected_revision: first.revision,
+    blocks: [
+      {
+        id: anchor,
+        type: "heading",
+        props: { level: 2 },
+        content: "Target block must be anchored by ID",
+      },
+    ],
   });
-  const foreignInitial=await ok("GET","/pages/"+foreign.id+"/content");
-  await ok("PATCH","/pages/"+foreign.id+"/content",{
-    expected_revision:foreignInitial.revision,
-    blocks:[{id:otherAnchor,type:"quote",content:"Not in the target page"}],
+  const foreignInitial = await ok("GET", "/pages/" + foreign.id + "/content");
+  await ok("PATCH", "/pages/" + foreign.id + "/content", {
+    expected_revision: foreignInitial.revision,
+    blocks: [
+      { id: otherAnchor, type: "quote", content: "Not in the target page" },
+    ],
   });
-  const url="/resources/"+target.id+"/comments";
-  const valid={body:"Review this precise heading",
-    block_id:anchor,expected_revision:saved.revision};
-  const posted=await ok("POST",url,valid);
-  assert.equal(posted.block_id,anchor);
-  const comments=await ok("GET",url);
-  assert.equal(comments.filter((c:any)=>c.id===posted.id)[0].block_id,anchor);
-  assert.equal((await req("POST",url,{body:"Unversioned",block_id:anchor}))
-    .statusCode,400);
-  assert.equal((await req("POST",url,{body:"Malformed",block_id:"../../other",
-    expected_revision:saved.revision})).statusCode,400);
-  assert.equal((await req("POST",url,{body:"Other page",block_id:otherAnchor,
-    expected_revision:saved.revision})).statusCode,404);
-  assert.equal((await req("POST",url,{body:"Unknown ID",block_id:randomUUID(),
-    expected_revision:saved.revision})).statusCode,404);
-  assert.equal((await req("POST",url,valid,other)).statusCode,404,
-    "Cross-tenant owner cannot forge a comment on a known page");
-  const updated=await ok("PATCH",endpoint,{
-    expected_revision:saved.revision,
-    blocks:[{id:anchor,type:"heading",props:{level:2},
-      content:"Same ID, newer canonical revision"}],
+  const url = "/resources/" + target.id + "/comments";
+  const valid = {
+    body: "Review this precise heading",
+    block_id: anchor,
+    expected_revision: saved.revision,
+  };
+  const posted = await ok("POST", url, valid);
+  assert.equal(posted.block_id, anchor);
+  const comments = await ok("GET", url);
+  assert.equal(
+    comments.filter((c: any) => c.id === posted.id)[0].block_id,
+    anchor,
+  );
+  assert.equal(
+    (await req("POST", url, { body: "Unversioned", block_id: anchor }))
+      .statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req("POST", url, {
+        body: "Malformed",
+        block_id: "../../other",
+        expected_revision: saved.revision,
+      })
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req("POST", url, {
+        body: "Other page",
+        block_id: otherAnchor,
+        expected_revision: saved.revision,
+      })
+    ).statusCode,
+    404,
+  );
+  assert.equal(
+    (
+      await req("POST", url, {
+        body: "Unknown ID",
+        block_id: randomUUID(),
+        expected_revision: saved.revision,
+      })
+    ).statusCode,
+    404,
+  );
+  assert.equal(
+    (await req("POST", url, valid, other)).statusCode,
+    404,
+    "Cross-tenant owner cannot forge a comment on a known page",
+  );
+  const updated = await ok("PATCH", endpoint, {
+    expected_revision: saved.revision,
+    blocks: [
+      {
+        id: anchor,
+        type: "heading",
+        props: { level: 2 },
+        content: "Same ID, newer canonical revision",
+      },
+    ],
   });
-  assert.equal((await req("POST",url,valid)).statusCode,409,
-    "A stale page revision must reject even a still-present block ID");
-  const current=await ok("POST",url,{
-    ...valid,expected_revision:updated.revision,
+  assert.equal(
+    (await req("POST", url, valid)).statusCode,
+    409,
+    "A stale page revision must reject even a still-present block ID",
+  );
+  const current = await ok("POST", url, {
+    ...valid,
+    expected_revision: updated.revision,
   });
-  assert.equal(current.block_id,anchor);
-  assert.equal((await req("POST",url,{body:"No anchor",
-    expected_revision:updated.revision})).statusCode,400);
-  const legacy=await ok("POST",url,{body:"Resource-wide discussion remains valid"});
-  assert.equal(legacy.block_id,undefined,
-    "Legacy unanchored comments remain supported");
-  assert.equal((await ok("GET",url)).length,3);
+  assert.equal(current.block_id, anchor);
+  assert.equal(
+    (
+      await req("POST", url, {
+        body: "No anchor",
+        expected_revision: updated.revision,
+      })
+    ).statusCode,
+    400,
+  );
+  const legacy = await ok("POST", url, {
+    body: "Resource-wide discussion remains valid",
+  });
+  assert.equal(
+    legacy.block_id,
+    undefined,
+    "Legacy unanchored comments remain supported",
+  );
+  assert.equal((await ok("GET", url)).length, 3);
 });
 
 test("W11c native replies stay on the same resource and revoked mentions vanish", async () => {
-  const target=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"W11c reply scope",
+  const target = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W11c reply scope",
   });
-  const foreign=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"W11c unrelated thread",
+  const foreign = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W11c unrelated thread",
   });
-  const targetUrl="/resources/"+target.id+"/comments";
-  const otherUrl="/resources/"+foreign.id+"/comments";
-  const otherRoot=await ok("POST",otherUrl,{body:"Other resource root"});
-  const initial=await ok("GET","/pages/"+target.id+"/content");
-  const anchoredId=randomUUID();
-  const seeded=await ok("PATCH","/pages/"+target.id+"/content",{
-    expected_revision:initial.revision,
-    blocks:[{id:anchoredId,type:"quote",content:"Thread target"}],
+  const targetUrl = "/resources/" + target.id + "/comments";
+  const otherUrl = "/resources/" + foreign.id + "/comments";
+  const otherRoot = await ok("POST", otherUrl, { body: "Other resource root" });
+  const initial = await ok("GET", "/pages/" + target.id + "/content");
+  const anchoredId = randomUUID();
+  const seeded = await ok("PATCH", "/pages/" + target.id + "/content", {
+    expected_revision: initial.revision,
+    blocks: [{ id: anchoredId, type: "quote", content: "Thread target" }],
   });
-  const root=await ok("POST",targetUrl,{
-    body:"Discuss this quote @{"+member.id+"}",
-    block_id:anchoredId,expected_revision:seeded.revision,
+  const root = await ok("POST", targetUrl, {
+    body: "Discuss this quote @{" + member.id + "}",
+    block_id: anchoredId,
+    expected_revision: seeded.revision,
   });
-  assert.equal(root.parent_comment_id,null);
-  const first=await ok("POST",targetUrl,{
-    body:"Answer without a stale anchor precondition",reply_to:root.id,
-  },member);
-  assert.equal(first.parent_comment_id,root.id);
-  assert.equal(first.block_id,anchoredId);
-  const second=await ok("POST",targetUrl,{
-    body:"Another participant",reply_to:root.id,
-  });
-  assert.equal(second.parent_comment_id,root.id);
-  const listed=await ok("GET",targetUrl);
-  assert.deepEqual(
-    listed.filter((comment:any)=>comment.parent_comment_id===root.id)
-      .map((comment:any)=>comment.id).sort(),
-    [first.id,second.id].sort(),
+  assert.equal(root.parent_comment_id, null);
+  const first = await ok(
+    "POST",
+    targetUrl,
+    {
+      body: "Answer without a stale anchor precondition",
+      reply_to: root.id,
+    },
+    member,
   );
-  assert.equal((await req("POST",targetUrl,{
-    body:"Foreign root",reply_to:otherRoot.id,
-  })).statusCode,404);
-  assert.equal((await req("POST",targetUrl,{
-    body:"Nested reply",reply_to:first.id,
-  })).statusCode,400);
-  assert.equal((await req("POST",targetUrl,{
-    body:"Malformed reply",reply_to:"not-a-uuid",
-  })).statusCode,400);
-  assert.equal((await req("POST",targetUrl,{
-    body:"Reply may not replace its inherited anchor",reply_to:root.id,
-    block_id:randomUUID(),expected_revision:seeded.revision,
-  })).statusCode,400);
-  assert.equal((await req("POST",targetUrl,{
-    body:"Cross tenant",reply_to:root.id,
-  },other)).statusCode,404);
+  assert.equal(first.parent_comment_id, root.id);
+  assert.equal(first.block_id, anchoredId);
+  const second = await ok("POST", targetUrl, {
+    body: "Another participant",
+    reply_to: root.id,
+  });
+  assert.equal(second.parent_comment_id, root.id);
+  const listed = await ok("GET", targetUrl);
+  assert.deepEqual(
+    listed
+      .filter((comment: any) => comment.parent_comment_id === root.id)
+      .map((comment: any) => comment.id)
+      .sort(),
+    [first.id, second.id].sort(),
+  );
+  assert.equal(
+    (
+      await req("POST", targetUrl, {
+        body: "Foreign root",
+        reply_to: otherRoot.id,
+      })
+    ).statusCode,
+    404,
+  );
+  assert.equal(
+    (
+      await req("POST", targetUrl, {
+        body: "Nested reply",
+        reply_to: first.id,
+      })
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req("POST", targetUrl, {
+        body: "Malformed reply",
+        reply_to: "not-a-uuid",
+      })
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req("POST", targetUrl, {
+        body: "Reply may not replace its inherited anchor",
+        reply_to: root.id,
+        block_id: randomUUID(),
+        expected_revision: seeded.revision,
+      })
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "POST",
+        targetUrl,
+        {
+          body: "Cross tenant",
+          reply_to: root.id,
+        },
+        other,
+      )
+    ).statusCode,
+    404,
+  );
   // The composite database FK must also reject bypassing the API to
   // manufacture a cross-page link within a tenant.
-  await assert.rejects(db.tenant(owner.tenant,(q)=>
-    q.query(
-      "INSERT INTO comments(id,tenant_id,resource_id,author_id,body,parent_comment_id) VALUES($1,$2,$3,$4,'forged',$5)",
-      [randomUUID(),owner.tenant,target.id,owner.id,otherRoot.id],
-    )),/foreign key|violates|constraint/i);
-  await ok("PATCH",targetUrl+"/"+root.id,{resolved:true});
-  assert.equal((await req("POST",targetUrl,{
-    body:"Cannot reply to a resolved root",reply_to:root.id,
-  })).statusCode,409);
+  await assert.rejects(
+    db.tenant(owner.tenant, (q) =>
+      q.query(
+        "INSERT INTO comments(id,tenant_id,resource_id,author_id,body,parent_comment_id) VALUES($1,$2,$3,$4,'forged',$5)",
+        [randomUUID(), owner.tenant, target.id, owner.id, otherRoot.id],
+      ),
+    ),
+    /foreign key|violates|constraint/i,
+  );
+  await ok("PATCH", targetUrl + "/" + root.id, { resolved: true });
+  assert.equal(
+    (
+      await req("POST", targetUrl, {
+        body: "Cannot reply to a resolved root",
+        reply_to: root.id,
+      })
+    ).statusCode,
+    409,
+  );
   // Mentions are read-time permission-scoped, not a durable disclosure.
-  const initialNotifications=await ok("GET","/notifications",undefined,member);
-  assert.ok(initialNotifications.some((entry:any)=>entry.resource_id===target.id));
-  await permissionPatch("/resources/"+target.id+"/permissions",{
-    inherit:true,grants:[{principal_id:member.id,level:0}],
+  const initialNotifications = await ok(
+    "GET",
+    "/notifications",
+    undefined,
+    member,
+  );
+  assert.ok(
+    initialNotifications.some((entry: any) => entry.resource_id === target.id),
+  );
+  await permissionPatch("/resources/" + target.id + "/permissions", {
+    inherit: true,
+    grants: [{ principal_id: member.id, level: 0 }],
   });
-  const after=await ok("GET","/notifications",undefined,member);
-  assert.ok(!after.some((entry:any)=>entry.resource_id===target.id),
-    "Revoked member must not read the old notification text or page ID");
-  assert.equal((await req("GET",targetUrl,undefined,member)).statusCode,404);
-  assert.equal((await req("POST",targetUrl,{
-    body:"No post after revocation",reply_to:root.id,
-  },member)).statusCode,404);
-  await ok("DELETE",targetUrl+"/"+root.id);
-  const afterDelete=await ok("GET",targetUrl);
-  assert.equal(afterDelete.filter((c:any)=>c.parent_comment_id===root.id).length,0,
-    "Deleting the parent must remove dependent replies via database constraint");
+  const after = await ok("GET", "/notifications", undefined, member);
+  assert.ok(
+    !after.some((entry: any) => entry.resource_id === target.id),
+    "Revoked member must not read the old notification text or page ID",
+  );
+  assert.equal(
+    (await req("GET", targetUrl, undefined, member)).statusCode,
+    404,
+  );
+  assert.equal(
+    (
+      await req(
+        "POST",
+        targetUrl,
+        {
+          body: "No post after revocation",
+          reply_to: root.id,
+        },
+        member,
+      )
+    ).statusCode,
+    404,
+  );
+  await ok("DELETE", targetUrl + "/" + root.id);
+  const afterDelete = await ok("GET", targetUrl);
+  assert.equal(
+    afterDelete.filter((c: any) => c.parent_comment_id === root.id).length,
+    0,
+    "Deleting the parent must remove dependent replies via database constraint",
+  );
 });
 
-test("W11c concurrent resolve and reply serialize on the parent row lock",async()=>{
-  const target=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"Thread resolve serialization",
+test("W11c concurrent resolve and reply serialize on the parent row lock", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "Thread resolve serialization",
   });
-  const url="/resources/"+target.id+"/comments";
-  const rootComment=await ok("POST",url,{body:"Race root"});
-  let signal!:()=>void,release!:()=>void;
-  const ready=new Promise<void>(resolve=>{signal=resolve;});
-  const untilReleased=new Promise<void>(resolve=>{release=resolve;});
-  const transaction=db.tenant(owner.tenant,async q=>{
+  const url = "/resources/" + target.id + "/comments";
+  const rootComment = await ok("POST", url, { body: "Race root" });
+  let signal!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    signal = resolve;
+  });
+  const untilReleased = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const transaction = db.tenant(owner.tenant, async (q) => {
     // A root resolve holds PostgreSQL's normal non-key UPDATE lock.
     // KEY SHARE is compatible with this lock and would allow the reply to
     // race past the resolution check. FOR SHARE must wait.
-    await q.query("SELECT id FROM comments WHERE id=$1 FOR NO KEY UPDATE",
-      [rootComment.id]);
+    await q.query("SELECT id FROM comments WHERE id=$1 FOR NO KEY UPDATE", [
+      rootComment.id,
+    ]);
     signal();
     await untilReleased;
-    await q.query("UPDATE comments SET resolved=true WHERE id=$1",
-      [rootComment.id]);
+    await q.query("UPDATE comments SET resolved=true WHERE id=$1", [
+      rootComment.id,
+    ]);
   });
   await ready;
-  let finished=false;
-  const pending=req("POST",url,{body:"Reply must not win",reply_to:rootComment.id})
-    .finally(()=>{finished=true;});
+  let finished = false;
+  const pending = req("POST", url, {
+    body: "Reply must not win",
+    reply_to: rootComment.id,
+  }).finally(() => {
+    finished = true;
+  });
   try {
     // Assert the compatibility underlying the production row lock directly:
     // FOR SHARE must conflict with the parent's ordinary non-key UPDATE lock.
     await assert.rejects(
-      db.tenant(owner.tenant,q=>q.query(
-        "SELECT id FROM comments WHERE id=$1 FOR SHARE NOWAIT",[rootComment.id])),
+      db.tenant(owner.tenant, (q) =>
+        q.query("SELECT id FROM comments WHERE id=$1 FOR SHARE NOWAIT", [
+          rootComment.id,
+        ]),
+      ),
       /could not obtain lock on row|55P03/,
     );
     // The actual reply HTTP transaction must remain pending while the root
     // is locked. This is tested with its genuine Fastify/PG path, not a stub.
     await pause(300);
-    assert.equal(finished,false,
-      "Reply cannot pass an unresolved parent whose row is held for update");
-  }finally{
+    assert.equal(
+      finished,
+      false,
+      "Reply cannot pass an unresolved parent whose row is held for update",
+    );
+  } finally {
     release();
     await transaction;
   }
-  const denied=await pending;
-  assert.equal(denied.statusCode,409,denied.body);
-  const rows=await ok("GET",url);
-  assert.deepEqual(rows.filter((c:any)=>c.parent_comment_id===rootComment.id),
-    [],"No reply is committed after the parent resolves");
+  const denied = await pending;
+  assert.equal(denied.statusCode, 409, denied.body);
+  const rows = await ok("GET", url);
+  assert.deepEqual(
+    rows.filter((c: any) => c.parent_comment_id === rootComment.id),
+    [],
+    "No reply is committed after the parent resolves",
+  );
 });
 
 test("comments create mentions and block unauthorized moderation", async () => {
@@ -2722,7 +3483,10 @@ test("audit export is admin-only, bounded/filterable and spreadsheet safe", asyn
   const adminExport = await req("GET", "/audit/export?limit=25");
   assert.equal(adminExport.statusCode, 200, adminExport.body);
   assert.match(adminExport.headers["content-type"], /text\/csv/);
-  assert.match(adminExport.body, /id,action,actor,resource_id,request_id,created_at/);
+  assert.match(
+    adminExport.body,
+    /id,action,actor,resource_id,request_id,created_at/,
+  );
 
   const filtered = await req(
     "GET",
@@ -2838,9 +3602,7 @@ test("outbox dispatch signs webhooks and records retries without following redir
       `sha256=${signature(h.secret, received.headers["x-workspace-timestamp"], received.body)}`,
     );
     const deliveries = (await ok("GET", "/webhooks")).deliveries;
-    assert(
-      deliveries.some((d: any) => d.status === "retry"),
-    );
+    assert(deliveries.some((d: any) => d.status === "retry"));
     assert.equal(redirectTargetHit, false);
   } finally {
     receiver.close();
@@ -2858,7 +3620,8 @@ test("dead webhook deliveries can be replayed only by same-tenant administrators
     title: "Replay acceptance " + randomUUID().slice(0, 8),
   });
   const event = await db.tenant(owner.tenant, (q) =>
-    one(q,
+    one(
+      q,
       "SELECT id FROM event_outbox WHERE tenant_id=$1 AND resource_id=$2" +
         " AND type='page.updated' ORDER BY created_at DESC,id DESC LIMIT 1",
       [owner.tenant, page.id],
@@ -2877,22 +3640,39 @@ test("dead webhook deliveries can be replayed only by same-tenant administrators
   const endpoint = `/webhooks/deliveries/${deliveryId}/replay`;
   assert.equal((await req("POST", endpoint, {}, member)).statusCode, 403);
   assert.equal((await req("POST", endpoint, {}, other)).statusCode, 404);
-  assert.equal((await req("POST", "/webhooks/deliveries/not-a-uuid/replay", {})).statusCode, 400);
-  const initial = await db.tenant(owner.tenant, (q) =>
-    one(q, "SELECT status,attempts,last_error FROM webhook_deliveries WHERE id=$1", [deliveryId]),
+  assert.equal(
+    (await req("POST", "/webhooks/deliveries/not-a-uuid/replay", {}))
+      .statusCode,
+    400,
   );
-  assert.deepEqual([initial.status, initial.attempts, initial.last_error],
-    ["dead", 8, "HTTP 503"]);
+  const initial = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT status,attempts,last_error FROM webhook_deliveries WHERE id=$1",
+      [deliveryId],
+    ),
+  );
+  assert.deepEqual(
+    [initial.status, initial.attempts, initial.last_error],
+    ["dead", 8, "HTTP 503"],
+  );
   const replay = await ok("POST", endpoint, {});
   assert.deepEqual(replay, { ok: true, id: deliveryId, status: "pending" });
   assert.equal((await req("POST", endpoint, {})).statusCode, 404);
   const resumed = await db.tenant(owner.tenant, (q) =>
-    one(q, "SELECT status,attempts,last_error FROM webhook_deliveries WHERE id=$1", [deliveryId]),
+    one(
+      q,
+      "SELECT status,attempts,last_error FROM webhook_deliveries WHERE id=$1",
+      [deliveryId],
+    ),
   );
-  assert.deepEqual([resumed.status, resumed.attempts, resumed.last_error],
-    ["pending", 0, null]);
+  assert.deepEqual(
+    [resumed.status, resumed.attempts, resumed.last_error],
+    ["pending", 0, null],
+  );
   const audit = await db.tenant(owner.tenant, (q) =>
-    one(q,
+    one(
+      q,
       "SELECT action FROM audit_events WHERE actor_id=$1" +
         " AND action='integration.delivery_replayed' ORDER BY created_at DESC LIMIT 1",
       [owner.id],
@@ -2903,7 +3683,9 @@ test("dead webhook deliveries can be replayed only by same-tenant administrators
   // A paused subscription must not be reactivated through delivery replay.
   await ok("PATCH", `/webhooks/${subscription.id}`, { active: false });
   await db.tenant(owner.tenant, (q) =>
-    q.query("UPDATE webhook_deliveries SET status='dead' WHERE id=$1", [deliveryId]),
+    q.query("UPDATE webhook_deliveries SET status='dead' WHERE id=$1", [
+      deliveryId,
+    ]),
   );
   assert.equal((await req("POST", endpoint, {})).statusCode, 404);
 });
@@ -3023,9 +3805,12 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
     // a single worker tick need not reach this specific delivery when its
     // bounded batch contains older jobs. Retain a finite retry budget and
     // require the exact event ID (not just any HTTP request).
-    for (let attempt = 0; attempt < 12 &&
+    for (
+      let attempt = 0;
+      attempt < 12 &&
       !received.some((entry) => entry.headers["x-workspace-event"] === eventId);
-      attempt++)
+      attempt++
+    )
       await tick(db);
     assert.ok(
       received.some((entry) => entry.headers["x-workspace-event"] === eventId),
@@ -3045,7 +3830,7 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
       await db.tenant(owner.tenant, (q) =>
         q.query(
           "UPDATE webhook_deliveries SET status='pending'," +
-          " next_at='1970-01-01T00:00:00Z'::timestamptz WHERE id=$1",
+            " next_at='1970-01-01T00:00:00Z'::timestamptz WHERE id=$1",
           [deliveryId],
         ),
       );
@@ -3090,10 +3875,13 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
     const replayedBefore = received.filter(
       (r) => r.headers["x-workspace-event"] === eventId,
     ).length;
-    for (let attempt = 0; attempt < 12 &&
+    for (
+      let attempt = 0;
+      attempt < 12 &&
       received.filter((r) => r.headers["x-workspace-event"] === eventId)
         .length <= replayedBefore;
-      attempt++)
+      attempt++
+    )
       await tick(db);
     assert.ok(
       received.filter((r) => r.headers["x-workspace-event"] === eventId)
@@ -3146,16 +3934,21 @@ test("imports run asynchronously and recheck current permissions", async () => {
       const job = await ok("GET", `/jobs/${id}`, undefined, actor);
       if (job.status !== "pending") return job;
     }
-    assert.fail("Import job did not leave pending state within bounded worker ticks");
+    assert.fail(
+      "Import job did not leave pending state within bounded worker ticks",
+    );
   };
   const runJobStatus = async (id: string) => {
     for (let attempt = 0; attempt < 20; attempt++) {
       await tick(db);
       const status = await db.tenant(owner.tenant, (q) =>
-        one(q, "SELECT status FROM jobs WHERE id=$1", [id]));
+        one(q, "SELECT status FROM jobs WHERE id=$1", [id]),
+      );
       if (status?.status !== "pending") return status;
     }
-    assert.fail("Import job did not leave pending state within bounded worker ticks");
+    assert.fail(
+      "Import job did not leave pending state within bounded worker ticks",
+    );
   };
   const j = await ok(
     "POST",
@@ -3244,9 +4037,15 @@ test("permanent purge queues object deletion and retention policy purges expired
   });
   const boundary = "purge-boundary";
   const data = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="purge.txt"\r\nContent-Type: text/plain\r\n\r\nPurge bytes\r\n--${boundary}--\r\n`;
-  const upload = await req("POST", `/resources/${doomed.id}/files`, data, owner, {
-    "content-type": `multipart/form-data; boundary=${boundary}`,
-  });
+  const upload = await req(
+    "POST",
+    `/resources/${doomed.id}/files`,
+    data,
+    owner,
+    {
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+    },
+  );
   assert.equal(upload.statusCode, 200, upload.body);
   const stored = await db.tenant(owner.tenant, (q) =>
     one(q, "SELECT object_key FROM files WHERE id=$1", [upload.json().id]),
@@ -3255,7 +4054,13 @@ test("permanent purge queues object deletion and retention policy purges expired
   await ok("DELETE", `/resources/${doomed.id}/purge`);
   assert.equal(
     await db.tenant(owner.tenant, async (q) =>
-      Number((await one(q, "SELECT count(*) n FROM resources WHERE id=$1", [doomed.id])).n),
+      Number(
+        (
+          await one(q, "SELECT count(*) n FROM resources WHERE id=$1", [
+            doomed.id,
+          ])
+        ).n,
+      ),
     ),
     0,
   );
@@ -3289,14 +4094,21 @@ test("permanent purge queues object deletion and retention policy purges expired
   });
   await ok("DELETE", `/resources/${expired.id}`);
   await db.tenant(owner.tenant, (q) =>
-    q.query("UPDATE resources SET deleted_at=now()-interval '2 days' WHERE id=$1", [
-      expired.id,
-    ]),
+    q.query(
+      "UPDATE resources SET deleted_at=now()-interval '2 days' WHERE id=$1",
+      [expired.id],
+    ),
   );
   await tick(db);
   assert.equal(
     await db.tenant(owner.tenant, async (q) =>
-      Number((await one(q, "SELECT count(*) n FROM resources WHERE id=$1", [expired.id])).n),
+      Number(
+        (
+          await one(q, "SELECT count(*) n FROM resources WHERE id=$1", [
+            expired.id,
+          ])
+        ).n,
+      ),
     ),
     0,
   );
@@ -3350,7 +4162,6 @@ test("numeric filters compare values numerically and record titles respect resou
   );
 });
 
-
 test("tenant IdP registration is disabled, encrypted and isolated under tenant RLS", async () => {
   const savedOrigins = process.env.OIDC_TENANT_ISSUER_ORIGINS;
   process.env.OIDC_TENANT_ISSUER_ORIGINS = "https://login.example.test";
@@ -3392,10 +4203,17 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
     csrf: csrf(otherToken),
   };
   try {
-    assert.equal((await req("GET", "/identity/providers", undefined, null)).statusCode, 401);
-    assert.equal((await req("GET", "/identity/providers", undefined, viewer)).statusCode, 403);
     assert.equal(
-      (await req("POST", "/identity/providers", registration, viewer)).statusCode,
+      (await req("GET", "/identity/providers", undefined, null)).statusCode,
+      401,
+    );
+    assert.equal(
+      (await req("GET", "/identity/providers", undefined, viewer)).statusCode,
+      403,
+    );
+    assert.equal(
+      (await req("POST", "/identity/providers", registration, viewer))
+        .statusCode,
       403,
     );
     const badSource = await req("POST", "/identity/providers", {
@@ -3430,54 +4248,102 @@ test("tenant IdP registration is disabled, encrypted and isolated under tenant R
 
     const listed = await ok("GET", "/identity/providers");
     assert.ok(listed.find((p: any) => p.id === registered.id));
-    assert.doesNotMatch(JSON.stringify(listed), /test-only-credential|client_secret_encrypted/);
+    assert.doesNotMatch(
+      JSON.stringify(listed),
+      /test-only-credential|client_secret_encrypted/,
+    );
     const stored = await db.tenant(owner.tenant, (q) =>
-      one(q, "SELECT client_secret_encrypted,enabled FROM oidc_tenant_providers WHERE id=$1", [registered.id]),
+      one(
+        q,
+        "SELECT client_secret_encrypted,enabled FROM oidc_tenant_providers WHERE id=$1",
+        [registered.id],
+      ),
     );
     assert.match(stored.client_secret_encrypted, /^oidc-v1\./);
     assert.doesNotMatch(stored.client_secret_encrypted, /test-only-credential/);
-    const { openTenantOidcSecret } = await import("../packages/auth/tenant-provider.ts");
+    const { openTenantOidcSecret } =
+      await import("../packages/auth/tenant-provider.ts");
     assert.equal(
-      openTenantOidcSecret(stored.client_secret_encrypted, owner.tenant, registered.id),
+      openTenantOidcSecret(
+        stored.client_secret_encrypted,
+        owner.tenant,
+        registered.id,
+      ),
       registration.client_secret,
     );
-    assert.throws(
-      () => openTenantOidcSecret(stored.client_secret_encrypted, otherOwner.tenant, registered.id),
+    assert.throws(() =>
+      openTenantOidcSecret(
+        stored.client_secret_encrypted,
+        otherOwner.tenant,
+        registered.id,
+      ),
     );
     const invisible = await db.tenant(otherOwner.tenant, (q) =>
-      one(q, "SELECT id FROM oidc_tenant_providers WHERE id=$1", [registered.id]),
+      one(q, "SELECT id FROM oidc_tenant_providers WHERE id=$1", [
+        registered.id,
+      ]),
     );
     assert.equal(invisible, undefined);
 
     // Same client ID and issuer are allowed in a different tenant.
-    const otherRegistration = await ok("POST", "/identity/providers", registration, otherOwner);
+    const otherRegistration = await ok(
+      "POST",
+      "/identity/providers",
+      registration,
+      otherOwner,
+    );
     assert.equal(otherRegistration.enabled, false);
     assert.notEqual(otherRegistration.id, registered.id);
-    assert.ok(!(await ok("GET", "/identity/providers", undefined, otherOwner))
-      .some((p: any) => p.id === registered.id));
+    assert.ok(
+      !(await ok("GET", "/identity/providers", undefined, otherOwner)).some(
+        (p: any) => p.id === registered.id,
+      ),
+    );
     const crossTenantRevoke = await req(
-      "DELETE", "/identity/providers/" + registered.id, undefined, otherOwner,
+      "DELETE",
+      "/identity/providers/" + registered.id,
+      undefined,
+      otherOwner,
     );
     assert.equal(crossTenantRevoke.statusCode, 404, crossTenantRevoke.body);
-    assert.equal((await req("DELETE", "/identity/providers/" + otherRegistration.id, undefined, viewer)).statusCode, 403);
+    assert.equal(
+      (
+        await req(
+          "DELETE",
+          "/identity/providers/" + otherRegistration.id,
+          undefined,
+          viewer,
+        )
+      ).statusCode,
+      403,
+    );
 
     const revoked = await ok("DELETE", "/identity/providers/" + registered.id);
     assert.equal(revoked.ok, true);
     assert.equal(revoked.revision, 2);
-    assert.equal((await req("DELETE", "/identity/providers/" + registered.id)).statusCode, 404);
-    assert.ok((await ok("GET", "/identity/providers"))
-      .some((p: any) => p.id === registered.id && p.revoked_at));
-    assert.ok((await ok("GET", "/identity/providers", undefined, otherOwner))
-      .some((p: any) => p.id === otherRegistration.id && !p.revoked_at));
+    assert.equal(
+      (await req("DELETE", "/identity/providers/" + registered.id)).statusCode,
+      404,
+    );
+    assert.ok(
+      (await ok("GET", "/identity/providers")).some(
+        (p: any) => p.id === registered.id && p.revoked_at,
+      ),
+    );
+    assert.ok(
+      (await ok("GET", "/identity/providers", undefined, otherOwner)).some(
+        (p: any) => p.id === otherRegistration.id && !p.revoked_at,
+      ),
+    );
     const methods = await req("GET", "/auth/methods", undefined, null);
     assert.equal(methods.statusCode, 200);
     assert.equal(methods.json().oidc.label, "Test SSO");
   } finally {
-    if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
+    if (savedOrigins === undefined)
+      delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
     else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
   }
 });
-
 
 test("scoped cursor feed retains microsecond keyset order and filters inaccessible events", async () => {
   const timestamp = "2026-09-01T01:02:03.123456Z";
@@ -3490,7 +4356,7 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
     for (const row of rows)
       await q.query(
         "INSERT INTO event_outbox(id,tenant_id,type,resource_id,created_at)" +
-        " VALUES($1,$2,'page.updated',$3,$4::timestamptz)",
+          " VALUES($1,$2,'page.updated',$3,$4::timestamptz)",
         [row.id, owner.tenant, row.resource_id, timestamp],
       );
   });
@@ -3498,13 +4364,14 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
   await db.tenant(other.tenant, (q) =>
     q.query(
       "INSERT INTO event_outbox(id,tenant_id,type,resource_id,created_at)" +
-      " VALUES($1,$2,'page.updated',$3,$4::timestamptz)",
+        " VALUES($1,$2,'page.updated',$3,$4::timestamptz)",
       [foreign, other.tenant, root.id, timestamp],
     ),
   );
 
   const sorted = [...rows].sort((a, b) => a.id.localeCompare(b.id));
-  const expected = sorted.filter((item) => item.resource_id === root.id)
+  const expected = sorted
+    .filter((item) => item.resource_id === root.id)
     .map((item) => item.id);
   const actual: string[] = [];
   let cursor: string | undefined;
@@ -3519,7 +4386,10 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
     assert.ok(!page.events.some((e: any) => e.id === foreign));
     for (const e of page.events) {
       assert.equal(e.resource_id, root.id);
-      assert.ok(!actual.includes(e.id), "each accessible event is returned once");
+      assert.ok(
+        !actual.includes(e.id),
+        "each accessible event is returned once",
+      );
       actual.push(e.id);
     }
     cursor = page.next_cursor;
@@ -3529,12 +4399,20 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
   // A validly signed cursor must not transfer to another principal or tenant.
   const forged = cursor!.slice(0, -2) + "xx";
   assert.equal(
-    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(forged))).statusCode,
+    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(forged)))
+      .statusCode,
     400,
   );
   assert.equal(
-    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(cursor!) +
-      "&since=" + encodeURIComponent(since))).statusCode,
+    (
+      await req(
+        "GET",
+        "/events/cursor?cursor=" +
+          encodeURIComponent(cursor!) +
+          "&since=" +
+          encodeURIComponent(since),
+      )
+    ).statusCode,
     400,
   );
   const switchedTenantToken = await db.tenant(other.tenant, (q) =>
@@ -3545,8 +4423,14 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
     csrf: csrf(switchedTenantToken),
   };
   assert.equal(
-    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(cursor!),
-      undefined, otherOwner)).statusCode,
+    (
+      await req(
+        "GET",
+        "/events/cursor?cursor=" + encodeURIComponent(cursor!),
+        undefined,
+        otherOwner,
+      )
+    ).statusCode,
     400,
   );
 
@@ -3574,21 +4458,29 @@ test("scoped cursor feed retains microsecond keyset order and filters inaccessib
   assert.equal(read.statusCode, 200, read.body);
   assert.deepEqual(read.json().events, []);
   assert.equal(
-    (await req("GET", "/events/cursor?cursor=" + encodeURIComponent(cursor!),
-      undefined, null,
-      { authorization: "Bearer " + service })).statusCode,
+    (
+      await req(
+        "GET",
+        "/events/cursor?cursor=" + encodeURIComponent(cursor!),
+        undefined,
+        null,
+        { authorization: "Bearer " + service },
+      )
+    ).statusCode,
     400,
   );
   const deniedScope = await db.tenant(owner.tenant, (q) =>
     createSession(q, owner.tenant, guestId, ["pages.read"], "No events scope"),
   );
   assert.equal(
-    (await req("GET", "/events/cursor", undefined, null,
-      { authorization: "Bearer " + deniedScope })).statusCode,
+    (
+      await req("GET", "/events/cursor", undefined, null, {
+        authorization: "Bearer " + deniedScope,
+      })
+    ).statusCode,
     403,
   );
 });
-
 
 test("reconciliation enumerates only currently accessible resources with encrypted scan positions", async () => {
   const reconcileUser = randomUUID();
@@ -3598,7 +4490,7 @@ test("reconciliation enumerates only currently accessible resources with encrypt
   await db.tenant(owner.tenant, async (q) => {
     await q.query(
       "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,'Reconcile User',true)",
-      [reconcileUser, reconcileUser + '@service.internal'],
+      [reconcileUser, reconcileUser + "@service.internal"],
     );
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
@@ -3611,40 +4503,46 @@ test("reconciliation enumerates only currently accessible resources with encrypt
     ]) {
       await q.query(
         "INSERT INTO resources(id,tenant_id,parent_id,kind,title)" +
-        " VALUES($1,$2,$3,'page',$4)",
+          " VALUES($1,$2,$3,'page',$4)",
         [id, owner.tenant, space.id, name],
       );
     }
     await q.query(
       "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-      " VALUES($1,$2,$3,0)",
+        " VALUES($1,$2,$3,0)",
       [owner.tenant, hiddenId, reconcileUser],
     );
   });
   const token = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, reconcileUser,
+    createSession(
+      q,
+      owner.tenant,
+      reconcileUser,
       ["events.read", "workspace.read", "pages.read", "databases.read"],
-      "Reconcile reader"),
+      "Reconcile reader",
+    ),
   );
-  const read = (path: string, authToken = token) => req(
-    "GET", path, undefined, null,
-    { authorization: "Bearer " + authToken },
-  );
+  const read = (path: string, authToken = token) =>
+    req("GET", path, undefined, null, { authorization: "Bearer " + authToken });
   const scan = async (forbidden: string | null = hiddenId) => {
     const seen: string[] = [];
     const cursors: string[] = [];
     let cursor: string | undefined;
     let emptyWithMore = false;
     for (let n = 0; n < 250; n++) {
-      const url = "/events/reconcile?limit=1" +
+      const url =
+        "/events/reconcile?limit=1" +
         (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
       const result = await read(url);
       assert.equal(result.statusCode, 200, result.body);
       const body = result.json();
       assert.ok(body.resources.length <= 1);
       assert.match(body.next_cursor, /^reconcile-v1\./);
-      if (forbidden) assert.ok(!result.body.includes(forbidden),
-        "inaccessible IDs must not leak in fields or opaque cursors");
+      if (forbidden)
+        assert.ok(
+          !result.body.includes(forbidden),
+          "inaccessible IDs must not leak in fields or opaque cursors",
+        );
       if (!body.resources.length && body.has_more) emptyWithMore = true;
       seen.push(...body.resources.map((v: any) => v.id));
       cursors.push(body.next_cursor);
@@ -3654,64 +4552,107 @@ test("reconciliation enumerates only currently accessible resources with encrypt
     throw Error("Reconciliation pagination did not terminate");
   };
   const first = await scan();
-  assert.ok(first.emptyWithMore, "inaccessible raw positions can yield empty pages");
+  assert.ok(
+    first.emptyWithMore,
+    "inaccessible raw positions can yield empty pages",
+  );
   assert.ok(first.seen.includes(publicId));
   assert.ok(first.seen.includes(laterId));
   assert.ok(!first.seen.includes(hiddenId));
   assert.equal(new Set(first.seen).size, first.seen.length);
   assert.ok(first.seen.includes(root.id));
-  assert.ok(!first.cursors.some(c => c.includes(hiddenId)));
+  assert.ok(!first.cursors.some((c) => c.includes(hiddenId)));
 
   const firstCursor = first.cursors[0];
   const forged = firstCursor.slice(0, -3) + "abc";
-  assert.equal((await read("/events/reconcile?cursor=" +
-    encodeURIComponent(forged))).statusCode, 400);
-  assert.equal((await req("GET", "/events/reconcile?cursor=" +
-    encodeURIComponent(firstCursor), undefined, owner)).statusCode, 400);
-  assert.equal((await req("GET", "/events/reconcile?cursor=" +
-    encodeURIComponent(firstCursor), undefined, other)).statusCode, 400);
+  assert.equal(
+    (await read("/events/reconcile?cursor=" + encodeURIComponent(forged)))
+      .statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        "/events/reconcile?cursor=" + encodeURIComponent(firstCursor),
+        undefined,
+        owner,
+      )
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        "/events/reconcile?cursor=" + encodeURIComponent(firstCursor),
+        undefined,
+        other,
+      )
+    ).statusCode,
+    400,
+  );
   assert.equal((await read("/events/reconcile?limit=101")).statusCode, 400);
-  assert.equal((await read("/events/reconcile?cursor=" +
-    "x".repeat(2050))).statusCode, 400);
+  assert.equal(
+    (await read("/events/reconcile?cursor=" + "x".repeat(2050))).statusCode,
+    400,
+  );
   const noEventScope = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, reconcileUser, ["pages.read"],
-      "No event scope"),
+    createSession(
+      q,
+      owner.tenant,
+      reconcileUser,
+      ["pages.read"],
+      "No event scope",
+    ),
   );
   assert.equal((await read("/events/reconcile", noEventScope)).statusCode, 403);
   const noPageScope = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, reconcileUser, ["events.read", "workspace.read"],
-      "No page scope"),
+    createSession(
+      q,
+      owner.tenant,
+      reconcileUser,
+      ["events.read", "workspace.read"],
+      "No page scope",
+    ),
   );
   const restricted = await read("/events/reconcile?limit=100", noPageScope);
   assert.equal(restricted.statusCode, 200);
-  assert.ok(!restricted.json().resources.some((v: any) =>
-    [hiddenId, publicId, laterId].includes(v.id)));
+  assert.ok(
+    !restricted
+      .json()
+      .resources.some((v: any) => [hiddenId, publicId, laterId].includes(v.id)),
+  );
 
   // A fresh full pass discovers a new grant and later observes revocation;
   // a partial pass is never authoritative to delete cached evidence.
-  await db.tenant(owner.tenant, (q) => q.query(
-    "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
-    [owner.tenant, hiddenId, reconcileUser],
-  ));
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
+      [owner.tenant, hiddenId, reconcileUser],
+    ),
+  );
   // A grant arriving behind the original keyset position must not make a
   // prior continuation silently rewind. A new full pass will discover it.
-  const resumed = await read("/events/reconcile?limit=1&cursor=" +
-    encodeURIComponent(firstCursor));
+  const resumed = await read(
+    "/events/reconcile?limit=1&cursor=" + encodeURIComponent(firstCursor),
+  );
   assert.equal(resumed.statusCode, 200, resumed.body);
   assert.ok(!resumed.json().resources.some((v: any) => v.id === hiddenId));
   assert.ok((await scan(null)).seen.includes(hiddenId));
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-    " VALUES($1,$2,$3,0)",
-    [owner.tenant, hiddenId, reconcileUser],
-  ));
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)",
+      [owner.tenant, hiddenId, reconcileUser],
+    ),
+  );
   const revoked = await scan();
   assert.ok(!revoked.seen.includes(hiddenId));
-  assert.ok(first.seen.filter(id => !revoked.seen.includes(id)).length === 0);
-  await db.tenant(owner.tenant, (q) => q.query(
-    "UPDATE resources SET deleted_at=now() WHERE id=$1",
-    [publicId],
-  ));
+  assert.ok(first.seen.filter((id) => !revoked.seen.includes(id)).length === 0);
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE resources SET deleted_at=now() WHERE id=$1", [publicId]),
+  );
   const afterDelete = await scan();
   assert.ok(!afterDelete.seen.includes(publicId));
   assert.ok(revoked.seen.includes(publicId));
@@ -3720,10 +4661,18 @@ test("reconciliation enumerates only currently accessible resources with encrypt
 test("recently viewed lists personal visits, not other users' edits, and revokes access", async () => {
   // A separate Fastify instance keeps the exact production throttling policy
   // while isolating this regression's budget from the long-running suite.
-  const recentApp = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
+  const recentApp = await buildApp(
+    db,
+    undefined,
+    false,
+    fakeOidc,
+    fakeAntivirus,
+  );
   const recentReq = async (
     method: "GET" | "POST" | "PATCH" | "DELETE",
-    path: string, data?: any, actor: any = owner,
+    path: string,
+    data?: any,
+    actor: any = owner,
   ): Promise<{ statusCode: number; body: string; json: () => any }> =>
     recentApp.inject({
       method,
@@ -3737,110 +4686,150 @@ test("recently viewed lists personal visits, not other users' edits, and revokes
     });
   const recentOk = async (
     method: "GET" | "POST" | "PATCH" | "DELETE",
-    path: string, data?: any, actor: any = owner,
+    path: string,
+    data?: any,
+    actor: any = owner,
   ) => {
     const response = await recentReq(method, path, data, actor);
-    assert.ok(response.statusCode < 300,
-      `${method} ${path}: ${response.statusCode} ${response.body}`);
+    assert.ok(
+      response.statusCode < 300,
+      `${method} ${path}: ${response.statusCode} ${response.body}`,
+    );
     return response.json();
   };
   try {
     const folder = await recentOk("POST", "/resources", {
-    kind: "space", parent_id: root.id, title: "Personal recents acceptance",
-  });
-  const first = await recentOk("POST", "/resources", {
-    kind: "page", parent_id: folder.id, title: "Visited only once",
-  });
-  const second = await recentOk("POST", "/resources", {
-    kind: "page", parent_id: folder.id, title: "Visited last",
-  });
-  const peerId = randomUUID();
-  await db.tenant(owner.tenant, async (q) => {
-    await q.query(
-      "INSERT INTO users(id,email,name) VALUES($1,$2,'Recents Peer')",
-      [peerId, peerId + "@example.test"],
+      kind: "space",
+      parent_id: root.id,
+      title: "Personal recents acceptance",
+    });
+    const first = await recentOk("POST", "/resources", {
+      kind: "page",
+      parent_id: folder.id,
+      title: "Visited only once",
+    });
+    const second = await recentOk("POST", "/resources", {
+      kind: "page",
+      parent_id: folder.id,
+      title: "Visited last",
+    });
+    const peerId = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO users(id,email,name) VALUES($1,$2,'Recents Peer')",
+        [peerId, peerId + "@example.test"],
+      );
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+        [owner.tenant, peerId],
+      );
+    });
+    const peerToken = await db.tenant(owner.tenant, (q) =>
+      createSession(q, owner.tenant, peerId),
     );
-    await q.query(
-      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
-      [owner.tenant, peerId],
+    const peer = {
+      cookie: "workspace_session=" + peerToken,
+      csrf: csrf(peerToken),
+    };
+    const before = await recentOk("GET", "/resources?recent=true");
+    assert.ok(
+      !before.some((n: any) => [first.id, second.id].includes(n.id)),
+      "creating and editing a page is not a visit",
     );
-  });
-  const peerToken = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, peerId),
-  );
-  const peer = {
-    cookie: "workspace_session=" + peerToken, csrf: csrf(peerToken),
-  };
-  const before = await recentOk("GET", "/resources?recent=true");
-  assert.ok(!before.some((n: any) => [first.id, second.id].includes(n.id)),
-    "creating and editing a page is not a visit");
 
-  assert.deepEqual(
-    (await recentOk("GET", "/resources?recent=true", undefined, peer))
-      .filter((n: any) => [first.id, second.id].includes(n.id)),
-    [],
-  );
-  await recentOk("POST", `/resources/${first.id}/bookmark`, {});
-  await new Promise<void>((resolve) => setTimeout(resolve, 8));
-  await recentOk("POST", `/resources/${second.id}/bookmark`, {});
-  let recentlyViewed = await recentOk("GET", "/resources?recent=true");
-  assert.deepEqual(
-    recentlyViewed.filter((n: any) => [first.id, second.id].includes(n.id))
-      .map((n: any) => n.id),
-    [second.id, first.id],
-  );
-  assert.ok(recentlyViewed.find((n: any) => n.id === second.id)?.viewed_at);
+    assert.deepEqual(
+      (await recentOk("GET", "/resources?recent=true", undefined, peer)).filter(
+        (n: any) => [first.id, second.id].includes(n.id),
+      ),
+      [],
+    );
+    await recentOk("POST", `/resources/${first.id}/bookmark`, {});
+    await new Promise<void>((resolve) => setTimeout(resolve, 8));
+    await recentOk("POST", `/resources/${second.id}/bookmark`, {});
+    let recentlyViewed = await recentOk("GET", "/resources?recent=true");
+    assert.deepEqual(
+      recentlyViewed
+        .filter((n: any) => [first.id, second.id].includes(n.id))
+        .map((n: any) => n.id),
+      [second.id, first.id],
+    );
+    assert.ok(recentlyViewed.find((n: any) => n.id === second.id)?.viewed_at);
 
-  // A different member has an independent timeline, even in the same tenant.
-  assert.equal(
-    (await recentOk("GET", "/resources?recent=true", undefined, peer))
-      .some((n: any) => n.id === first.id), false,
-  );
-  await recentOk("POST", `/resources/${first.id}/bookmark`, {}, peer);
-  recentlyViewed = await recentOk("GET", "/resources?recent=true", undefined, peer);
-  assert.ok(recentlyViewed.some((n: any) => n.id === first.id));
-  assert.ok(!recentlyViewed.some((n: any) => n.id === second.id));
+    // A different member has an independent timeline, even in the same tenant.
+    assert.equal(
+      (await recentOk("GET", "/resources?recent=true", undefined, peer)).some(
+        (n: any) => n.id === first.id,
+      ),
+      false,
+    );
+    await recentOk("POST", `/resources/${first.id}/bookmark`, {}, peer);
+    recentlyViewed = await recentOk(
+      "GET",
+      "/resources?recent=true",
+      undefined,
+      peer,
+    );
+    assert.ok(recentlyViewed.some((n: any) => n.id === first.id));
+    assert.ok(!recentlyViewed.some((n: any) => n.id === second.id));
 
-  // Current ACLs are applied on read, not only when the visit is written.
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-    " VALUES($1,$2,$3,0) ON CONFLICT(tenant_id,resource_id,principal_id)" +
-    " DO UPDATE SET level=0",
-    [owner.tenant, folder.id, peerId],
-  ));
-  recentlyViewed = await recentOk("GET", "/resources?recent=true", undefined, peer);
-  assert.ok(!recentlyViewed.some((n: any) => n.id === first.id));
-  assert.equal(
-    (await recentReq("POST", `/resources/${first.id}/bookmark`, {}, peer)).statusCode,
-    404,
-  );
-  assert.ok(
-    (await recentOk("GET", "/resources?recent=true"))
-      .some((n: any) => n.id === first.id),
-    "owner's timeline is unaffected by peer revocation",
-  );
-  assert.equal(
-    (await recentOk("GET", "/resources?recent=true", undefined, other))
-      .some((n: any) => n.id === first.id), false,
-    "the same global user in another tenant cannot see visits",
-  );
+    // Current ACLs are applied on read, not only when the visit is written.
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+          " VALUES($1,$2,$3,0) ON CONFLICT(tenant_id,resource_id,principal_id)" +
+          " DO UPDATE SET level=0",
+        [owner.tenant, folder.id, peerId],
+      ),
+    );
+    recentlyViewed = await recentOk(
+      "GET",
+      "/resources?recent=true",
+      undefined,
+      peer,
+    );
+    assert.ok(!recentlyViewed.some((n: any) => n.id === first.id));
+    assert.equal(
+      (await recentReq("POST", `/resources/${first.id}/bookmark`, {}, peer))
+        .statusCode,
+      404,
+    );
+    assert.ok(
+      (await recentOk("GET", "/resources?recent=true")).some(
+        (n: any) => n.id === first.id,
+      ),
+      "owner's timeline is unaffected by peer revocation",
+    );
+    assert.equal(
+      (await recentOk("GET", "/resources?recent=true", undefined, other)).some(
+        (n: any) => n.id === first.id,
+      ),
+      false,
+      "the same global user in another tenant cannot see visits",
+    );
 
-  await recentOk("DELETE", `/resources/${second.id}`);
-  assert.equal(
-    (await recentOk("GET", "/resources?recent=true"))
-      .some((n: any) => n.id === second.id), false,
-    "trashed pages are excluded from personal history",
-  );
+    await recentOk("DELETE", `/resources/${second.id}`);
+    assert.equal(
+      (await recentOk("GET", "/resources?recent=true")).some(
+        (n: any) => n.id === second.id,
+      ),
+      false,
+      "trashed pages are excluded from personal history",
+    );
   } finally {
     await recentApp.close();
   }
 });
 
-
 test("rate limit: verified principals are independent, headers and forged tokens cannot spoof identity", async () => {
   // Same Fastify production middleware and isolated limiter store, not a
   // bypass/relaxed test configuration.
-  const limitedApp = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
+  const limitedApp = await buildApp(
+    db,
+    undefined,
+    false,
+    fakeOidc,
+    fakeAntivirus,
+  );
   const hit = (url: string, cookie?: string, forwarded?: string) =>
     limitedApp.inject({
       method: "GET",
@@ -3848,8 +4837,9 @@ test("rate limit: verified principals are independent, headers and forged tokens
       remoteAddress: "198.51.100.9",
       headers: {
         ...(cookie ? { cookie } : {}),
-        ...(forwarded ? { "x-forwarded-for": forwarded,
-          "x-real-ip": forwarded } : {}),
+        ...(forwarded
+          ? { "x-forwarded-for": forwarded, "x-real-ip": forwarded }
+          : {}),
       },
     });
   const remaining = (response: any) =>
@@ -3859,36 +4849,54 @@ test("rate limit: verified principals are independent, headers and forged tokens
     // shared fixtures. Use fresh active credentials here.
     const memberId = randomUUID();
     await db.tenant(owner.tenant, async (q) => {
-      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
-        [memberId, memberId + "@example.test", "Rate limit member"]);
+      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [
+        memberId,
+        memberId + "@example.test",
+        "Rate limit member",
+      ]);
       await q.query(
         "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
         [owner.tenant, memberId],
       );
     });
     const memberToken = await db.tenant(owner.tenant, (q) =>
-      createSession(q, owner.tenant, memberId));
+      createSession(q, owner.tenant, memberId),
+    );
     const otherToken = await db.tenant(other.tenant, (q) =>
-      createSession(q, other.tenant, owner.id));
+      createSession(q, other.tenant, owner.id),
+    );
     const ownerFirst = await hit("/api/v1/me", owner.cookie);
     const ownerSecond = await hit("/api/v1/me", owner.cookie);
-    const memberFirst = await hit("/api/v1/me",
-      "workspace_session=" + memberToken);
-    const otherTenant = await hit("/api/v1/me",
-      "workspace_session=" + otherToken);
+    const memberFirst = await hit(
+      "/api/v1/me",
+      "workspace_session=" + memberToken,
+    );
+    const otherTenant = await hit(
+      "/api/v1/me",
+      "workspace_session=" + otherToken,
+    );
     for (const result of [ownerFirst, ownerSecond, memberFirst, otherTenant])
       assert.equal(result.statusCode, 200, result.body);
     assert.equal(remaining(ownerSecond), remaining(ownerFirst) - 1);
-    assert.equal(remaining(memberFirst), remaining(ownerFirst),
-      "the second authenticated user gets an independent limit");
-    assert.equal(remaining(otherTenant), remaining(ownerFirst),
-      "a separate tenant gets an independent limit");
+    assert.equal(
+      remaining(memberFirst),
+      remaining(ownerFirst),
+      "the second authenticated user gets an independent limit",
+    );
+    assert.equal(
+      remaining(otherTenant),
+      remaining(ownerFirst),
+      "a separate tenant gets an independent limit",
+    );
 
     // Authentication routes retain the IP/network limiter even when a
     // valid logged-in user's cookie is sent to a public endpoint.
     const unauth = await hit("/api/v1/auth/methods", undefined, "203.0.113.5");
-    const publicWithCookie = await hit("/api/v1/auth/methods",
-      owner.cookie, "203.0.113.99");
+    const publicWithCookie = await hit(
+      "/api/v1/auth/methods",
+      owner.cookie,
+      "203.0.113.99",
+    );
     assert.equal(unauth.statusCode, 200);
     assert.equal(publicWithCookie.statusCode, 200);
     assert.equal(remaining(publicWithCookie), remaining(unauth) - 1);
@@ -3897,64 +4905,94 @@ test("rate limit: verified principals are independent, headers and forged tokens
     // headers. The direct Fastify deployment intentionally distrusts them.
     let blocked: any;
     for (let n = 0; n < 301; n++) {
-      const response = await hit("/api/v1/auth/methods", undefined,
-        "2001:db8::" + (n + 100).toString(16));
+      const response = await hit(
+        "/api/v1/auth/methods",
+        undefined,
+        "2001:db8::" + (n + 100).toString(16),
+      );
       if (response.statusCode === 429) {
         blocked = response;
         break;
       }
     }
-    assert.ok(blocked, "forged XFF addresses did not evade the 300/min ceiling");
+    assert.ok(
+      blocked,
+      "forged XFF addresses did not evade the 300/min ceiling",
+    );
     assert.ok(Number(blocked.headers["retry-after"]) >= 0);
 
     // New forged session values don't turn invalid requests into
     // principal-key requests; the unauthenticated network budget stays
     // exhausted and rejects them before any protected operation.
-    const fake = await hit("/api/v1/me",
-      "workspace_session=forged-" + randomUUID(), "192.0.2.111");
+    const fake = await hit(
+      "/api/v1/me",
+      "workspace_session=forged-" + randomUUID(),
+      "192.0.2.111",
+    );
     assert.equal(fake.statusCode, 429, fake.body);
   } finally {
     await limitedApp.close();
   }
 });
 
-
 test("W05 relation references: write validation, ACL redaction, export, and schema safety", async () => {
   const clients = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W05 Clients",
+    kind: "database",
+    parent_id: space.id,
+    title: "W05 Clients",
   });
   const projects = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W05 Projects",
+    kind: "database",
+    parent_id: space.id,
+    title: "W05 Projects",
   });
   const client = await ok("POST", `/databases/${clients.id}/records`, {
     values: { name: "W05 Client: Island Foods" },
   });
   const fields = [
     { id: "name", name: "Name", type: "title" },
-    { id: "client_ref", name: "Client", type: "relation",
-      target_database_id: clients.id },
+    {
+      id: "client_ref",
+      name: "Client",
+      type: "relation",
+      target_database_id: clients.id,
+    },
   ];
   await ok("PATCH", `/databases/${projects.id}`, { properties: fields });
   assert.equal(
-    (await req("POST", `/databases/${projects.id}/records`, {
-      values: { name: "Broken", client_ref: [randomUUID()] },
-    })).statusCode, 404,
+    (
+      await req("POST", `/databases/${projects.id}/records`, {
+        values: { name: "Broken", client_ref: [randomUUID()] },
+      })
+    ).statusCode,
+    404,
   );
   const forbiddenView = await req("POST", `/databases/${projects.id}/views`, {
     name: "Restricted reference search",
-    config: { type: "table", filters: [
-      { property: "client_ref", op: "contains", value: client.id },
-    ], sort: [] },
+    config: {
+      type: "table",
+      filters: [{ property: "client_ref", op: "contains", value: client.id }],
+      sort: [],
+    },
   });
-  assert.equal(forbiddenView.statusCode, 400,
-    "raw relation filters must not reveal hidden references");
+  assert.equal(
+    forbiddenView.statusCode,
+    400,
+    "raw relation filters must not reveal hidden references",
+  );
   const forbiddenSort = await req("POST", `/databases/${projects.id}/views`, {
     name: "Restricted reference sort",
-    config: { type: "table", filters: [],
-      sort: [{ property: "client_ref", direction: "asc" }] },
+    config: {
+      type: "table",
+      filters: [],
+      sort: [{ property: "client_ref", direction: "asc" }],
+    },
   });
-  assert.equal(forbiddenSort.statusCode, 400,
-    "sorting relation UUIDs is not a supported ACL-safe operation");
+  assert.equal(
+    forbiddenSort.statusCode,
+    400,
+    "sorting relation UUIDs is not a supported ACL-safe operation",
+  );
   const project = await ok("POST", `/databases/${projects.id}/records`, {
     values: { name: "W05 Project Falcon", client_ref: [client.id] },
   });
@@ -3962,98 +5000,167 @@ test("W05 relation references: write validation, ACL redaction, export, and sche
   const recordRead = await ok("GET", `/records/${project.id}`);
   assert.deepEqual(recordRead.values.client_ref, [client.id]);
   const listing = await ok("GET", `/databases/${projects.id}/records`);
-  assert.deepEqual(listing.find((v: any) => v.id === project.id)?.values.client_ref,
-    [client.id]);
-  const choices = await ok("GET",
-    `/databases/${projects.id}/relation-candidates?property=client_ref&search=Island`);
+  assert.deepEqual(
+    listing.find((v: any) => v.id === project.id)?.values.client_ref,
+    [client.id],
+  );
+  const choices = await ok(
+    "GET",
+    `/databases/${projects.id}/relation-candidates?property=client_ref&search=Island`,
+  );
   assert.ok(choices.items.some((item: any) => item.id === client.id));
-  const targets = await ok("GET",
-    `/databases/${projects.id}/relation-targets?search=Clients`);
+  const targets = await ok(
+    "GET",
+    `/databases/${projects.id}/relation-targets?search=Clients`,
+  );
   assert.ok(targets.items.some((item: any) => item.id === clients.id));
   const saved = await db.tenant(owner.tenant, (q) =>
-    one(q, "SELECT search_text FROM resources WHERE id=$1", [project.id]));
-  assert.ok(!String(saved.search_text).includes(client.id),
-    "related-record UUID must not become searchable text");
+    one(q, "SELECT search_text FROM resources WHERE id=$1", [project.id]),
+  );
+  assert.ok(
+    !String(saved.search_text).includes(client.id),
+    "related-record UUID must not become searchable text",
+  );
 
   const peerId = randomUUID();
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W05 Peer')",
-      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W05 Peer')", [
+      peerId,
+      peerId + "@example.test",
+    ]);
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
-      [owner.tenant, peerId]);
+      [owner.tenant, peerId],
+    );
   });
   const peerToken = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, peerId));
-  const peer = { cookie: "workspace_session=" + peerToken,
-    csrf: csrf(peerToken) };
-  assert.deepEqual((await ok("GET", `/records/${project.id}`, undefined, peer))
-    .values.client_ref, [client.id]);
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-    " VALUES($1,$2,$3,0) ON CONFLICT(tenant_id,resource_id,principal_id)" +
-    " DO UPDATE SET level=0", [owner.tenant, clients.id, peerId]));
+    createSession(q, owner.tenant, peerId),
+  );
+  const peer = {
+    cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken),
+  };
+  assert.deepEqual(
+    (await ok("GET", `/records/${project.id}`, undefined, peer)).values
+      .client_ref,
+    [client.id],
+  );
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0) ON CONFLICT(tenant_id,resource_id,principal_id)" +
+        " DO UPDATE SET level=0",
+      [owner.tenant, clients.id, peerId],
+    ),
+  );
   const hidden = await ok("GET", `/records/${project.id}`, undefined, peer);
   assert.deepEqual(hidden.values.client_ref, []);
-  assert.equal(hidden.properties.find((v: any) =>
-    v.id === "client_ref").target_database_id, undefined);
-  const collection = await ok("GET",
-    `/databases/${projects.id}/records`, undefined, peer);
-  assert.deepEqual(collection.find((v: any) =>
-    v.id === project.id).values.client_ref, []);
-  const safeExport = await ok("GET",
-    `/resources/${projects.id}/export?format=json`, undefined, peer);
-  assert.ok(!JSON.stringify(safeExport).includes(client.id),
-    "export must not leak hidden record UUID");
-  assert.ok(!JSON.stringify(safeExport).includes(clients.id),
-    "export must not leak revoked target database UUID");
-  const inaccessibleTargets = await ok("GET",
+  assert.equal(
+    hidden.properties.find((v: any) => v.id === "client_ref")
+      .target_database_id,
+    undefined,
+  );
+  const collection = await ok(
+    "GET",
+    `/databases/${projects.id}/records`,
+    undefined,
+    peer,
+  );
+  assert.deepEqual(
+    collection.find((v: any) => v.id === project.id).values.client_ref,
+    [],
+  );
+  const safeExport = await ok(
+    "GET",
+    `/resources/${projects.id}/export?format=json`,
+    undefined,
+    peer,
+  );
+  assert.ok(
+    !JSON.stringify(safeExport).includes(client.id),
+    "export must not leak hidden record UUID",
+  );
+  assert.ok(
+    !JSON.stringify(safeExport).includes(clients.id),
+    "export must not leak revoked target database UUID",
+  );
+  const inaccessibleTargets = await ok(
+    "GET",
     `/databases/${projects.id}/relation-targets?search=W05%20Clients&limit=1`,
-    undefined, peer);
+    undefined,
+    peer,
+  );
   assert.deepEqual(inaccessibleTargets.items, []);
-  assert.equal(inaccessibleTargets.has_more, false,
-    "paging must not reveal hidden relation targets");
-  const forbiddenPicker = await req("GET",
+  assert.equal(
+    inaccessibleTargets.has_more,
+    false,
+    "paging must not reveal hidden relation targets",
+  );
+  const forbiddenPicker = await req(
+    "GET",
     `/databases/${projects.id}/relation-candidates?property=client_ref`,
-    undefined, peer);
+    undefined,
+    peer,
+  );
   assert.equal(forbiddenPicker.statusCode, 404);
   const stale = await ok("GET", `/records/${project.id}`, undefined, peer);
-  const updated = await ok("PATCH", `/records/${project.id}`, {
-    values: { name: "W05 Project Falcon updated" },
-    expected_revision: stale.revision,
-  }, peer);
-  assert.deepEqual(updated.values.client_ref, [],
-    "unrelated edits must not reveal existing revoked references");
+  const updated = await ok(
+    "PATCH",
+    `/records/${project.id}`,
+    {
+      values: { name: "W05 Project Falcon updated" },
+      expected_revision: stale.revision,
+    },
+    peer,
+  );
+  assert.deepEqual(
+    updated.values.client_ref,
+    [],
+    "unrelated edits must not reveal existing revoked references",
+  );
   const incompatible = await req("PATCH", `/databases/${projects.id}`, {
     properties: [
       { id: "name", name: "Name", type: "title" },
       { id: "client_ref", name: "Client", type: "text" },
     ],
   });
-  assert.equal(incompatible.statusCode, 400,
-    "populated relations cannot silently convert to text");
+  assert.equal(
+    incompatible.statusCode,
+    400,
+    "populated relations cannot silently convert to text",
+  );
   const unchanged = await ok("GET", `/databases/${projects.id}`);
-  assert.equal(unchanged.properties.find((p: any) => p.id === "client_ref").type,
-    "relation", "invalid schema conversion must roll back");
+  assert.equal(
+    unchanged.properties.find((p: any) => p.id === "client_ref").type,
+    "relation",
+    "invalid schema conversion must roll back",
+  );
 });
-
 
 test("W06 numeric formulas: read-only recomputation, revisions and exports", async () => {
   const formulaDatabase = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W06 Formula records",
+    kind: "database",
+    parent_id: space.id,
+    title: "W06 Formula records",
   });
   const databaseRoute = "/databases/" + formulaDatabase.id;
   const schema = [
     { id: "name", name: "Name", type: "title" },
     { id: "units", name: "Units", type: "number" },
     { id: "price", name: "Price", type: "number" },
-    { id: "gross", name: "Gross", type: "formula",
-      formula: "[units] * [price] + 2.5" },
+    {
+      id: "gross",
+      name: "Gross",
+      type: "formula",
+      formula: "[units] * [price] + 2.5",
+    },
   ];
   await ok("PATCH", databaseRoute, { properties: schema });
   const definition = await ok("GET", databaseRoute);
-  assert.equal(definition.properties.find((f: any) =>
-    f.id === "gross").formula, "[units] * [price] + 2.5");
+  assert.equal(
+    definition.properties.find((f: any) => f.id === "gross").formula,
+    "[units] * [price] + 2.5",
+  );
   const row = await ok("POST", databaseRoute + "/records", {
     values: { name: "W06 Orders", units: 3, price: 4 },
   });
@@ -4061,72 +5168,100 @@ test("W06 numeric formulas: read-only recomputation, revisions and exports", asy
   assert.equal(row.values.gross, 14.5);
   assert.equal((await ok("GET", recordRoute)).values.gross, 14.5);
   const table = await ok("GET", databaseRoute + "/records");
-  assert.equal(table.find((item: any) => item.id === row.id).values.gross, 14.5);
-  const jsonExport = await ok("GET",
-    "/resources/" + formulaDatabase.id + "/export?format=json");
-  assert.equal(jsonExport.records.find((item: any) =>
-    item.id === row.id).values.gross, 14.5);
-  const csvExport = await req("GET",
-    "/resources/" + formulaDatabase.id + "/export?format=csv");
+  assert.equal(
+    table.find((item: any) => item.id === row.id).values.gross,
+    14.5,
+  );
+  const jsonExport = await ok(
+    "GET",
+    "/resources/" + formulaDatabase.id + "/export?format=json",
+  );
+  assert.equal(
+    jsonExport.records.find((item: any) => item.id === row.id).values.gross,
+    14.5,
+  );
+  const csvExport = await req(
+    "GET",
+    "/resources/" + formulaDatabase.id + "/export?format=csv",
+  );
   assert.equal(csvExport.statusCode, 200, csvExport.body);
   assert.match(csvExport.body, /14\.5/);
 
   const blockedWrite = await req("PATCH", recordRoute, {
-    expected_revision: row.revision, values: { gross: 99999 },
+    expected_revision: row.revision,
+    values: { gross: 99999 },
   });
-  assert.equal(blockedWrite.statusCode, 400,
-    "clients cannot modify computed values or bypass formulas");
+  assert.equal(
+    blockedWrite.statusCode,
+    400,
+    "clients cannot modify computed values or bypass formulas",
+  );
   const changedRow = await ok("PATCH", recordRoute, {
-    expected_revision: row.revision, values: { units: 5 },
+    expected_revision: row.revision,
+    values: { units: 5 },
   });
   assert.equal(changedRow.values.gross, 22.5);
   assert.equal((await ok("GET", recordRoute)).values.gross, 22.5);
   const stale = await req("PATCH", recordRoute, {
-    expected_revision: row.revision, values: { units: 7 },
+    expected_revision: row.revision,
+    values: { units: 7 },
   });
   assert.equal(stale.statusCode, 409);
 
   const badDefinition = await req("PATCH", databaseRoute, {
-    properties: schema.map((f) => f.id === "gross" ?
-      { ...f, formula: "eval(1)" } : f),
+    properties: schema.map((f) =>
+      f.id === "gross" ? { ...f, formula: "eval(1)" } : f,
+    ),
   });
   assert.equal(badDefinition.statusCode, 400);
   const unknownField = await req("PATCH", databaseRoute, {
-    properties: schema.map((f) => f.id === "gross" ?
-      { ...f, formula: "[hidden]+1" } : f),
+    properties: schema.map((f) =>
+      f.id === "gross" ? { ...f, formula: "[hidden]+1" } : f,
+    ),
   });
   assert.equal(unknownField.statusCode, 400);
   const unsafeReference = await req("PATCH", databaseRoute, {
-    properties: schema.map((f) => f.id === "gross" ?
-      { ...f, formula: "[gross]+1" } : f),
+    properties: schema.map((f) =>
+      f.id === "gross" ? { ...f, formula: "[gross]+1" } : f,
+    ),
   });
   assert.equal(unsafeReference.statusCode, 400);
   const noRawQuery = await req("POST", databaseRoute + "/views", {
     name: "Unsupported computed predicate",
-    config: { type: "table",
-      filters: [{ property: "gross", op: "eq", value: "14.5" }], sort: [] },
+    config: {
+      type: "table",
+      filters: [{ property: "gross", op: "eq", value: "14.5" }],
+      sort: [],
+    },
   });
   assert.equal(noRawQuery.statusCode, 400);
   const restored = await ok("GET", databaseRoute);
-  assert.equal(restored.properties.find((p: any) => p.id === "gross").formula,
+  assert.equal(
+    restored.properties.find((p: any) => p.id === "gross").formula,
     "[units] * [price] + 2.5",
-    "invalid schema change must not mutate the accepted expression");
+    "invalid schema change must not mutate the accepted expression",
+  );
 });
-
 
 test("W07 Rollup native: hide revoked links in all aggregates and exports", async () => {
   const target = await ok("POST", "/resources", {
-    kind: "database", title: "W07 Targets", parent_id: space.id,
+    kind: "database",
+    title: "W07 Targets",
+    parent_id: space.id,
   });
   const source = await ok("POST", "/resources", {
-    kind: "database", title: "W07 Source", parent_id: space.id,
+    kind: "database",
+    title: "W07 Source",
+    parent_id: space.id,
   });
   const targetPath = "/databases/" + target.id;
   const sourcePath = "/databases/" + source.id;
-  await ok("PATCH", targetPath, { properties: [
-    { id: "name", name: "Name", type: "title" },
-    { id: "amount", name: "Amount", type: "number" },
-  ] });
+  await ok("PATCH", targetPath, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "amount", name: "Amount", type: "number" },
+    ],
+  });
   const first = await ok("POST", targetPath + "/records", {
     values: { name: "W07 Visible", amount: 10 },
   });
@@ -4135,111 +5270,163 @@ test("W07 Rollup native: hide revoked links in all aggregates and exports", asyn
   });
   const props = [
     { id: "name", name: "Name", type: "title" },
-    { id: "links", name: "Clients", type: "relation",
-      target_database_id: target.id },
-    { id: "count", name: "Linked count", type: "rollup",
-      rollup_relation_id: "links", rollup_operation: "count" },
-    { id: "total", name: "Linked total", type: "rollup",
-      rollup_relation_id: "links", rollup_operation: "sum",
-      rollup_value_property_id: "amount" },
-    { id: "average", name: "Linked average", type: "rollup",
-      rollup_relation_id: "links", rollup_operation: "avg",
-      rollup_value_property_id: "amount" },
+    {
+      id: "links",
+      name: "Clients",
+      type: "relation",
+      target_database_id: target.id,
+    },
+    {
+      id: "count",
+      name: "Linked count",
+      type: "rollup",
+      rollup_relation_id: "links",
+      rollup_operation: "count",
+    },
+    {
+      id: "total",
+      name: "Linked total",
+      type: "rollup",
+      rollup_relation_id: "links",
+      rollup_operation: "sum",
+      rollup_value_property_id: "amount",
+    },
+    {
+      id: "average",
+      name: "Linked average",
+      type: "rollup",
+      rollup_relation_id: "links",
+      rollup_operation: "avg",
+      rollup_value_property_id: "amount",
+    },
   ];
   await ok("PATCH", sourcePath, { properties: props });
   const item = await ok("POST", sourcePath + "/records", {
     values: { name: "W07 Project", links: [first.id, second.id] },
   });
-  assert.deepEqual([item.values.count, item.values.total, item.values.average],
-    [2, 910, 455]);
+  assert.deepEqual(
+    [item.values.count, item.values.total, item.values.average],
+    [2, 910, 455],
+  );
   const recordPath = "/records/" + item.id;
   const freshRead = await ok("GET", recordPath);
   assert.equal(freshRead.values.total, 910);
 
   const peerId = randomUUID();
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W07 Peer')",
-      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W07 Peer')", [
+      peerId,
+      peerId + "@example.test",
+    ]);
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
-      [owner.tenant, peerId]);
+      [owner.tenant, peerId],
+    );
   });
   const peerToken = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, peerId));
-  const peer = { cookie: "workspace_session=" + peerToken,
-    csrf: csrf(peerToken) };
+    createSession(q, owner.tenant, peerId),
+  );
+  const peer = {
+    cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken),
+  };
   assert.equal((await ok("GET", recordPath, undefined, peer)).values.count, 2);
 
   // Revoke just the expensive target record without removing source access.
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-    " VALUES($1,$2,$3,0)" +
-    " ON CONFLICT(tenant_id,resource_id,principal_id)" +
-    " DO UPDATE SET level=0",
-    [owner.tenant, second.id, peerId]));
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)" +
+        " ON CONFLICT(tenant_id,resource_id,principal_id)" +
+        " DO UPDATE SET level=0",
+      [owner.tenant, second.id, peerId],
+    ),
+  );
   const redacted = await ok("GET", recordPath, undefined, peer);
   assert.deepEqual(redacted.values.links, [first.id]);
   assert.deepEqual(
     [redacted.values.count, redacted.values.total, redacted.values.average],
     [1, 10, 10],
-    "no aggregate may include revoked numeric contributions");
+    "no aggregate may include revoked numeric contributions",
+  );
   const listing = await ok("GET", sourcePath + "/records", undefined, peer);
   const peerRow = listing.find((r: any) => r.id === item.id);
   assert.equal(peerRow.values.count, 1);
   assert.equal(peerRow.values.total, 10);
   assert.equal(JSON.stringify(peerRow).includes(second.id), false);
-  const exported = await ok("GET",
-    "/resources/" + source.id + "/export?format=json", undefined, peer);
-  const exportedRow = exported.records.find((row:any) => row.id === item.id);
+  const exported = await ok(
+    "GET",
+    "/resources/" + source.id + "/export?format=json",
+    undefined,
+    peer,
+  );
+  const exportedRow = exported.records.find((row: any) => row.id === item.id);
   assert.ok(exportedRow, "Peer export must include the readable source record");
   assert.ok(!JSON.stringify(exportedRow.values).includes(second.id));
   assert.equal(exportedRow.values.count, 1);
   assert.equal(exportedRow.values.total, 10);
   assert.equal(exportedRow.values.average, 10);
-  const exportedCsv = await req("GET",
-    "/resources/" + source.id + "/export?format=csv", undefined, peer);
+  const exportedCsv = await req(
+    "GET",
+    "/resources/" + source.id + "/export?format=csv",
+    undefined,
+    peer,
+  );
   assert.equal(exportedCsv.statusCode, 200);
   assert.ok(!exportedCsv.body.includes(second.id));
   assert.ok(!exportedCsv.body.includes("910"));
 
   // Updates to a currently readable target update the computed value.
   const edited = await ok("PATCH", "/records/" + first.id, {
-    values: { amount: 15 }, expected_revision: first.revision,
+    values: { amount: 15 },
+    expected_revision: first.revision,
   });
   assert.equal(edited.values.amount, 15);
   assert.equal((await ok("GET", recordPath, undefined, peer)).values.total, 15);
 
   const rejectedComputed = await req("PATCH", recordPath, {
-    expected_revision: item.revision, values: { total: 999 },
+    expected_revision: item.revision,
+    values: { total: 999 },
   });
   assert.equal(rejectedComputed.statusCode, 400);
   const badSchema = await req("PATCH", sourcePath, {
-    properties: props.map((p) => p.id === "total"
-      ? { ...p, rollup_value_property_id: "hidden_column" } : p),
+    properties: props.map((p) =>
+      p.id === "total"
+        ? { ...p, rollup_value_property_id: "hidden_column" }
+        : p,
+    ),
   });
   assert.equal(badSchema.statusCode, 400);
   const noSort = await req("POST", sourcePath + "/views", {
     name: "Unsafe rollup sort",
-    config: { type: "table", filters: [],
-      sort: [{ property: "count", direction: "desc" }] },
+    config: {
+      type: "table",
+      filters: [],
+      sort: [{ property: "count", direction: "desc" }],
+    },
   });
   assert.equal(noSort.statusCode, 400);
   const unchanged = await ok("GET", sourcePath);
-  assert.equal(unchanged.properties.find((p: any) =>
-    p.id === "total").rollup_value_property_id, "amount");
+  assert.equal(
+    unchanged.properties.find((p: any) => p.id === "total")
+      .rollup_value_property_id,
+    "amount",
+  );
   // Deleting the remaining linked record must not expose a stale count.
-  await db.tenant(owner.tenant, (q) => q.query(
-    "UPDATE resources SET deleted_at=now() WHERE id=$1", [first.id]));
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE resources SET deleted_at=now() WHERE id=$1", [first.id]),
+  );
   const deleted = await ok("GET", recordPath, undefined, peer);
   assert.equal(deleted.values.count, 0);
   assert.equal(deleted.values.total, 0);
   assert.equal(deleted.values.average, null);
 });
 
-
 test("W08 permission-first pages: accessible records are not lost behind hidden rows", async () => {
   const dataset = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08 ACL pagination",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08 ACL pagination",
   });
   const resourceIds: string[] = [];
   for (let i = 0; i < 7; i++) {
@@ -4250,142 +5437,249 @@ test("W08 permission-first pages: accessible records are not lost behind hidden 
   }
   const peerId = randomUUID();
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Peer')",
-      [peerId, peerId + "@example.test"]);
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Peer')", [
+      peerId,
+      peerId + "@example.test",
+    ]);
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
-      [owner.tenant, peerId]);
+      [owner.tenant, peerId],
+    );
     for (const hiddenId of resourceIds.slice(0, 3))
       await q.query(
         "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-        " VALUES($1,$2,$3,0)",
-        [owner.tenant, hiddenId, peerId]);
+          " VALUES($1,$2,$3,0)",
+        [owner.tenant, hiddenId, peerId],
+      );
   });
   const peerToken = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, peerId));
-  const peer = { cookie: "workspace_session=" + peerToken,
-    csrf: csrf(peerToken) };
+    createSession(q, owner.tenant, peerId),
+  );
+  const peer = {
+    cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken),
+  };
   const path = "/databases/" + dataset.id + "/records?limit=2";
   const page1 = await ok("GET", path + "&offset=0", undefined, peer);
-  assert.deepEqual(page1.map((row: any) => row.id), resourceIds.slice(3, 5),
-    "first page must contain two readable records, not two raw SQL rows");
+  assert.deepEqual(
+    page1.map((row: any) => row.id),
+    resourceIds.slice(3, 5),
+    "first page must contain two readable records, not two raw SQL rows",
+  );
   const page2 = await ok("GET", path + "&offset=2", undefined, peer);
-  assert.deepEqual(page2.map((row: any) => row.id), resourceIds.slice(5, 7),
-    "offset counts accessible rows, not hidden source rows");
-  assert.equal((await ok("GET", path + "&offset=4", undefined, peer)).length, 0);
+  assert.deepEqual(
+    page2.map((row: any) => row.id),
+    resourceIds.slice(5, 7),
+    "offset counts accessible rows, not hidden source rows",
+  );
+  assert.equal(
+    (await ok("GET", path + "&offset=4", undefined, peer)).length,
+    0,
+  );
   for (const row of [...page1, ...page2])
     assert.ok(!resourceIds.slice(0, 3).includes(row.id));
   const ownerPage = await ok("GET", path + "&offset=0");
-  assert.deepEqual(ownerPage.map((row: any) => row.id), resourceIds.slice(0, 2));
+  assert.deepEqual(
+    ownerPage.map((row: any) => row.id),
+    resourceIds.slice(0, 2),
+  );
 
   // Candidate picker must paginate over readable choices, not raw rows.
   const source = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08 Picker source",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08 Picker source",
   });
-  await ok("PATCH", "/databases/" + source.id, { properties: [
-    { id: "name", name: "Name", type: "title" },
-    { id: "links", name: "Links", type: "relation",
-      target_database_id: dataset.id },
-  ] });
-  const candidatesPath = "/databases/" + source.id +
-    "/relation-candidates?property=links&limit=2";
-  const candidateFirst = await ok("GET", candidatesPath + "&offset=0",
-    undefined, peer);
-  const candidateNext = await ok("GET", candidatesPath + "&offset=2",
-    undefined, peer);
-  assert.deepEqual(candidateFirst.items.map((row: any) => row.id),
-    resourceIds.slice(3, 5));
+  await ok("PATCH", "/databases/" + source.id, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      {
+        id: "links",
+        name: "Links",
+        type: "relation",
+        target_database_id: dataset.id,
+      },
+    ],
+  });
+  const candidatesPath =
+    "/databases/" + source.id + "/relation-candidates?property=links&limit=2";
+  const candidateFirst = await ok(
+    "GET",
+    candidatesPath + "&offset=0",
+    undefined,
+    peer,
+  );
+  const candidateNext = await ok(
+    "GET",
+    candidatesPath + "&offset=2",
+    undefined,
+    peer,
+  );
+  assert.deepEqual(
+    candidateFirst.items.map((row: any) => row.id),
+    resourceIds.slice(3, 5),
+  );
   assert.equal(candidateFirst.has_more, true);
-  assert.deepEqual(candidateNext.items.map((row: any) => row.id),
-    resourceIds.slice(5, 7));
+  assert.deepEqual(
+    candidateNext.items.map((row: any) => row.id),
+    resourceIds.slice(5, 7),
+  );
   assert.equal(candidateNext.has_more, false);
 
   const hiddenTarget = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08-Picker A hidden",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08-Picker A hidden",
   });
   const visibleTarget = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08-Picker B visible",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08-Picker B visible",
   });
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-    " VALUES($1,$2,$3,0)", [owner.tenant, hiddenTarget.id, peerId]));
-  const targetSearch = await ok("GET",
-    "/databases/" + source.id +
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)",
+      [owner.tenant, hiddenTarget.id, peerId],
+    ),
+  );
+  const targetSearch = await ok(
+    "GET",
+    "/databases/" +
+      source.id +
       "/relation-targets?search=W08-Picker&limit=1&offset=0",
-    undefined, peer);
-  assert.deepEqual(targetSearch.items.map((row: any) => row.id),
+    undefined,
+    peer,
+  );
+  assert.deepEqual(
+    targetSearch.items.map((row: any) => row.id),
     [visibleTarget.id],
-    "picker must never reveal inaccessible databases in offset/has_more");
+    "picker must never reveal inaccessible databases in offset/has_more",
+  );
   assert.equal(targetSearch.has_more, false);
 
   // ACL changes must take effect immediately; do not use a stale cache.
-  await db.tenant(owner.tenant, (q) => q.query(
-    "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
-    [owner.tenant, resourceIds[0], peerId]));
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "DELETE FROM acl WHERE tenant_id=$1 AND resource_id=$2 AND principal_id=$3",
+      [owner.tenant, resourceIds[0], peerId],
+    ),
+  );
   const afterGrant = await ok("GET", path + "&offset=0", undefined, peer);
-  assert.deepEqual(afterGrant.map((row: any) => row.id),
-    [resourceIds[0], resourceIds[3]]);
-  const predicate = await db.tenant(owner.tenant, (q) => q.query(
-    "SELECT workspace_can_read_resource(id,$2::uuid,'member') allowed" +
-    " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position",
-    [resourceIds, peerId]));
-  assert.deepEqual(predicate.rows.map((row: any) => row.allowed),
+  assert.deepEqual(
+    afterGrant.map((row: any) => row.id),
+    [resourceIds[0], resourceIds[3]],
+  );
+  const predicate = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT workspace_can_read_resource(id,$2::uuid,'member') allowed" +
+        " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position",
+      [resourceIds, peerId],
+    ),
+  );
+  assert.deepEqual(
+    predicate.rows.map((row: any) => row.allowed),
     [true, false, false, true, true, true, true],
-    "database predicate must honor current per-resource denials and grants");
-  const guestDenied = await db.tenant(owner.tenant, (q) => q.query(
-    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'guest') allowed",
-    [dataset.id, peerId]));
-  assert.equal(guestDenied.rows[0].allowed, false,
-    "guest cannot acquire inherited access without an explicit ancestor grant");
-  const spoof = await db.tenant(owner.tenant, (q) => q.query(
-    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') forged," +
-    " workspace_can_read_resource($1::uuid,$2::uuid,NULL) missing",
-    [resourceIds[3], peerId]));
-  assert.deepEqual(spoof.rows[0], { forged: false, missing: false },
-    "predicate must not permit forged owner or absent caller roles");
-  const foreignTenant = await db.tenant(other.tenant, (q) => q.query(
-    "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') allowed",
-    [dataset.id, peerId]));
-  assert.equal(foreignTenant.rows[0].allowed, false,
-    "SQL access predicate stays restricted to current tenant RLS");
+    "database predicate must honor current per-resource denials and grants",
+  );
+  const guestDenied = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'guest') allowed",
+      [dataset.id, peerId],
+    ),
+  );
+  assert.equal(
+    guestDenied.rows[0].allowed,
+    false,
+    "guest cannot acquire inherited access without an explicit ancestor grant",
+  );
+  const spoof = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') forged," +
+        " workspace_can_read_resource($1::uuid,$2::uuid,NULL) missing",
+      [resourceIds[3], peerId],
+    ),
+  );
+  assert.deepEqual(
+    spoof.rows[0],
+    { forged: false, missing: false },
+    "predicate must not permit forged owner or absent caller roles",
+  );
+  const foreignTenant = await db.tenant(other.tenant, (q) =>
+    q.query(
+      "SELECT workspace_can_read_resource($1::uuid,$2::uuid,'owner') allowed",
+      [dataset.id, peerId],
+    ),
+  );
+  assert.equal(
+    foreignTenant.rows[0].allowed,
+    false,
+    "SQL access predicate stays restricted to current tenant RLS",
+  );
 
   // Explicitly exercise the unusual early-zero semantics shared with the
   // existing JS evaluator, including inherited reset and wildcard priority.
-  await db.tenant(owner.tenant, (q) => q.query(
-    "UPDATE resources SET inherit_permissions=false WHERE id=$1",
-    [dataset.id]));
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE resources SET inherit_permissions=false WHERE id=$1", [
+      dataset.id,
+    ]),
+  );
   const check = (user: string, role: string, id: string) =>
-    db.tenant(owner.tenant, (q) => q.query(
-      "SELECT workspace_can_read_resource($1::uuid,$2::uuid,$3) allowed",
-      [id, user, role]));
-  assert.equal((await check(peerId, "member", resourceIds[3]))
-    .rows[0].allowed, false, "ACL reset without grant denies children");
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-    " VALUES($1,$2,$3,3)", [owner.tenant, dataset.id, peerId]));
-  assert.equal((await check(peerId, "member", resourceIds[3]))
-    .rows[0].allowed, true, "same-node explicit grant restores inheritance");
+    db.tenant(owner.tenant, (q) =>
+      q.query(
+        "SELECT workspace_can_read_resource($1::uuid,$2::uuid,$3) allowed",
+        [id, user, role],
+      ),
+    );
+  assert.equal(
+    (await check(peerId, "member", resourceIds[3])).rows[0].allowed,
+    false,
+    "ACL reset without grant denies children",
+  );
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,3)",
+      [owner.tenant, dataset.id, peerId],
+    ),
+  );
+  assert.equal(
+    (await check(peerId, "member", resourceIds[3])).rows[0].allowed,
+    true,
+    "same-node explicit grant restores inheritance",
+  );
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("UPDATE acl SET level=0 WHERE tenant_id=$1" +
-      " AND resource_id=$2 AND principal_id=$3",
-      [owner.tenant, dataset.id, peerId]);
-    await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-      " VALUES($1,$2,'*',4)", [owner.tenant, dataset.id]);
+    await q.query(
+      "UPDATE acl SET level=0 WHERE tenant_id=$1" +
+        " AND resource_id=$2 AND principal_id=$3",
+      [owner.tenant, dataset.id, peerId],
+    );
+    await q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,'*',4)",
+      [owner.tenant, dataset.id],
+    );
   });
-  assert.equal((await check(peerId, "member", resourceIds[3]))
-    .rows[0].allowed, false,
-    "explicit user-level denial overrides wildcard grant");
-  await db.tenant(owner.tenant, (q) => q.query(
-    "UPDATE resources SET deleted_at=now() WHERE id=$1", [dataset.id]));
-  assert.equal((await check(owner.id, "owner", resourceIds[3]))
-    .rows[0].allowed, false,
-    "even owner read must exclude deleted ancestors");
+  assert.equal(
+    (await check(peerId, "member", resourceIds[3])).rows[0].allowed,
+    false,
+    "explicit user-level denial overrides wildcard grant",
+  );
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE resources SET deleted_at=now() WHERE id=$1", [dataset.id]),
+  );
+  assert.equal(
+    (await check(owner.id, "owner", resourceIds[3])).rows[0].allowed,
+    false,
+    "even owner read must exclude deleted ancestors",
+  );
 });
-
 
 test("W08 indexed direct-child ACL agrees with full evaluator and picker", async () => {
   const parent = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08 ACL fast-path parity",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08 ACL fast-path parity",
   });
   const ids: string[] = [];
   for (let i = 0; i < 7; i++) {
@@ -4396,61 +5690,97 @@ test("W08 indexed direct-child ACL agrees with full evaluator and picker", async
   }
   const peerId = randomUUID();
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'Fast path peer')",
-      [peerId, peerId + "@example.test"]);
-    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
-      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
-    await q.query("UPDATE resources SET inherit_permissions=false" +
-      " WHERE id=ANY($1::uuid[])", [[ids[3], ids[4], ids[5]]]);
+    await q.query(
+      "INSERT INTO users(id,email,name) VALUES($1,$2,'Fast path peer')",
+      [peerId, peerId + "@example.test"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role)" +
+        " VALUES($1,$2,'member')",
+      [owner.tenant, peerId],
+    );
+    await q.query(
+      "UPDATE resources SET inherit_permissions=false" +
+        " WHERE id=ANY($1::uuid[])",
+      [[ids[3], ids[4], ids[5]]],
+    );
     // 1: wildcard deny; 2: personal grant wins wildcard deny;
     // 4: reset+personal grant; 5: reset+wildcard grant;
     // 6: personal deny wins wildcard grant.
     const grants: Array<[string, string, number]> = [
       [ids[1], "*", 0],
-      [ids[2], "*", 0], [ids[2], peerId, 3],
-      [ids[4], peerId, 2], [ids[5], "*", 3],
-      [ids[6], "*", 4], [ids[6], peerId, 0],
+      [ids[2], "*", 0],
+      [ids[2], peerId, 3],
+      [ids[4], peerId, 2],
+      [ids[5], "*", 3],
+      [ids[6], "*", 4],
+      [ids[6], peerId, 0],
     ];
     for (const [resource, principal, level] of grants)
       await q.query(
         "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-        " VALUES($1,$2,$3,$4)",
+          " VALUES($1,$2,$3,$4)",
         [owner.tenant, resource, principal, level],
       );
   });
-  const token = await db.tenant(owner.tenant, q =>
-    createSession(q, owner.tenant, peerId));
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId),
+  );
   const actor = { cookie: "workspace_session=" + token, csrf: csrf(token) };
   const expected = [ids[0], ids[2], ids[4], ids[5]];
   const base = "/databases/" + parent.id + "/records?limit=2&offset=";
-  assert.deepEqual((await ok("GET", base + "0", undefined, actor))
-    .map((r: any) => r.id), expected.slice(0, 2));
-  assert.deepEqual((await ok("GET", base + "2", undefined, actor))
-    .map((r: any) => r.id), expected.slice(2));
-  assert.deepEqual((await ok("GET", base + "4", undefined, actor)), []);
-  const checked = await db.tenant(owner.tenant, q => q.query(
-    "SELECT id,workspace_can_read_resource(id,$2::uuid,'member') visible" +
-    " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position,id",
-    [ids, peerId],
-  ));
-  assert.deepEqual(checked.rows.filter((r:any) => r.visible)
-    .map((r:any) => r.id), expected,
-    "direct-child filter must be semantically equal to full SQL ancestry");
+  assert.deepEqual(
+    (await ok("GET", base + "0", undefined, actor)).map((r: any) => r.id),
+    expected.slice(0, 2),
+  );
+  assert.deepEqual(
+    (await ok("GET", base + "2", undefined, actor)).map((r: any) => r.id),
+    expected.slice(2),
+  );
+  assert.deepEqual(await ok("GET", base + "4", undefined, actor), []);
+  const checked = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT id,workspace_can_read_resource(id,$2::uuid,'member') visible" +
+        " FROM resources WHERE id=ANY($1::uuid[]) ORDER BY position,id",
+      [ids, peerId],
+    ),
+  );
+  assert.deepEqual(
+    checked.rows.filter((r: any) => r.visible).map((r: any) => r.id),
+    expected,
+    "direct-child filter must be semantically equal to full SQL ancestry",
+  );
 
   const source = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08 linked fast picker",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08 linked fast picker",
   });
-  await ok("PATCH", "/databases/" + source.id, { properties: [
-    { id: "name", name: "Name", type: "title" },
-    { id: "linked", name: "Linked", type: "relation",
-      target_database_id: parent.id },
-  ] });
-  const url = "/databases/" + source.id +
+  await ok("PATCH", "/databases/" + source.id, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      {
+        id: "linked",
+        name: "Linked",
+        type: "relation",
+        target_database_id: parent.id,
+      },
+    ],
+  });
+  const url =
+    "/databases/" +
+    source.id +
     "/relation-candidates?property=linked&limit=2&offset=";
   const choices0 = await ok("GET", url + "0", undefined, actor);
   const choices2 = await ok("GET", url + "2", undefined, actor);
-  assert.deepEqual(choices0.items.map((r:any) => r.id), expected.slice(0, 2));
-  assert.deepEqual(choices2.items.map((r:any) => r.id), expected.slice(2));
+  assert.deepEqual(
+    choices0.items.map((r: any) => r.id),
+    expected.slice(0, 2),
+  );
+  assert.deepEqual(
+    choices2.items.map((r: any) => r.id),
+    expected.slice(2),
+  );
   assert.equal(choices0.has_more, true);
   assert.equal(choices2.has_more, false);
   assert.ok(!JSON.stringify([choices0, choices2]).includes(ids[1]));
@@ -4459,20 +5789,28 @@ test("W08 indexed direct-child ACL agrees with full evaluator and picker", async
 
 test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => {
   const peerId = randomUUID();
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Scale Peer')",
-    [peerId, peerId + "@example.test"]));
-  await db.tenant(owner.tenant, (q) => q.query(
-    "INSERT INTO memberships(tenant_id,user_id,role)" +
-    " VALUES($1,$2,'member')", [owner.tenant, peerId]));
+  await db.tenant(owner.tenant, (q) =>
+    q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08 Scale Peer')", [
+      peerId,
+      peerId + "@example.test",
+    ]),
+  );
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role)" +
+        " VALUES($1,$2,'member')",
+      [owner.tenant, peerId],
+    ),
+  );
   const token = await db.tenant(owner.tenant, (q) =>
-    createSession(q, owner.tenant, peerId));
-  const peer = { cookie: "workspace_session=" + token,
-    csrf: csrf(token) };
+    createSession(q, owner.tenant, peerId),
+  );
+  const peer = { cookie: "workspace_session=" + token, csrf: csrf(token) };
 
   for (const size of [1000, 10000]) {
     const dataset = await ok("POST", "/resources", {
-      kind: "database", parent_id: space.id,
+      kind: "database",
+      parent_id: space.id,
       title: "W08 scale " + size,
     });
     const ids = Array.from({ length: size }, () => randomUUID());
@@ -4482,65 +5820,103 @@ test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => 
       // qualification practical under restricted PostgreSQL/RLS.
       await q.query(
         "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
-        " SELECT x.id,$2::uuid,$3::uuid,'record'," +
-        " 'W08 Scale item ' || x.n::text,x.n::float8" +
-        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
-        [ids, tenant, dataset.id]);
+          " SELECT x.id,$2::uuid,$3::uuid,'record'," +
+          " 'W08 Scale item ' || x.n::text,x.n::float8" +
+          " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+        [ids, tenant, dataset.id],
+      );
       await q.query(
         "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
-        " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object('name',r.title)" +
-        " FROM resources r WHERE r.id=ANY($1::uuid[])",
-        [ids, tenant, dataset.id]);
+          " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object('name',r.title)" +
+          " FROM resources r WHERE r.id=ANY($1::uuid[])",
+        [ids, tenant, dataset.id],
+      );
       await q.query(
         "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-        " SELECT $2::uuid,x.id,$3::text,0" +
-        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
-        " WHERE x.n <= $4::int",
-        [ids, tenant, peerId, size / 2]);
+          " SELECT $2::uuid,x.id,$3::text,0" +
+          " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+          " WHERE x.n <= $4::int",
+        [ids, tenant, peerId, size / 2],
+      );
     });
     const offset = size / 2 - 100;
     const started = Date.now();
-    const page = await ok("GET",
+    const page = await ok(
+      "GET",
       "/databases/" + dataset.id + "/records?limit=100&offset=" + offset,
-      undefined, peer);
+      undefined,
+      peer,
+    );
     const ms = Date.now() - started;
-    assert.deepEqual(page.map((row: any) => row.id), ids.slice(size - 100),
-      "deep offsets must count 100 accessible rows after hidden half");
-    console.info("W08_ACL_BENCH " + JSON.stringify({
-      size, hidden: size / 2, visible: size / 2,
-      offset, page_size: page.length, elapsed_ms: ms,
-    }));
+    assert.deepEqual(
+      page.map((row: any) => row.id),
+      ids.slice(size - 100),
+      "deep offsets must count 100 accessible rows after hidden half",
+    );
+    console.info(
+      "W08_ACL_BENCH " +
+        JSON.stringify({
+          size,
+          hidden: size / 2,
+          visible: size / 2,
+          offset,
+          page_size: page.length,
+          elapsed_ms: ms,
+        }),
+    );
     const budgetMs = size === 1000 ? 15000 : 60000;
-    assert.ok(ms < budgetMs,
-      "W08 " + size + "row permission-aware page exceeded " + budgetMs +
-      "ms provisional CI budget: " + ms + "ms");
+    assert.ok(
+      ms < budgetMs,
+      "W08 " +
+        size +
+        "row permission-aware page exceeded " +
+        budgetMs +
+        "ms provisional CI budget: " +
+        ms +
+        "ms",
+    );
 
     // Export scales over the same caller-specific visible set. A hidden
     // row must never be leaked even when thousands of rows are returned.
     const exportStarted = Date.now();
-    const output = await ok("GET",
+    const output = await ok(
+      "GET",
       "/resources/" + dataset.id + "/export?format=json",
-      undefined, peer);
+      undefined,
+      peer,
+    );
     const exportElapsed = Date.now() - exportStarted;
     const hidden = new Set(ids.slice(0, size / 2));
     assert.equal(output.records.length, size / 2);
-    assert.ok(output.records.every((row: any) =>
-      !hidden.has(row.id)),
-      "Export cannot include hidden source records or their metadata");
-    console.info("W08_ACL_EXPORT_BENCH " + JSON.stringify({
-      size, visible: output.records.length, elapsed_ms: exportElapsed,
-    }));
-    assert.ok(exportElapsed < 30000,
-      "W08 large visible-only export exceeded provisional 30s budget");
+    assert.ok(
+      output.records.every((row: any) => !hidden.has(row.id)),
+      "Export cannot include hidden source records or their metadata",
+    );
+    console.info(
+      "W08_ACL_EXPORT_BENCH " +
+        JSON.stringify({
+          size,
+          visible: output.records.length,
+          elapsed_ms: exportElapsed,
+        }),
+    );
+    assert.ok(
+      exportElapsed < 30000,
+      "W08 large visible-only export exceeded provisional 30s budget",
+    );
 
     const cursorStarted = Date.now();
     const gathered: string[] = [];
     let continuation: string | null = null;
     const cursorPath = "/databases/" + dataset.id + "/records/page?limit=100";
     for (let segment = 0; segment < size / 200; segment++) {
-      const response = await ok("GET", cursorPath +
-        (continuation ? "&cursor=" + encodeURIComponent(continuation) : ""),
-        undefined, peer);
+      const response = await ok(
+        "GET",
+        cursorPath +
+          (continuation ? "&cursor=" + encodeURIComponent(continuation) : ""),
+        undefined,
+        peer,
+      );
       assert.equal(response.items.length, 100);
       gathered.push(...response.items.map((item: any) => item.id));
       continuation = response.next_cursor;
@@ -4548,22 +5924,34 @@ test("W08 mixed-ACL scale: 1k and 10k visible-only database pages", async () => 
       if (response.has_more) assert.ok(continuation);
       else assert.equal(continuation, null);
     }
-    assert.deepEqual(gathered, ids.slice(size / 2),
-      "keyset traversal includes every readable record exactly once");
+    assert.deepEqual(
+      gathered,
+      ids.slice(size / 2),
+      "keyset traversal includes every readable record exactly once",
+    );
     const cursorMs = Date.now() - cursorStarted;
-    console.info("W08_KEYSET_BENCH " + JSON.stringify({
-      size, hidden: size / 2, visible: gathered.length,
-      pages: size / 200, elapsed_ms: cursorMs,
-    }));
-    assert.ok(cursorMs < 30000,
-      "W08 " + size + "row keyset traversal exceeded provisional CI budget");
+    console.info(
+      "W08_KEYSET_BENCH " +
+        JSON.stringify({
+          size,
+          hidden: size / 2,
+          visible: gathered.length,
+          pages: size / 200,
+          elapsed_ms: cursorMs,
+        }),
+    );
+    assert.ok(
+      cursorMs < 30000,
+      "W08 " + size + "row keyset traversal exceeded provisional CI budget",
+    );
   }
 });
 
-
 test("W08b native: encrypted keyset skips hidden records, scopes actor and invalidates changed views", async () => {
   const dataset = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08b encrypted pages",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08b encrypted pages",
   });
   for (let i = 0; i < 8; i++)
     await ok("POST", "/databases/" + dataset.id + "/records", {
@@ -4575,35 +5963,49 @@ test("W08b native: encrypted keyset skips hidden records, scopes actor and inval
   const hiddenIds = [all[0].id, all[3].id];
   const peerId = randomUUID();
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'W08b peer')",
-      [peerId, peerId + "@example.test"]);
-    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
-      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
+    await q.query(
+      "INSERT INTO users(id,email,name) VALUES($1,$2,'W08b peer')",
+      [peerId, peerId + "@example.test"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role)" +
+        " VALUES($1,$2,'member')",
+      [owner.tenant, peerId],
+    );
     for (const hidden of hiddenIds)
-      await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-        " VALUES($1,$2,$3,0)", [owner.tenant, hidden, peerId]);
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+          " VALUES($1,$2,$3,0)",
+        [owner.tenant, hidden, peerId],
+      );
   });
-  const peerToken = await db.tenant(owner.tenant, q =>
-    createSession(q, owner.tenant, peerId));
-  const peer = { cookie: "workspace_session=" + peerToken,
-    csrf: csrf(peerToken) };
-  const readable = all.map((x: any) => x.id)
+  const peerToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId),
+  );
+  const peer = {
+    cookie: "workspace_session=" + peerToken,
+    csrf: csrf(peerToken),
+  };
+  const readable = all
+    .map((x: any) => x.id)
     .filter((x: string) => !hiddenIds.includes(x));
   const url = base + "/page?limit=2";
   const returned: string[] = [];
   let cursor: string | null = null;
   let firstCursor: string | null = null;
   for (let page = 0; page < 4; page++) {
-    const response = await ok("GET", url +
-      (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
-      undefined, peer);
+    const response = await ok(
+      "GET",
+      url + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+      undefined,
+      peer,
+    );
     returned.push(...response.items.map((x: any) => x.id));
     if (page === 0) {
       firstCursor = response.next_cursor;
       assert.equal(response.has_more, true);
       assert.ok(firstCursor?.startsWith("db-page-v1."));
-      for (const hidden of hiddenIds)
-        assert.ok(!firstCursor!.includes(hidden));
+      for (const hidden of hiddenIds) assert.ok(!firstCursor!.includes(hidden));
     }
     if (!response.has_more) {
       assert.equal(response.next_cursor, null);
@@ -4611,87 +6013,186 @@ test("W08b native: encrypted keyset skips hidden records, scopes actor and inval
     }
     cursor = response.next_cursor;
   }
-  assert.deepEqual(returned, readable,
-    "cursor continues over readable order without duplicates or hidden slots");
+  assert.deepEqual(
+    returned,
+    readable,
+    "cursor continues over readable order without duplicates or hidden slots",
+  );
   assert.equal(new Set(returned).size, readable.length);
 
   // Cursor does not authorize reading in another user or tenant.
-  assert.equal((await req("GET", url + "&cursor=" +
-    encodeURIComponent(firstCursor!))).statusCode, 400);
-  assert.equal((await req("GET", url + "&cursor=" +
-    encodeURIComponent(firstCursor!), undefined, other)).statusCode, 400);
-  assert.equal((await req("GET", url + "&limit=3&cursor=" +
-    encodeURIComponent(firstCursor!), undefined, peer)).statusCode, 400);
-  assert.equal((await req("GET", url + "&offset=1", undefined, peer))
-    .statusCode, 400);
-  assert.equal((await req("GET", url + "&cursor=" +
-    encodeURIComponent(firstCursor!.slice(0, -1) + "!"), undefined, peer))
-    .statusCode, 400);
+  assert.equal(
+    (await req("GET", url + "&cursor=" + encodeURIComponent(firstCursor!)))
+      .statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        url + "&cursor=" + encodeURIComponent(firstCursor!),
+        undefined,
+        other,
+      )
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        url + "&limit=3&cursor=" + encodeURIComponent(firstCursor!),
+        undefined,
+        peer,
+      )
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (await req("GET", url + "&offset=1", undefined, peer)).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        url + "&cursor=" + encodeURIComponent(firstCursor!.slice(0, -1) + "!"),
+        undefined,
+        peer,
+      )
+    ).statusCode,
+    400,
+  );
 
   // An issued cursor is bound to the verified membership role; switching
   // member→guest→member must invalidate the token for the changed role,
   // while the SQL ACL gate separately enforces current permissions.
-  await db.tenant(owner.tenant, q => q.query(
-    "UPDATE memberships SET role='guest' WHERE tenant_id=$1 AND user_id=$2",
-    [owner.tenant, peerId]));
-  const staleRole = await req("GET", url + "&cursor=" +
-    encodeURIComponent(firstCursor!), undefined, peer);
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE memberships SET role='guest' WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, peerId],
+    ),
+  );
+  const staleRole = await req(
+    "GET",
+    url + "&cursor=" + encodeURIComponent(firstCursor!),
+    undefined,
+    peer,
+  );
   assert.equal(staleRole.statusCode, 400);
-  await db.tenant(owner.tenant, q => q.query(
-    "UPDATE memberships SET role='member' WHERE tenant_id=$1 AND user_id=$2",
-    [owner.tenant, peerId]));
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE memberships SET role='member' WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, peerId],
+    ),
+  );
 
   const saved = await ok("POST", "/databases/" + dataset.id + "/views", {
     name: "Cursor filter",
-    config: { type: "table", filters: [{
-      property: "name", op: "contains", value: "W08b Row",
-    }], sort: [] },
+    config: {
+      type: "table",
+      filters: [
+        {
+          property: "name",
+          op: "contains",
+          value: "W08b Row",
+        },
+      ],
+      sort: [],
+    },
   });
   const filteredUrl = url + "&view=" + saved.id;
   const filteredFirst = await ok("GET", filteredUrl, undefined, peer);
   assert.ok(filteredFirst.next_cursor);
-  assert.equal((await req("GET", filteredUrl + "&cursor=" +
-    encodeURIComponent(firstCursor!), undefined, peer)).statusCode, 400);
+  assert.equal(
+    (
+      await req(
+        "GET",
+        filteredUrl + "&cursor=" + encodeURIComponent(firstCursor!),
+        undefined,
+        peer,
+      )
+    ).statusCode,
+    400,
+  );
   await ok("PATCH", "/databases/" + dataset.id + "/views/" + saved.id, {
     name: "Modified cursor filter",
-    config: { type: "table", filters: [{
-      property: "name", op: "eq", value: "W08b Row 999",
-    }], sort: [] },
+    config: {
+      type: "table",
+      filters: [
+        {
+          property: "name",
+          op: "eq",
+          value: "W08b Row 999",
+        },
+      ],
+      sort: [],
+    },
   });
-  assert.equal((await req("GET", filteredUrl + "&cursor=" +
-    encodeURIComponent(filteredFirst.next_cursor), undefined, peer))
-    .statusCode, 400, "changed view invalidates encrypted cursor digest");
+  assert.equal(
+    (
+      await req(
+        "GET",
+        filteredUrl +
+          "&cursor=" +
+          encodeURIComponent(filteredFirst.next_cursor),
+        undefined,
+        peer,
+      )
+    ).statusCode,
+    400,
+    "changed view invalidates encrypted cursor digest",
+  );
 
   // A fresh ACL change is honored on the next cursor read.
   const firstOwnerPage = await ok("GET", url);
-  const expectedNext = (await ok("GET", url + "&cursor=" +
-    encodeURIComponent(firstOwnerPage.next_cursor))).items;
-  await db.tenant(owner.tenant, q => q.query(
-    "UPDATE resources SET deleted_at=now() WHERE id=$1", [expectedNext[0].id]));
-  const afterDelete = await ok("GET", url + "&cursor=" +
-    encodeURIComponent(firstOwnerPage.next_cursor));
-  assert.ok(afterDelete.items.every((x: any) => x.id !== expectedNext[0].id),
-    "cursor must never bypass deletion or ACL updates");
+  const expectedNext = (
+    await ok(
+      "GET",
+      url + "&cursor=" + encodeURIComponent(firstOwnerPage.next_cursor),
+    )
+  ).items;
+  await db.tenant(owner.tenant, (q) =>
+    q.query("UPDATE resources SET deleted_at=now() WHERE id=$1", [
+      expectedNext[0].id,
+    ]),
+  );
+  const afterDelete = await ok(
+    "GET",
+    url + "&cursor=" + encodeURIComponent(firstOwnerPage.next_cursor),
+  );
+  assert.ok(
+    afterDelete.items.every((x: any) => x.id !== expectedNext[0].id),
+    "cursor must never bypass deletion or ACL updates",
+  );
 });
-
 
 test("W08b calendar cursor: month binding, date filtering and custom-sort refusal", async () => {
   const dataset = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08b calendar",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08b calendar",
   });
   const dbPath = "/databases/" + dataset.id;
-  await ok("PATCH", dbPath, { properties: [
-    { id: "name", name: "Name", type: "title" },
-    { id: "due", name: "Due", type: "date" },
-  ] });
+  await ok("PATCH", dbPath, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "due", name: "Due", type: "date" },
+    ],
+  });
   for (const [name, due] of [
     ["March one", "2026-03-01"],
     ["March two", "2026-03-31"],
     ["April one", "2026-04-01"],
-  ]) await ok("POST", dbPath + "/records", { values: { name, due } });
+  ])
+    await ok("POST", dbPath + "/records", { values: { name, due } });
   const saved = await ok("POST", dbPath + "/views", {
-    name: "Calendar", config: {
-      type: "calendar", dateBy: "due", filters: [], sort: [],
+    name: "Calendar",
+    config: {
+      type: "calendar",
+      dateBy: "due",
+      filters: [],
+      sort: [],
     },
   });
   const base = dbPath + "/records/page?view=" + saved.id + "&limit=1";
@@ -4700,53 +6201,75 @@ test("W08b calendar cursor: month binding, date filtering and custom-sort refusa
   assert.equal(first.items.length, 1);
   assert.equal(first.has_more, true);
   assert.ok(first.next_cursor);
-  const second = await ok("GET", march + "&cursor=" +
-    encodeURIComponent(first.next_cursor));
+  const second = await ok(
+    "GET",
+    march + "&cursor=" + encodeURIComponent(first.next_cursor),
+  );
   assert.equal(second.items.length, 1);
   assert.equal(second.has_more, false);
   assert.equal(second.next_cursor, null);
-  assert.deepEqual([first.items[0].title, second.items[0].title].sort(),
-    ["March one", "March two"]);
-  const badMonth = await req("GET", base + "&month=2026-04&cursor=" +
-    encodeURIComponent(first.next_cursor));
+  assert.deepEqual([first.items[0].title, second.items[0].title].sort(), [
+    "March one",
+    "March two",
+  ]);
+  const badMonth = await req(
+    "GET",
+    base + "&month=2026-04&cursor=" + encodeURIComponent(first.next_cursor),
+  );
   assert.equal(badMonth.statusCode, 400);
   const april = await ok("GET", base + "&month=2026-04");
-  assert.deepEqual(april.items.map((x: any) => x.title), ["April one"]);
+  assert.deepEqual(
+    april.items.map((x: any) => x.title),
+    ["April one"],
+  );
   assert.equal(april.has_more, false);
-  assert.equal((await req("GET", dbPath + "/records/page?view=" + saved.id))
-    .statusCode, 400, "calendar requires explicit month");
+  assert.equal(
+    (await req("GET", dbPath + "/records/page?view=" + saved.id)).statusCode,
+    400,
+    "calendar requires explicit month",
+  );
 
   const sorted = await ok("POST", dbPath + "/views", {
-    name: "Custom sort", config: {
-      type: "table", filters: [],
+    name: "Custom sort",
+    config: {
+      type: "table",
+      filters: [],
       sort: [{ property: "name", direction: "asc" }],
     },
   });
-  const sortedPage = await ok("GET",
-    dbPath + "/records/page?view=" + sorted.id);
-  assert.deepEqual(sortedPage.items.map((row: any) => row.title),
+  const sortedPage = await ok(
+    "GET",
+    dbPath + "/records/page?view=" + sorted.id,
+  );
+  assert.deepEqual(
+    sortedPage.items.map((row: any) => row.title),
     ["April one", "March one", "March two"],
-    "W08c scalar Title sorting is now supported by the encrypted cursor");
+    "W08c scalar Title sorting is now supported by the encrypted cursor",
+  );
   assert.equal(sortedPage.has_more, false);
   const legacy = await ok("GET", dbPath + "/records?view=" + sorted.id);
-  assert.deepEqual(legacy.map((row: any) => row.id),
+  assert.deepEqual(
+    legacy.map((row: any) => row.id),
     sortedPage.items.map((row: any) => row.id),
-    "bounded legacy offset and typed cursor sorting must agree");
+    "bounded legacy offset and typed cursor sorting must agree",
+  );
 });
-
 
 test("W08c mixed ASC/DESC numeric and text keysets preserve null-last and actor ACL", async () => {
   const database = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08c typed sort",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08c typed sort",
   });
   const path = "/databases/" + database.id;
-  await ok("PATCH", path, { properties: [
-    { id: "name", name: "Name", type: "title" },
-    { id: "score", name: "Score", type: "number" },
-    { id: "label", name: "Label", type: "text" },
-    { id: "category", name: "Category", type: "select",
-      options: ["Group"] },
-  ] });
+  await ok("PATCH", path, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "score", name: "Score", type: "number" },
+      { id: "label", name: "Label", type: "text" },
+      { id: "category", name: "Category", type: "select", options: ["Group"] },
+    ],
+  });
   const fixtures: Array<{ name: string; score?: number; label?: string }> = [
     { name: "A", score: 2, label: "B" },
     { name: "B", score: 1, label: "A" },
@@ -4765,26 +6288,38 @@ test("W08c mixed ASC/DESC numeric and text keysets preserve null-last and actor 
   }
   const asc = await ok("POST", path + "/views", {
     name: "Ascending score, descending label",
-    config: { type: "table", filters: [], sort: [
-      { property: "score", direction: "asc" },
-      { property: "label", direction: "desc" },
-    ] },
+    config: {
+      type: "table",
+      filters: [],
+      sort: [
+        { property: "score", direction: "asc" },
+        { property: "label", direction: "desc" },
+      ],
+    },
   });
   const desc = await ok("POST", path + "/views", {
     name: "Descending score, ascending label",
-    config: { type: "board", groupBy: "category", filters: [], sort: [
-      { property: "score", direction: "desc" },
-      { property: "label", direction: "asc" },
-    ] },
+    config: {
+      type: "board",
+      groupBy: "category",
+      filters: [],
+      sort: [
+        { property: "score", direction: "desc" },
+        { property: "label", direction: "asc" },
+      ],
+    },
   });
   async function iterate(viewId: string, actor = owner) {
     const url = path + "/records/page?limit=2&view=" + viewId;
     const rows: any[] = [];
     let cursor: string | null = null;
     for (let index = 0; index < 7; index++) {
-      const result = await ok("GET", url +
-        (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
-        undefined, actor);
+      const result = await ok(
+        "GET",
+        url + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+        undefined,
+        actor,
+      );
       assert.ok(result.items.length <= 2);
       rows.push(...result.items);
       if (!result.has_more) {
@@ -4797,143 +6332,233 @@ test("W08c mixed ASC/DESC numeric and text keysets preserve null-last and actor 
     assert.fail("Did not terminate bounded sorted keyset traversal");
   }
   const ascending = await iterate(asc.id);
-  assert.deepEqual(ascending.map((r) => r.values.name),
-    ["E", "G", "B", "A", "C", "F", "I", "D", "H"]);
+  assert.deepEqual(
+    ascending.map((r) => r.values.name),
+    ["E", "G", "B", "A", "C", "F", "I", "D", "H"],
+  );
   const descending = await iterate(desc.id);
-  assert.deepEqual(descending.map((r) => r.values.name),
-    ["I", "C", "A", "F", "B", "E", "G", "D", "H"]);
+  assert.deepEqual(
+    descending.map((r) => r.values.name),
+    ["I", "C", "A", "F", "B", "E", "G", "D", "H"],
+  );
   assert.equal(new Set(ascending.map((r) => r.id)).size, 9);
 
   const peerId = randomUUID();
   await db.tenant(owner.tenant, async (q) => {
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'Sort peer')",
-      [peerId, peerId + "@example.test"]);
-    await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
-      " VALUES($1,$2,'member')", [owner.tenant, peerId]);
-    await q.query("INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-      " VALUES($1,$2,$3,0)", [owner.tenant, rowIds.get("A"), peerId]);
+    await q.query(
+      "INSERT INTO users(id,email,name) VALUES($1,$2,'Sort peer')",
+      [peerId, peerId + "@example.test"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role)" +
+        " VALUES($1,$2,'member')",
+      [owner.tenant, peerId],
+    );
+    await q.query(
+      "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,0)",
+      [owner.tenant, rowIds.get("A"), peerId],
+    );
   });
-  const token = await db.tenant(owner.tenant, q =>
-    createSession(q, owner.tenant, peerId));
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, peerId),
+  );
   const peer = { cookie: "workspace_session=" + token, csrf: csrf(token) };
   const visibleSorted = await iterate(asc.id, peer);
-  assert.deepEqual(visibleSorted.map((r) => r.values.name),
-    ["E", "G", "B", "C", "F", "I", "D", "H"]);
+  assert.deepEqual(
+    visibleSorted.map((r) => r.values.name),
+    ["E", "G", "B", "C", "F", "I", "D", "H"],
+  );
   assert.ok(!JSON.stringify(visibleSorted).includes(rowIds.get("A")!));
 
-  const first = await ok("GET",
-    path + "/records/page?limit=2&view=" + asc.id, undefined, peer);
-  assert.equal((await req("GET", path + "/records/page?limit=2&view=" +
-    desc.id + "&cursor=" + encodeURIComponent(first.next_cursor),
-    undefined, peer)).statusCode, 400,
-  "Cursor must reject changes to saved view sort order");
+  const first = await ok(
+    "GET",
+    path + "/records/page?limit=2&view=" + asc.id,
+    undefined,
+    peer,
+  );
+  assert.equal(
+    (
+      await req(
+        "GET",
+        path +
+          "/records/page?limit=2&view=" +
+          desc.id +
+          "&cursor=" +
+          encodeURIComponent(first.next_cursor),
+        undefined,
+        peer,
+      )
+    ).statusCode,
+    400,
+    "Cursor must reject changes to saved view sort order",
+  );
   await ok("PATCH", path + "/views/" + asc.id, {
-    name: "Modified sort direction", config: { type: "table", filters: [],
-      sort: [{ property: "score", direction: "desc" }] },
+    name: "Modified sort direction",
+    config: {
+      type: "table",
+      filters: [],
+      sort: [{ property: "score", direction: "desc" }],
+    },
   });
-  assert.equal((await req("GET", path + "/records/page?limit=2&view=" +
-    asc.id + "&cursor=" + encodeURIComponent(first.next_cursor),
-    undefined, peer)).statusCode, 400,
-  "Editing sort specification must invalidate previously issued cursor");
+  assert.equal(
+    (
+      await req(
+        "GET",
+        path +
+          "/records/page?limit=2&view=" +
+          asc.id +
+          "&cursor=" +
+          encodeURIComponent(first.next_cursor),
+        undefined,
+        peer,
+      )
+    ).statusCode,
+    400,
+    "Editing sort specification must invalidate previously issued cursor",
+  );
 });
-
 
 test("W08d: 25 concurrent principals remain tenant/ACL isolated across cursor pages and edits", async () => {
   const dataset = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id,
+    kind: "database",
+    parent_id: space.id,
     title: "W08d multiuser cursor capacity",
   });
-  const size = 200, denied = 100;
+  const size = 200,
+    denied = 100;
   const ids = Array.from({ length: size }, () => randomUUID());
   const userIds = Array.from({ length: 25 }, () => randomUUID());
   await db.tenant(owner.tenant, async (q) => {
     await q.query(
       "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
-      " SELECT x.id,$2::uuid,$3::uuid,'record'," +
-      " 'W08d item '||x.n::text,x.n::float8" +
-      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
-      [ids, owner.tenant, dataset.id]);
+        " SELECT x.id,$2::uuid,$3::uuid,'record'," +
+        " 'W08d item '||x.n::text,x.n::float8" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+      [ids, owner.tenant, dataset.id],
+    );
     await q.query(
       "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
-      " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object('name',r.title)" +
-      " FROM resources r WHERE r.id=ANY($1::uuid[])",
-      [ids, owner.tenant, dataset.id]);
+        " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object('name',r.title)" +
+        " FROM resources r WHERE r.id=ANY($1::uuid[])",
+      [ids, owner.tenant, dataset.id],
+    );
     await q.query(
       "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-      " SELECT $2::uuid,x.id,'*',0" +
-      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
-      " WHERE x.n<=$3",
-      [ids, owner.tenant, denied]);
+        " SELECT $2::uuid,x.id,'*',0" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+        " WHERE x.n<=$3",
+      [ids, owner.tenant, denied],
+    );
     for (let i = 0; i < userIds.length; i++) {
       const uid = userIds[i];
-      await q.query("INSERT INTO users(id,email,name)" +
-        " VALUES($1,$2,$3)",
-        [uid, uid + "@w08d.example.test", "Concurrent actor " + i]);
-      await q.query("INSERT INTO memberships(tenant_id,user_id,role)" +
-        " VALUES($1,$2,'member')", [owner.tenant, uid]);
+      await q.query("INSERT INTO users(id,email,name)" + " VALUES($1,$2,$3)", [
+        uid,
+        uid + "@w08d.example.test",
+        "Concurrent actor " + i,
+      ]);
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role)" +
+          " VALUES($1,$2,'member')",
+        [owner.tenant, uid],
+      );
       // Half the members additionally cannot read the first visible row.
       if (i % 2)
         await q.query(
           "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-          " VALUES($1,$2,$3,0)", [owner.tenant, ids[100], uid]);
+            " VALUES($1,$2,$3,0)",
+          [owner.tenant, ids[100], uid],
+        );
     }
   });
-  const actors = await Promise.all(userIds.map(async (uid) => {
-    const token = await db.tenant(owner.tenant,
-      (q) => createSession(q, owner.tenant, uid));
-    return { cookie: "workspace_session=" + token, csrf: csrf(token) };
-  }));
+  const actors = await Promise.all(
+    userIds.map(async (uid) => {
+      const token = await db.tenant(owner.tenant, (q) =>
+        createSession(q, owner.tenant, uid),
+      );
+      return { cookie: "workspace_session=" + token, csrf: csrf(token) };
+    }),
+  );
   const url = "/databases/" + dataset.id + "/records/page?limit=20";
   const started = Date.now();
   const timings: number[] = [];
   async function pageFor(actor: any, cursor: string | null) {
     const begin = Date.now();
-    const result = await ok("GET",
+    const result = await ok(
+      "GET",
       url + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
-      undefined, actor);
+      undefined,
+      actor,
+    );
     timings.push(Date.now() - begin);
     return result;
   }
   const firstPages = await Promise.all(
-    actors.map((actor) => pageFor(actor, null)));
+    actors.map((actor) => pageFor(actor, null)),
+  );
   const secondPages = await Promise.all(
-    actors.map((actor, i) =>
-      pageFor(actor, firstPages[i].next_cursor)));
+    actors.map((actor, i) => pageFor(actor, firstPages[i].next_cursor)),
+  );
   const hidden = new Set<string>(ids.slice(0, denied));
   for (let i = 0; i < actors.length; i++) {
-    const first = firstPages[i], second = secondPages[i];
+    const first = firstPages[i],
+      second = secondPages[i];
     assert.equal(first.items.length, 20);
     assert.equal(second.items.length, 20);
     assert.equal(first.has_more, true);
     const list = [...first.items, ...second.items].map((x: any) => x.id);
-    assert.equal(list.length, new Set(list).size,
-      "stable pages must not duplicate records");
-    assert.ok(list.every((id: string) => !hidden.has(id)),
-      "no globally denied record may leak in any concurrent session");
-    if (i % 2) assert.ok(!list.includes(ids[100]),
-      "personal ACL denies must override inherited/wildcard access");
-    else assert.ok(list.includes(ids[100]),
-      "other principals retain the differently permitted record");
+    assert.equal(
+      list.length,
+      new Set(list).size,
+      "stable pages must not duplicate records",
+    );
+    assert.ok(
+      list.every((id: string) => !hidden.has(id)),
+      "no globally denied record may leak in any concurrent session",
+    );
+    if (i % 2)
+      assert.ok(
+        !list.includes(ids[100]),
+        "personal ACL denies must override inherited/wildcard access",
+      );
+    else
+      assert.ok(
+        list.includes(ids[100]),
+        "other principals retain the differently permitted record",
+      );
   }
   const elapsed = Date.now() - started;
   timings.sort((a, b) => a - b);
   const percentile = (fraction: number) =>
-    timings[Math.min(timings.length - 1,
-      Math.ceil(fraction * timings.length) - 1)];
-  console.info("W08_MULTIUSER_BENCH " + JSON.stringify({
-    database_rows: size, globally_hidden: denied,
-    principals: actors.length, parallel_page_requests: 25,
-    completed_page_requests: timings.length,
-    p50_ms: percentile(0.5), p95_ms: percentile(0.95),
-    p99_ms: percentile(0.99), elapsed_ms: elapsed,
-  }));
-  assert.ok(elapsed < 30000,
-    "W08d provisional 25-session native throughput gate exceeded 30s");
+    timings[
+      Math.min(timings.length - 1, Math.ceil(fraction * timings.length) - 1)
+    ];
+  console.info(
+    "W08_MULTIUSER_BENCH " +
+      JSON.stringify({
+        database_rows: size,
+        globally_hidden: denied,
+        principals: actors.length,
+        parallel_page_requests: 25,
+        completed_page_requests: timings.length,
+        p50_ms: percentile(0.5),
+        p95_ms: percentile(0.95),
+        p99_ms: percentile(0.99),
+        elapsed_ms: elapsed,
+      }),
+  );
+  assert.ok(
+    elapsed < 30000,
+    "W08d provisional 25-session native throughput gate exceeded 30s",
+  );
 
   // Foreign tenant principal cannot enumerate database records.
   const foreign = await req("GET", url, undefined, other);
-  assert.notEqual(foreign.statusCode, 200,
-    "tenant boundary cannot be bypassed by cursor API");
+  assert.notEqual(
+    foreign.statusCode,
+    200,
+    "tenant boundary cannot be bypassed by cursor API",
+  );
 
   // Read-committed live semantics: a moved item may cross a cursor; a
   // fresh query restarts at the new current order. A revoked item must
@@ -4942,644 +6567,1164 @@ test("W08d: 25 concurrent principals remain tenant/ACL isolated across cursor pa
     await q.query("UPDATE resources SET position=0 WHERE id=$1", [ids[159]]);
     await q.query(
       "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-      " VALUES($1,$2,$3,0)",
-      [owner.tenant, ids[129], userIds[0]]);
+        " VALUES($1,$2,$3,0)",
+      [owner.tenant, ids[129], userIds[0]],
+    );
   });
   const continued = await pageFor(actors[0], firstPages[0].next_cursor);
-  assert.ok(!continued.items.some((row: any) => row.id === ids[129]),
-    "current ACL revocation must take effect after a cursor was issued");
-  assert.ok(!continued.items.some((row: any) => row.id === ids[159]),
-    "a moved-before-cursor record is not snapshot pinned");
+  assert.ok(
+    !continued.items.some((row: any) => row.id === ids[129]),
+    "current ACL revocation must take effect after a cursor was issued",
+  );
+  assert.ok(
+    !continued.items.some((row: any) => row.id === ids[159]),
+    "a moved-before-cursor record is not snapshot pinned",
+  );
   const restarted = await pageFor(actors[0], null);
-  assert.equal(restarted.items[0].id, ids[159],
-    "restart from first page must see the latest ordering");
-  assert.ok(!restarted.items.some((row: any) => row.id === ids[129]),
-    "new pagination never bypasses a revoked row");
+  assert.equal(
+    restarted.items[0].id,
+    ids[159],
+    "restart from first page must see the latest ordering",
+  );
+  assert.ok(
+    !restarted.items.some((row: any) => row.id === ids[129]),
+    "new pagination never bypasses a revoked row",
+  );
 });
 
 test("W08e: 10k mixed-ACL records under 25 sessions, sorted pages, search, export and edits", async () => {
-  const size = 10000, hiddenCount = 5000;
+  const size = 10000,
+    hiddenCount = 5000;
   const dataset = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W08e concurrent large table",
+    kind: "database",
+    parent_id: space.id,
+    title: "W08e concurrent large table",
   });
-  await ok("PATCH", "/databases/" + dataset.id, { properties: [
-    { id: "name", name: "Name", type: "title" },
-    { id: "score", name: "Score", type: "number" },
-  ] });
+  await ok("PATCH", "/databases/" + dataset.id, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "score", name: "Score", type: "number" },
+    ],
+  });
   const ids: string[] = Array.from({ length: size }, () => randomUUID());
   const userIds: string[] = Array.from({ length: 25 }, () => randomUUID());
   const insertionStarted = Date.now();
   await db.tenant(owner.tenant, async (q) => {
     await q.query(
       "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
-      " SELECT x.id,$2::uuid,$3::uuid,'record'," +
-      " 'W08e item '||x.n::text,x.n::float8" +
-      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
-      [ids, owner.tenant, dataset.id]);
+        " SELECT x.id,$2::uuid,$3::uuid,'record'," +
+        " 'W08e item '||x.n::text,x.n::float8" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+      [ids, owner.tenant, dataset.id],
+    );
     await q.query(
       "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
-      " SELECT $2::uuid,r.id,$3::uuid," +
-      " jsonb_build_object('name',r.title,'score'," +
-      " CASE WHEN r.position::int%7=0 THEN NULL" +
-      " ELSE r.position::int%101 END)" +
-      " FROM resources r WHERE r.id=ANY($1::uuid[])",
-      [ids, owner.tenant, dataset.id]);
+        " SELECT $2::uuid,r.id,$3::uuid," +
+        " jsonb_build_object('name',r.title,'score'," +
+        " CASE WHEN r.position::int%7=0 THEN NULL" +
+        " ELSE r.position::int%101 END)" +
+        " FROM resources r WHERE r.id=ANY($1::uuid[])",
+      [ids, owner.tenant, dataset.id],
+    );
     await q.query(
       "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-      " SELECT $2::uuid,x.id,'*',0" +
-      " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
-      " WHERE x.n<=$3",
-      [ids, owner.tenant, hiddenCount]);
+        " SELECT $2::uuid,x.id,'*',0" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+        " WHERE x.n<=$3",
+      [ids, owner.tenant, hiddenCount],
+    );
     for (let i = 0; i < userIds.length; i++) {
       const uid = userIds[i];
-      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
-        [uid, uid + "@w08e.example.test", "W08e member " + i]);
+      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [
+        uid,
+        uid + "@w08e.example.test",
+        "W08e member " + i,
+      ]);
       await q.query(
         "INSERT INTO memberships(tenant_id,user_id,role)" +
-        " VALUES($1,$2,'member')", [owner.tenant, uid]);
+          " VALUES($1,$2,'member')",
+        [owner.tenant, uid],
+      );
       if (i % 2)
         await q.query(
           "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
-          " VALUES($1,$2,$3,0)", [owner.tenant, ids[hiddenCount], uid]);
+            " VALUES($1,$2,$3,0)",
+          [owner.tenant, ids[hiddenCount], uid],
+        );
     }
   });
-  const actors = await Promise.all(userIds.map(async (uid) => {
-    const token = await db.tenant(owner.tenant,
-      q => createSession(q, owner.tenant, uid));
-    return { cookie: "workspace_session=" + token, csrf: csrf(token) };
-  }));
-  const view = await ok("POST",
-    "/databases/" + dataset.id + "/views", {
-      name: "Numeric score descending",
-      config: { type: "table", filters: [], sort: [
+  const actors = await Promise.all(
+    userIds.map(async (uid) => {
+      const token = await db.tenant(owner.tenant, (q) =>
+        createSession(q, owner.tenant, uid),
+      );
+      return { cookie: "workspace_session=" + token, csrf: csrf(token) };
+    }),
+  );
+  const view = await ok("POST", "/databases/" + dataset.id + "/views", {
+    name: "Numeric score descending",
+    config: {
+      type: "table",
+      filters: [],
+      sort: [
         { property: "score", direction: "desc" },
         { property: "name", direction: "asc" },
-      ] },
-    });
+      ],
+    },
+  });
   const source = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id,
+    kind: "database",
+    parent_id: space.id,
     title: "W08e relation candidate workload",
   });
-  await ok("PATCH", "/databases/" + source.id, { properties: [
-    { id: "name", name: "Name", type: "title" },
-    { id: "linked", name: "Linked", type: "relation",
-      target_database_id: dataset.id },
-  ] });
-  const sortedUrl = "/databases/" + dataset.id +
-    "/records/page?view=" + view.id + "&limit=50";
+  await ok("PATCH", "/databases/" + source.id, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      {
+        id: "linked",
+        name: "Linked",
+        type: "relation",
+        target_database_id: dataset.id,
+      },
+    ],
+  });
+  const sortedUrl =
+    "/databases/" + dataset.id + "/records/page?view=" + view.id + "&limit=50";
   const fixtureMs = Date.now() - insertionStarted;
-  const wallStart = Date.now(), cpuStart = process.cpuUsage(),
+  const wallStart = Date.now(),
+    cpuStart = process.cpuUsage(),
     rssBefore = process.memoryUsage().rss;
   const latencies: number[] = [];
   const getPage = async (actor: any, cursor?: string) => {
     const t = Date.now();
-    const response = await ok("GET", sortedUrl +
-      (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
-      undefined, actor);
+    const response = await ok(
+      "GET",
+      sortedUrl + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+      undefined,
+      actor,
+    );
     latencies.push(Date.now() - t);
     return response;
   };
-  const firstRequests = actors.map(actor => getPage(actor));
+  const firstRequests = actors.map((actor) => getPage(actor));
   const waitingObserved = db.pool.waitingCount;
   const first = await Promise.all(firstRequests);
-  const second = await Promise.all(actors.map((actor, i) =>
-    getPage(actor, first[i].next_cursor)));
+  const second = await Promise.all(
+    actors.map((actor, i) => getPage(actor, first[i].next_cursor)),
+  );
   const globallyHidden = new Set<string>(ids.slice(0, hiddenCount));
   for (let i = 0; i < actors.length; i++) {
     const rows = [...first[i].items, ...second[i].items];
     assert.equal(rows.length, 100);
-    assert.equal(new Set(rows.map((r: any) => r.id)).size, 100,
-      "stable multikey cursor should not duplicate unchanged records");
-    assert.ok(rows.every((r: any) => !globallyHidden.has(r.id)),
-      "no hidden record may leak under 25-session concurrent access");
-    if (i % 2) assert.ok(!rows.some((r: any) =>
-      r.id === ids[hiddenCount]), "personal deny wins per actor");
+    assert.equal(
+      new Set(rows.map((r: any) => r.id)).size,
+      100,
+      "stable multikey cursor should not duplicate unchanged records",
+    );
+    assert.ok(
+      rows.every((r: any) => !globallyHidden.has(r.id)),
+      "no hidden record may leak under 25-session concurrent access",
+    );
+    if (i % 2)
+      assert.ok(
+        !rows.some((r: any) => r.id === ids[hiddenCount]),
+        "personal deny wins per actor",
+      );
     assert.equal(first[i].has_more, true);
     assert.equal(second[i].has_more, true);
   }
-  const pickerUrl = "/databases/" + source.id +
+  const pickerUrl =
+    "/databases/" +
+    source.id +
     "/relation-candidates?property=linked&search=" +
-    encodeURIComponent("W08e item 9999") + "&limit=10";
-  const candidates = await Promise.all(actors.slice(0, 10).map(actor =>
-    ok("GET", pickerUrl, undefined, actor)));
+    encodeURIComponent("W08e item 9999") +
+    "&limit=10";
+  const candidates = await Promise.all(
+    actors.slice(0, 10).map((actor) => ok("GET", pickerUrl, undefined, actor)),
+  );
   for (const candidatesForActor of candidates)
-    assert.deepEqual(candidatesForActor.items.map((r: any) => r.id),
-      [ids[9998]], "relation picker must stay RLS/ACL filtered at 10k");
+    assert.deepEqual(
+      candidatesForActor.items.map((r: any) => r.id),
+      [ids[9998]],
+      "relation picker must stay RLS/ACL filtered at 10k",
+    );
 
-  const exported = await Promise.all(actors.slice(0, 2).map(actor =>
-    ok("GET", "/resources/" + dataset.id + "/export?format=json",
-      undefined, actor)));
+  const exported = await Promise.all(
+    actors
+      .slice(0, 2)
+      .map((actor) =>
+        ok(
+          "GET",
+          "/resources/" + dataset.id + "/export?format=json",
+          undefined,
+          actor,
+        ),
+      ),
+  );
   assert.equal(exported[0].records.length, 5000);
   assert.equal(exported[1].records.length, 4999);
   for (const result of exported)
-    assert.ok(result.records.every((r: any) => !globallyHidden.has(r.id)),
-      "large concurrent exports cannot reveal globally hidden record IDs");
+    assert.ok(
+      result.records.every((r: any) => !globallyHidden.has(r.id)),
+      "large concurrent exports cannot reveal globally hidden record IDs",
+    );
 
-  await Promise.all(Array.from({ length: 5 }, (_, i) =>
-    ok("PATCH", "/records/" + ids[7000 + i], {
-      values: { name: "W08e updated " + i }, expected_revision: 1,
-    })));
-  assert.notEqual((await req("GET", sortedUrl, undefined, other)).statusCode,
-    200, "second tenant must never see first tenant results");
+  await Promise.all(
+    Array.from({ length: 5 }, (_, i) =>
+      ok("PATCH", "/records/" + ids[7000 + i], {
+        values: { name: "W08e updated " + i },
+        expected_revision: 1,
+      }),
+    ),
+  );
+  assert.notEqual(
+    (await req("GET", sortedUrl, undefined, other)).statusCode,
+    200,
+    "second tenant must never see first tenant results",
+  );
 
-  const cpu = process.cpuUsage(cpuStart), rssAfter = process.memoryUsage().rss;
+  const cpu = process.cpuUsage(cpuStart),
+    rssAfter = process.memoryUsage().rss;
   const totalMs = Date.now() - wallStart;
   latencies.sort((a, b) => a - b);
   const percentile = (p: number) =>
-    latencies[Math.min(latencies.length - 1,
-      Math.ceil(p * latencies.length) - 1)];
-  console.info("W08_10K_CONCURRENT_BENCH " + JSON.stringify({
-    rows: size, hidden_rows: hiddenCount,
-    sessions: actors.length, concurrent_first_page_requests: 25,
-    total_page_requests: latencies.length,
-    relation_picker_requests: candidates.length, exports: exported.length,
-    edits: 5, fixture_ms: fixtureMs,
-    workload_ms: totalMs,
-    page_p50_ms: percentile(0.5), page_p95_ms: percentile(0.95),
-    page_p99_ms: percentile(0.99),
-    node_cpu_user_ms: Math.round(cpu.user / 1000),
-    node_cpu_system_ms: Math.round(cpu.system / 1000),
-    node_rss_before_mib: Math.round(rssBefore / 1048576),
-    node_rss_after_mib: Math.round(rssAfter / 1048576),
-    pg_pool_max: 12, pg_pool_total: db.pool.totalCount,
-    pg_pool_idle: db.pool.idleCount,
-    pg_waiting_after_start: waitingObserved,
-  }));
-  assert.ok(totalMs < 60000,
-    "10k/25-session provisional native CI qualification exceeded 60s");
+    latencies[
+      Math.min(latencies.length - 1, Math.ceil(p * latencies.length) - 1)
+    ];
+  console.info(
+    "W08_10K_CONCURRENT_BENCH " +
+      JSON.stringify({
+        rows: size,
+        hidden_rows: hiddenCount,
+        sessions: actors.length,
+        concurrent_first_page_requests: 25,
+        total_page_requests: latencies.length,
+        relation_picker_requests: candidates.length,
+        exports: exported.length,
+        edits: 5,
+        fixture_ms: fixtureMs,
+        workload_ms: totalMs,
+        page_p50_ms: percentile(0.5),
+        page_p95_ms: percentile(0.95),
+        page_p99_ms: percentile(0.99),
+        node_cpu_user_ms: Math.round(cpu.user / 1000),
+        node_cpu_system_ms: Math.round(cpu.system / 1000),
+        node_rss_before_mib: Math.round(rssBefore / 1048576),
+        node_rss_after_mib: Math.round(rssAfter / 1048576),
+        pg_pool_max: 12,
+        pg_pool_total: db.pool.totalCount,
+        pg_pool_idle: db.pool.idleCount,
+        pg_waiting_after_start: waitingObserved,
+      }),
+  );
+  assert.ok(
+    totalMs < 60000,
+    "10k/25-session provisional native CI qualification exceeded 60s",
+  );
 });
 
-
 test("W09a permissioned CSV preview and atomically mapped worker import", async () => {
-  const original = "Name,Quantity,Due,Checked,Extra\n" +
+  const original =
+    "Name,Quantity,Due,Checked,Extra\n" +
     "First,20,2026-10-01,true,retained\n" +
     "Second,0,2026-10-02,false,unused";
   const route = "/imports/preview";
   const preview = await ok("POST", route, {
-    parent_id: space.id, content: original,
+    parent_id: space.id,
+    content: original,
   });
   assert.equal(preview.row_count, 2);
-  assert.deepEqual(preview.mapping.map((v:any)=>v.type),
-    ["title","number","date","checkbox","text"]);
+  assert.deepEqual(
+    preview.mapping.map((v: any) => v.type),
+    ["title", "number", "date", "checkbox", "text"],
+  );
   assert.equal(preview.sample.length, 2);
-  assert.equal((await req("POST", route, {
-    parent_id: randomUUID(), content: original,
-  })).statusCode, 404, "unknown parent cannot be previewed");
-  assert.notEqual((await req("POST", route, {
-    parent_id: space.id, content: original,
-  }, other)).statusCode, 200, "foreign tenant cannot inspect parent");
-  assert.equal((await req("POST", route, {
-    parent_id: space.id, content: "Name,Name\nA,B",
-  })).statusCode, 400, "duplicate heading fails before queue");
+  assert.equal(
+    (
+      await req("POST", route, {
+        parent_id: randomUUID(),
+        content: original,
+      })
+    ).statusCode,
+    404,
+    "unknown parent cannot be previewed",
+  );
+  assert.notEqual(
+    (
+      await req(
+        "POST",
+        route,
+        {
+          parent_id: space.id,
+          content: original,
+        },
+        other,
+      )
+    ).statusCode,
+    200,
+    "foreign tenant cannot inspect parent",
+  );
+  assert.equal(
+    (
+      await req("POST", route, {
+        parent_id: space.id,
+        content: "Name,Name\nA,B",
+      })
+    ).statusCode,
+    400,
+    "duplicate heading fails before queue",
+  );
   const mapping = preview.mapping.map((m: any, i: number) => ({
-    ...m, id: "mapped" + i, skip: i === 4,
+    ...m,
+    id: "mapped" + i,
+    skip: i === 4,
   }));
   const queued = await ok("POST", "/imports", {
-    parent_id: space.id, name: "W09 typed CSV",
-    format: "csv", content: original, mapping,
+    parent_id: space.id,
+    name: "W09 typed CSV",
+    format: "csv",
+    content: original,
+    mapping,
   });
   assert.equal(queued.status, "pending");
   await tick(db);
   const job = await ok("GET", "/jobs/" + queued.id);
   assert.equal(job.status, "completed", JSON.stringify(job.result));
-  const persistedPayload = await db.tenant(owner.tenant, q =>
-    one(q, "SELECT payload FROM jobs WHERE id=$1", [queued.id]));
-  assert.deepEqual(persistedPayload.payload.mapping, mapping,
+  const persistedPayload = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT payload FROM jobs WHERE id=$1", [queued.id]),
+  );
+  assert.deepEqual(
+    persistedPayload.payload.mapping,
+    mapping,
     "queued mapping must be stored exactly, not silently dropped. Payload keys: " +
       JSON.stringify(Object.keys(persistedPayload.payload || {})) +
-      " Payload value type: " + typeof persistedPayload.payload);
-  const schemaRow = await db.tenant(owner.tenant, q => one(q,
-    "SELECT properties FROM databases WHERE resource_id=$1",
-    [job.result.resource_id]));
-  assert.deepEqual(schemaRow.properties.map((p:any)=>p.id),
-    ["mapped0","mapped1","mapped2","mapped3"],
-    "worker must create the requested mapped schema");
+      " Payload value type: " +
+      typeof persistedPayload.payload,
+  );
+  const schemaRow = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT properties FROM databases WHERE resource_id=$1", [
+      job.result.resource_id,
+    ]),
+  );
+  assert.deepEqual(
+    schemaRow.properties.map((p: any) => p.id),
+    ["mapped0", "mapped1", "mapped2", "mapped3"],
+    "worker must create the requested mapped schema",
+  );
   const recordUrl = "/databases/" + job.result.resource_id + "/records";
   const created = await ok("GET", recordUrl);
   assert.equal(created.length, 2);
-  assert.deepEqual(created.map((r:any)=>({
-    name:r.values.mapped0, quantity:r.values.mapped1,
-    due:r.values.mapped2, checked:r.values.mapped3,
-  })), [
-    {name:"First",quantity:20,due:"2026-10-01",checked:true},
-    {name:"Second",quantity:0,due:"2026-10-02",checked:false},
-  ], "Mapped returned rows: " + JSON.stringify(created.slice(0, 2)));
-  assert.ok(created.every((r:any)=>r.values.mapped4===undefined),
-    "skipped columns never enter database storage");
+  assert.deepEqual(
+    created.map((r: any) => ({
+      name: r.values.mapped0,
+      quantity: r.values.mapped1,
+      due: r.values.mapped2,
+      checked: r.values.mapped3,
+    })),
+    [
+      { name: "First", quantity: 20, due: "2026-10-01", checked: true },
+      { name: "Second", quantity: 0, due: "2026-10-02", checked: false },
+    ],
+    "Mapped returned rows: " + JSON.stringify(created.slice(0, 2)),
+  );
+  assert.ok(
+    created.every((r: any) => r.values.mapped4 === undefined),
+    "skipped columns never enter database storage",
+  );
   const copied = await ok("GET", "/databases/" + job.result.resource_id);
-  assert.deepEqual(copied.properties.map((p:any)=>p.type),
-    ["title","number","date","checkbox"]);
-  assert.equal((await req("GET", "/jobs/" + queued.id,undefined,other))
-    .statusCode, 404, "import job remains caller-owned");
+  assert.deepEqual(
+    copied.properties.map((p: any) => p.type),
+    ["title", "number", "date", "checkbox"],
+  );
+  assert.equal(
+    (await req("GET", "/jobs/" + queued.id, undefined, other)).statusCode,
+    404,
+    "import job remains caller-owned",
+  );
 
-  const before = await db.tenant(owner.tenant, q=>q.query(
-    "SELECT count(*)::int n FROM resources WHERE parent_id=$1",
-    [space.id]));
+  const before = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT count(*)::int n FROM resources WHERE parent_id=$1", [
+      space.id,
+    ]),
+  );
   const bad = await ok("POST", "/imports", {
-    parent_id: space.id, name: "W09 invalid CSV",
-    format:"csv", content: original.replace("2026-10-02","2026-02-30"),
+    parent_id: space.id,
+    name: "W09 invalid CSV",
+    format: "csv",
+    content: original.replace("2026-10-02", "2026-02-30"),
     mapping,
   });
   await tick(db);
   const failed = await ok("GET", "/jobs/" + bad.id);
   assert.equal(failed.status, "failed");
   assert.match(failed.result.error, /row 2/);
-  const after = await db.tenant(owner.tenant, q=>q.query(
-    "SELECT count(*)::int n FROM resources WHERE parent_id=$1",
-    [space.id]));
-  assert.equal(Number(before.rows[0].n),Number(after.rows[0].n),
-    "invalid late-row value never creates a partially imported resource");
+  const after = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT count(*)::int n FROM resources WHERE parent_id=$1", [
+      space.id,
+    ]),
+  );
+  assert.equal(
+    Number(before.rows[0].n),
+    Number(after.rows[0].n),
+    "invalid late-row value never creates a partially imported resource",
+  );
 
   const invalidMarkdownMap = await req("POST", "/imports", {
-    parent_id:space.id,name:"No mapping on MD",format:"markdown",
-    content:"# Heading", mapping,
+    parent_id: space.id,
+    name: "No mapping on MD",
+    format: "markdown",
+    content: "# Heading",
+    mapping,
   });
-  assert.equal(invalidMarkdownMap.statusCode,400);
+  assert.equal(invalidMarkdownMap.statusCode, 400);
 });
 
 test("W09b existing-database CSV append checks schema, ACL and atomicity", async () => {
   const target = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W09b target",
+    kind: "database",
+    parent_id: space.id,
+    title: "W09b target",
   });
   const path = "/databases/" + target.id;
-  await ok("PATCH", path, { properties: [
-    { id:"name", name:"Name", type:"title" },
-    { id:"quantity", name:"Quantity", type:"number" },
-    { id:"due", name:"Due", type:"date" },
-    { id:"done", name:"Done", type:"checkbox" },
-  ] });
-  await ok("POST", path + "/records", {
-    values:{ name:"Original", quantity:99 },
+  await ok("PATCH", path, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "quantity", name: "Quantity", type: "number" },
+      { id: "due", name: "Due", type: "date" },
+      { id: "done", name: "Done", type: "checkbox" },
+    ],
   });
-  const content = "Name,Quantity,Due,Done\n" +
+  await ok("POST", path + "/records", {
+    values: { name: "Original", quantity: 99 },
+  });
+  const content =
+    "Name,Quantity,Due,Done\n" +
     "First,2,2026-10-01,true\n" +
     "Second,0,2026-10-02,false";
-  const args={ parent_id:space.id, target_database_id:target.id, content };
-  const preview = await ok("POST", "/imports/preview",args);
-  assert.equal(preview.row_count,2);
-  assert.deepEqual(preview.mapping.map((m:any)=>m.id),
-    ["name","quantity","due","done"]);
-  assert.match(preview.target.schema_digest,/^[a-f0-9]{64}$/);
-  assert.equal(preview.target.id,target.id);
-  assert.equal((await req("POST", "/imports/preview", {
-    ...args, target_database_id:randomUUID(),
-  })).statusCode,404);
-  assert.notEqual((await req("POST","/imports/preview",
-    args,other)).statusCode,200);
+  const args = { parent_id: space.id, target_database_id: target.id, content };
+  const preview = await ok("POST", "/imports/preview", args);
+  assert.equal(preview.row_count, 2);
+  assert.deepEqual(
+    preview.mapping.map((m: any) => m.id),
+    ["name", "quantity", "due", "done"],
+  );
+  assert.match(preview.target.schema_digest, /^[a-f0-9]{64}$/);
+  assert.equal(preview.target.id, target.id);
+  assert.equal(
+    (
+      await req("POST", "/imports/preview", {
+        ...args,
+        target_database_id: randomUUID(),
+      })
+    ).statusCode,
+    404,
+  );
+  assert.notEqual(
+    (await req("POST", "/imports/preview", args, other)).statusCode,
+    200,
+  );
   const payload = {
-    ...args, name:"Explicit append",format:"csv",mapping:preview.mapping,
-    expected_schema_digest:preview.target.schema_digest,
-    existing_mode:"append",
+    ...args,
+    name: "Explicit append",
+    format: "csv",
+    mapping: preview.mapping,
+    expected_schema_digest: preview.target.schema_digest,
+    existing_mode: "append",
   };
-  assert.equal((await req("POST","/imports",{
-    ...payload, existing_mode:undefined,
-  })).statusCode,400);
-  assert.equal((await req("POST","/imports",{
-    ...payload, expected_schema_digest:"a".repeat(64),
-  })).statusCode,409);
-  const first = await ok("POST","/imports",payload);
+  assert.equal(
+    (
+      await req("POST", "/imports", {
+        ...payload,
+        existing_mode: undefined,
+      })
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req("POST", "/imports", {
+        ...payload,
+        expected_schema_digest: "a".repeat(64),
+      })
+    ).statusCode,
+    409,
+  );
+  const first = await ok("POST", "/imports", payload);
   await tick(db);
-  const completed=await ok("GET","/jobs/"+first.id);
-  assert.equal(completed.status,"completed",JSON.stringify(completed.result));
-  assert.equal(completed.result.resource_id,target.id);
-  const records=await ok("GET",path+"/records");
-  assert.equal(records.length,3);
-  const byName=new Map(records.map((r:any)=>[r.values.name,r.values]));
-  assert.equal((byName.get("Original") as any).quantity,99);
-  assert.deepEqual(["First","Second"].map(name=>{
-    const v=byName.get(name) as any;
-    return {name,quantity:v.quantity,due:v.due,done:v.done};
-  }),[
-    {name:"First",quantity:2,due:"2026-10-01",done:true},
-    {name:"Second",quantity:0,due:"2026-10-02",done:false},
-  ]);
-  assert.equal((await req("GET","/jobs/"+first.id,undefined,other))
-    .statusCode,404);
-  const invalid = await ok("POST","/imports",{
-    ...payload, content:content.replace("2026-10-02","2026-02-30"),
+  const completed = await ok("GET", "/jobs/" + first.id);
+  assert.equal(completed.status, "completed", JSON.stringify(completed.result));
+  assert.equal(completed.result.resource_id, target.id);
+  const records = await ok("GET", path + "/records");
+  assert.equal(records.length, 3);
+  const byName = new Map(records.map((r: any) => [r.values.name, r.values]));
+  assert.equal((byName.get("Original") as any).quantity, 99);
+  assert.deepEqual(
+    ["First", "Second"].map((name) => {
+      const v = byName.get(name) as any;
+      return { name, quantity: v.quantity, due: v.due, done: v.done };
+    }),
+    [
+      { name: "First", quantity: 2, due: "2026-10-01", done: true },
+      { name: "Second", quantity: 0, due: "2026-10-02", done: false },
+    ],
+  );
+  assert.equal(
+    (await req("GET", "/jobs/" + first.id, undefined, other)).statusCode,
+    404,
+  );
+  const invalid = await ok("POST", "/imports", {
+    ...payload,
+    content: content.replace("2026-10-02", "2026-02-30"),
   });
   await tick(db);
-  const failed=await ok("GET","/jobs/"+invalid.id);
-  assert.equal(failed.status,"failed");
-  assert.match(failed.result.error,/row 2/);
-  assert.equal((await ok("GET",path+"/records")).length,3,
-    "late invalid row must roll back all appended rows");
+  const failed = await ok("GET", "/jobs/" + invalid.id);
+  assert.equal(failed.status, "failed");
+  assert.match(failed.result.error, /row 2/);
+  assert.equal(
+    (await ok("GET", path + "/records")).length,
+    3,
+    "late invalid row must roll back all appended rows",
+  );
 
-  const changed = await ok("POST","/imports",payload);
-  await ok("PATCH",path,{properties:[
-    {id:"name",name:"Name",type:"title"},
-    {id:"quantity",name:"Quantity",type:"number"},
-    {id:"due",name:"Due",type:"date"},
-    {id:"done",name:"Done",type:"checkbox"},
-    {id:"note",name:"Note",type:"text"},
-  ]});
+  const changed = await ok("POST", "/imports", payload);
+  await ok("PATCH", path, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "quantity", name: "Quantity", type: "number" },
+      { id: "due", name: "Due", type: "date" },
+      { id: "done", name: "Done", type: "checkbox" },
+      { id: "note", name: "Note", type: "text" },
+    ],
+  });
   await tick(db);
-  const stale=await ok("GET","/jobs/"+changed.id);
-  assert.equal(stale.status,"failed");
-  assert.match(stale.result.error,/schema changed/i);
-  assert.equal((await ok("GET",path+"/records")).length,3,
-    "schema revision after queue must fail closed before appending");
+  const stale = await ok("GET", "/jobs/" + changed.id);
+  assert.equal(stale.status, "failed");
+  assert.match(stale.result.error, /schema changed/i);
+  assert.equal(
+    (await ok("GET", path + "/records")).length,
+    3,
+    "schema revision after queue must fail closed before appending",
+  );
 
   // Execution-time authorization is separate from the enqueue decision.
   // Disabling membership after queue must prevent all appended rows.
   const refreshed = await ok("POST", "/imports/preview", args);
   const revoked = await ok("POST", "/imports", {
-    ...payload, expected_schema_digest: refreshed.target.schema_digest,
+    ...payload,
+    expected_schema_digest: refreshed.target.schema_digest,
   });
-  await db.tenant(owner.tenant, q => q.query(
-    "UPDATE memberships SET active=false WHERE tenant_id=$1 AND user_id=$2",
-    [owner.tenant, owner.id]));
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE memberships SET active=false WHERE tenant_id=$1 AND user_id=$2",
+      [owner.tenant, owner.id],
+    ),
+  );
   try {
     await tick(db);
   } finally {
-    await db.tenant(owner.tenant, q => q.query(
-      "UPDATE memberships SET active=true WHERE tenant_id=$1 AND user_id=$2",
-      [owner.tenant, owner.id]));
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "UPDATE memberships SET active=true WHERE tenant_id=$1 AND user_id=$2",
+        [owner.tenant, owner.id],
+      ),
+    );
   }
   const revokedJob = await ok("GET", "/jobs/" + revoked.id);
   assert.equal(revokedJob.status, "failed");
   assert.match(revokedJob.result.error, /membership revoked/i);
-  assert.equal((await ok("GET", path + "/records")).length, 3,
-    "revoked membership must not append any records");
+  assert.equal(
+    (await ok("GET", path + "/records")).length,
+    3,
+    "revoked membership must not append any records",
+  );
 });
-
 
 test("W09c CSV submission retries are principal-bound, atomic and schema-aware", async () => {
   const target = await ok("POST", "/resources", {
-    kind: "database", parent_id: space.id, title: "W09c idempotency target",
+    kind: "database",
+    parent_id: space.id,
+    title: "W09c idempotency target",
   });
   const url = "/databases/" + target.id;
   const content = "Name\nCreated once\n";
   const preview = await ok("POST", "/imports/preview", {
-    parent_id:space.id,target_database_id:target.id,content,
+    parent_id: space.id,
+    target_database_id: target.id,
+    content,
   });
   const key = randomUUID();
   const request = {
-    parent_id:space.id, target_database_id:target.id, format:"csv",
-    name:"Idempotent append",content, mapping:preview.mapping,
-    expected_schema_digest:preview.target.schema_digest,
-    existing_mode:"append",idempotency_key:key,
+    parent_id: space.id,
+    target_database_id: target.id,
+    format: "csv",
+    name: "Idempotent append",
+    content,
+    mapping: preview.mapping,
+    expected_schema_digest: preview.target.schema_digest,
+    existing_mode: "append",
+    idempotency_key: key,
   };
   const [first, simultaneous] = await Promise.all([
     ok("POST", "/imports", request),
     ok("POST", "/imports", request),
   ]);
-  assert.equal(first.id,simultaneous.id,
-    "concurrent same-key requests enqueue one logical job");
-  assert.equal(first.status,"pending");
-  const queued = await db.tenant(owner.tenant,q=>q.query(
-    "SELECT id,request_digest,payload FROM jobs WHERE user_id=$1 AND idempotency_key=$2",
-    [owner.id,key]));
-  assert.equal(queued.rowCount,1);
-  assert.match(queued.rows[0].request_digest,/^[a-f0-9]{64}$/);
-  assert.equal(queued.rows[0].payload.idempotency_key,undefined,
-    "worker payload must not persist the client replay secret");
-  assert.equal((await req("POST","/imports", {
-    ...request,content:"Name\nDifferent content\n",
-  })).statusCode,409,"same key cannot silently mean another request");
-  assert.equal((await req("POST","/imports", {
-    ...request,idempotency_key:"bad",
-  })).statusCode,400);
-  assert.equal((await req("POST","/imports", {
-    parent_id:space.id,name:"Plain page",format:"markdown",
-    content:"# Page",idempotency_key:randomUUID(),
-  })).statusCode,400,"idempotency key is currently CSV-only");
-  assert.notEqual((await req("POST","/imports",request,other)).statusCode,200,
-    "foreign tenant must not resolve the first actor's key");
+  assert.equal(
+    first.id,
+    simultaneous.id,
+    "concurrent same-key requests enqueue one logical job",
+  );
+  assert.equal(first.status, "pending");
+  const queued = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT id,request_digest,payload FROM jobs WHERE user_id=$1 AND idempotency_key=$2",
+      [owner.id, key],
+    ),
+  );
+  assert.equal(queued.rowCount, 1);
+  assert.match(queued.rows[0].request_digest, /^[a-f0-9]{64}$/);
+  assert.equal(
+    queued.rows[0].payload.idempotency_key,
+    undefined,
+    "worker payload must not persist the client replay secret",
+  );
+  assert.equal(
+    (
+      await req("POST", "/imports", {
+        ...request,
+        content: "Name\nDifferent content\n",
+      })
+    ).statusCode,
+    409,
+    "same key cannot silently mean another request",
+  );
+  assert.equal(
+    (
+      await req("POST", "/imports", {
+        ...request,
+        idempotency_key: "bad",
+      })
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req("POST", "/imports", {
+        parent_id: space.id,
+        name: "Plain page",
+        format: "markdown",
+        content: "# Page",
+        idempotency_key: randomUUID(),
+      })
+    ).statusCode,
+    400,
+    "idempotency key is currently CSV-only",
+  );
+  assert.notEqual(
+    (await req("POST", "/imports", request, other)).statusCode,
+    200,
+    "foreign tenant must not resolve the first actor's key",
+  );
   await tick(db);
   await tick(db);
-  assert.equal((await ok("GET",url+"/records")).length,1,
-    "worker retry must not append already completed job");
-  const after = await ok("POST","/imports",request);
-  assert.equal(after.id,first.id);
-  assert.equal(after.status,"completed");
+  assert.equal(
+    (await ok("GET", url + "/records")).length,
+    1,
+    "worker retry must not append already completed job",
+  );
+  const after = await ok("POST", "/imports", request);
+  assert.equal(after.id, first.id);
+  assert.equal(after.status, "completed");
   // A successful job can be retrieved by its key after a schema revision:
   // current write ACL still applies, but the original job is not requeued.
-  await ok("PATCH",url,{properties:[
-    {id:"name",name:"Name",type:"title"},
-    {id:"note",name:"Note",type:"text"},
-  ]});
-  const completedAgain = await ok("POST","/imports",request);
-  assert.equal(completedAgain.id,first.id);
-  assert.equal(completedAgain.status,"completed");
-  assert.equal((await req("POST","/imports",{
-    ...request,idempotency_key:randomUUID(),
-  })).statusCode,409,
-    "fresh jobs cannot use obsolete schema digest");
-  assert.equal((await ok("GET",url+"/records")).length,1);
+  await ok("PATCH", url, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "note", name: "Note", type: "text" },
+    ],
+  });
+  const completedAgain = await ok("POST", "/imports", request);
+  assert.equal(completedAgain.id, first.id);
+  assert.equal(completedAgain.status, "completed");
+  assert.equal(
+    (
+      await req("POST", "/imports", {
+        ...request,
+        idempotency_key: randomUUID(),
+      })
+    ).statusCode,
+    409,
+    "fresh jobs cannot use obsolete schema digest",
+  );
+  assert.equal((await ok("GET", url + "/records")).length, 1);
   // Failed original jobs are also stable: same-key retries return failure,
   // not a second append attempt, even when schema drift caused the failure.
   const refreshed = await ok("POST", "/imports/preview", {
-    parent_id:space.id,target_database_id:target.id,content,
+    parent_id: space.id,
+    target_database_id: target.id,
+    content,
   });
   const failedRequest = {
-    ...request,idempotency_key:randomUUID(),
-    expected_schema_digest:refreshed.target.schema_digest,
+    ...request,
+    idempotency_key: randomUUID(),
+    expected_schema_digest: refreshed.target.schema_digest,
   };
-  const pending = await ok("POST","/imports",failedRequest);
-  await ok("PATCH",url,{properties:[
-    {id:"name",name:"Name",type:"title"},
-    {id:"note",name:"Note",type:"text"},
-    {id:"extra",name:"Extra",type:"text"},
-  ]});
+  const pending = await ok("POST", "/imports", failedRequest);
+  await ok("PATCH", url, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "note", name: "Note", type: "text" },
+      { id: "extra", name: "Extra", type: "text" },
+    ],
+  });
   await tick(db);
-  const failed = await ok("GET","/jobs/"+pending.id);
-  assert.equal(failed.status,"failed");
-  const failedReplay = await ok("POST","/imports",failedRequest);
-  assert.deepEqual(failedReplay,{id:pending.id,status:"failed"});
+  const failed = await ok("GET", "/jobs/" + pending.id);
+  assert.equal(failed.status, "failed");
+  const failedReplay = await ok("POST", "/imports", failedRequest);
+  assert.deepEqual(failedReplay, { id: pending.id, status: "failed" });
   await tick(db);
-  assert.equal((await ok("GET",url+"/records")).length,1,
-    "failed stale-schema job and retry must never append rows");
+  assert.equal(
+    (await ok("GET", url + "/records")).length,
+    1,
+    "failed stale-schema job and retry must never append rows",
+  );
   // Previous callers that send no key retain legacy append-only semantics.
   const finalPreview = await ok("POST", "/imports/preview", {
-    parent_id:space.id,target_database_id:target.id,content,
+    parent_id: space.id,
+    target_database_id: target.id,
+    content,
   });
-  const legacy = await ok("POST","/imports",{
-    ...request,idempotency_key:undefined,
-    expected_schema_digest:finalPreview.target.schema_digest,
+  const legacy = await ok("POST", "/imports", {
+    ...request,
+    idempotency_key: undefined,
+    expected_schema_digest: finalPreview.target.schema_digest,
   });
-  assert.notEqual(legacy.id,first.id);
+  assert.notEqual(legacy.id, first.id);
   await tick(db);
-  assert.equal((await ok("GET",url+"/records")).length,2);
+  assert.equal((await ok("GET", url + "/records")).length, 2);
 });
 
-test("W12b notification receipts require current recipient and page access",async()=>{
+test("W12b notification receipts require current recipient and page access", async () => {
   // Prior integration scenarios revoke their shared member session. Use a
   // dedicated active actor so this security proof is independent of test order.
-  const recipientId=randomUUID();
-  await db.tenant(owner.tenant,async(q)=>{
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
-      [recipientId,"receipt-"+recipientId+"@example.test","Receipt Recipient"]);
+  const recipientId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [
+      recipientId,
+      "receipt-" + recipientId + "@example.test",
+      "Receipt Recipient",
+    ]);
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
-      [owner.tenant,recipientId]);
+      [owner.tenant, recipientId],
+    );
   });
-  const recipientToken=await db.tenant(owner.tenant,(q)=>
-    createSession(q,owner.tenant,recipientId));
-  const recipient={
-    id:recipientId,tenant:owner.tenant,
-    cookie:"workspace_session="+recipientToken,csrf:csrf(recipientToken),
+  const recipientToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, recipientId),
+  );
+  const recipient = {
+    id: recipientId,
+    tenant: owner.tenant,
+    cookie: "workspace_session=" + recipientToken,
+    csrf: csrf(recipientToken),
   };
-  const foreignToken=await db.tenant(other.tenant,(q)=>
-    createSession(q,other.tenant,owner.id));
-  const foreign={cookie:"workspace_session="+foreignToken,csrf:csrf(foreignToken)};
-  assert.equal((await req("GET","/me",undefined,recipient)).statusCode,200,
-    "Dedicated recipient must be independently authenticated");
-  const target=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"W12b receipt scoping",
+  const foreignToken = await db.tenant(other.tenant, (q) =>
+    createSession(q, other.tenant, owner.id),
+  );
+  const foreign = {
+    cookie: "workspace_session=" + foreignToken,
+    csrf: csrf(foreignToken),
+  };
+  assert.equal(
+    (await req("GET", "/me", undefined, recipient)).statusCode,
+    200,
+    "Dedicated recipient must be independently authenticated",
+  );
+  const target = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W12b receipt scoping",
   });
-  await ok("POST","/resources/"+target.id+"/comments",{
-    body:"Please inspect this @{"+recipientId+"}",
+  await ok("POST", "/resources/" + target.id + "/comments", {
+    body: "Please inspect this @{" + recipientId + "}",
   });
-  const before=await ok("GET","/notifications",undefined,recipient);
-  const notice=before.find((n:any)=>n.resource_id===target.id);
-  assert.ok(notice,"An eligible mention must create a visible notification");
-  assert.equal(notice.read_at,null,"New mention begins unread");
-  const key="/notifications/"+notice.id;
-  const marked=await ok("PATCH",key,{read:true},recipient);
-  assert.equal(marked.id,notice.id);
-  assert.ok(marked.read_at,"Read time persists in PostgreSQL");
-  const replay=await ok("PATCH",key,{read:true},recipient);
-  assert.equal(replay.read_at,marked.read_at,
-    "Idempotent read requests must retain the original timestamp");
-  assert.equal((await ok("GET","/notifications",undefined,recipient))
-    .find((n:any)=>n.id===notice.id).read_at,marked.read_at);
-  const unread=await ok("PATCH",key,{read:false},recipient);
-  assert.equal(unread.read_at,null);
-  assert.equal((await req("PATCH",key,{read:true},owner)).statusCode,404,
-    "Owner may not mutate another recipient's receipt");
-  assert.equal((await req("PATCH",key,{read:true},foreign)).statusCode,404,
-    "Other tenant may not infer notification existence");
-  assert.equal((await req("PATCH",key,{read:"yes"},recipient)).statusCode,400);
-  await permissionPatch("/resources/"+target.id+"/permissions",{
-    inherit:true,grants:[{principal_id:recipientId,level:0}],
+  const before = await ok("GET", "/notifications", undefined, recipient);
+  const notice = before.find((n: any) => n.resource_id === target.id);
+  assert.ok(notice, "An eligible mention must create a visible notification");
+  assert.equal(notice.read_at, null, "New mention begins unread");
+  const key = "/notifications/" + notice.id;
+  const marked = await ok("PATCH", key, { read: true }, recipient);
+  assert.equal(marked.id, notice.id);
+  assert.ok(marked.read_at, "Read time persists in PostgreSQL");
+  const replay = await ok("PATCH", key, { read: true }, recipient);
+  assert.equal(
+    replay.read_at,
+    marked.read_at,
+    "Idempotent read requests must retain the original timestamp",
+  );
+  assert.equal(
+    (await ok("GET", "/notifications", undefined, recipient)).find(
+      (n: any) => n.id === notice.id,
+    ).read_at,
+    marked.read_at,
+  );
+  const unread = await ok("PATCH", key, { read: false }, recipient);
+  assert.equal(unread.read_at, null);
+  assert.equal(
+    (await req("PATCH", key, { read: true }, owner)).statusCode,
+    404,
+    "Owner may not mutate another recipient's receipt",
+  );
+  assert.equal(
+    (await req("PATCH", key, { read: true }, foreign)).statusCode,
+    404,
+    "Other tenant may not infer notification existence",
+  );
+  assert.equal(
+    (await req("PATCH", key, { read: "yes" }, recipient)).statusCode,
+    400,
+  );
+  await permissionPatch("/resources/" + target.id + "/permissions", {
+    inherit: true,
+    grants: [{ principal_id: recipientId, level: 0 }],
   });
-  const after=await ok("GET","/notifications",undefined,recipient);
-  assert.ok(!after.some((n:any)=>n.id===notice.id),
-    "Revocation must hide previously delivered notification content");
-  assert.equal((await req("PATCH",key,{read:true},recipient)).statusCode,404,
-    "A known notification UUID grants no access after revocation");
+  const after = await ok("GET", "/notifications", undefined, recipient);
+  assert.ok(
+    !after.some((n: any) => n.id === notice.id),
+    "Revocation must hide previously delivered notification content",
+  );
+  assert.equal(
+    (await req("PATCH", key, { read: true }, recipient)).statusCode,
+    404,
+    "A known notification UUID grants no access after revocation",
+  );
 });
 
-test("W12c reply notifications respect recipient ACL and mention deduplication",async()=>{
-  const recipientId=randomUUID();
-  await db.tenant(owner.tenant,async q=>{
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)",
-      [recipientId,"thread-"+recipientId+"@example.test","Thread Recipient"]);
+test("W12c reply notifications respect recipient ACL and mention deduplication", async () => {
+  const recipientId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [
+      recipientId,
+      "thread-" + recipientId + "@example.test",
+      "Thread Recipient",
+    ]);
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
-      [owner.tenant,recipientId]);
+      [owner.tenant, recipientId],
+    );
   });
-  const token=await db.tenant(owner.tenant,q=>
-    createSession(q,owner.tenant,recipientId));
-  const recipient={
-    id:recipientId,tenant:owner.tenant,
-    cookie:"workspace_session="+token,csrf:csrf(token),
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, recipientId),
+  );
+  const recipient = {
+    id: recipientId,
+    tenant: owner.tenant,
+    cookie: "workspace_session=" + token,
+    csrf: csrf(token),
   };
-  assert.equal((await req("GET","/me",undefined,recipient)).statusCode,200);
-  const page=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"Recipient reply notice",
+  assert.equal((await req("GET", "/me", undefined, recipient)).statusCode, 200);
+  const page = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "Recipient reply notice",
   });
-  const url="/resources/"+page.id+"/comments";
-  const root=await ok("POST",url,{body:"Root by recipient"},recipient);
+  const url = "/resources/" + page.id + "/comments";
+  const root = await ok("POST", url, { body: "Root by recipient" }, recipient);
   assert.ok(root.id);
-  const before=(await ok("GET","/notifications",undefined,recipient))
-    .filter((n:any)=>n.resource_id===page.id);
-  assert.equal(before.length,0);
-  const first=await ok("POST",url,{reply_to:root.id,body:"A plain response"},owner);
-  assert.equal(first.parent_comment_id,root.id);
-  const after=await ok("GET","/notifications",undefined,recipient);
-  const notices=after.filter((n:any)=>n.resource_id===page.id);
-  assert.equal(notices.length,1,"An unmentioned root author gets one reply alert");
-  assert.match(notices[0].message,/replied to your comment/);
+  const before = (
+    await ok("GET", "/notifications", undefined, recipient)
+  ).filter((n: any) => n.resource_id === page.id);
+  assert.equal(before.length, 0);
+  const first = await ok(
+    "POST",
+    url,
+    { reply_to: root.id, body: "A plain response" },
+    owner,
+  );
+  assert.equal(first.parent_comment_id, root.id);
+  const after = await ok("GET", "/notifications", undefined, recipient);
+  const notices = after.filter((n: any) => n.resource_id === page.id);
+  assert.equal(
+    notices.length,
+    1,
+    "An unmentioned root author gets one reply alert",
+  );
+  assert.match(notices[0].message, /replied to your comment/);
   // Same recipient appears as an explicit mention twice and the root author:
   // only one notification may be created for this comment transaction.
-  await ok("POST",url,{reply_to:root.id,
-    body:"Explicit @{"+recipientId+"} and repeated @{"+recipientId+"}"},owner);
-  const next=(await ok("GET","/notifications",undefined,recipient))
-    .filter((n:any)=>n.resource_id===page.id);
-  assert.equal(next.length,2,"No duplicate delivery for mention+reply");
-  assert.equal(next.filter((n:any)=>/mentioned you/.test(n.message)).length,1);
-  await permissionPatch("/resources/"+page.id+"/permissions",{
-    inherit:true,grants:[{principal_id:recipientId,level:0}],
+  await ok(
+    "POST",
+    url,
+    {
+      reply_to: root.id,
+      body:
+        "Explicit @{" + recipientId + "} and repeated @{" + recipientId + "}",
+    },
+    owner,
+  );
+  const next = (await ok("GET", "/notifications", undefined, recipient)).filter(
+    (n: any) => n.resource_id === page.id,
+  );
+  assert.equal(next.length, 2, "No duplicate delivery for mention+reply");
+  assert.equal(
+    next.filter((n: any) => /mentioned you/.test(n.message)).length,
+    1,
+  );
+  await permissionPatch("/resources/" + page.id + "/permissions", {
+    inherit: true,
+    grants: [{ principal_id: recipientId, level: 0 }],
   });
-  await ok("POST",url,{reply_to:root.id,body:"After recipient revocation"},owner);
-  const persisted=await db.tenant(owner.tenant,q=>q.query(
-    "SELECT COUNT(*)::int count FROM notifications WHERE user_id=$1 AND resource_id=$2",
-    [recipientId,page.id]));
-  assert.equal(persisted.rows[0].count,2,
-    "No new private reply notification is stored after ACL revocation");
-  assert.equal((await req("GET",url,undefined,recipient)).statusCode,404);
+  await ok(
+    "POST",
+    url,
+    { reply_to: root.id, body: "After recipient revocation" },
+    owner,
+  );
+  const persisted = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT COUNT(*)::int count FROM notifications WHERE user_id=$1 AND resource_id=$2",
+      [recipientId, page.id],
+    ),
+  );
+  assert.equal(
+    persisted.rows[0].count,
+    2,
+    "No new private reply notification is stored after ACL revocation",
+  );
+  assert.equal((await req("GET", url, undefined, recipient)).statusCode, 404);
 });
 
-
-
-test("W12d alert preferences enforce recipient delivery modes under tenant RLS",async()=>{
-  const recipientId=randomUUID();
-  await db.tenant(owner.tenant,async(q)=>{
-    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,'Alert Preferences Recipient')",
-      [recipientId,"alerts-"+recipientId+"@example.test"]);
+test("W12d alert preferences enforce recipient delivery modes under tenant RLS", async () => {
+  const recipientId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name) VALUES($1,$2,'Alert Preferences Recipient')",
+      [recipientId, "alerts-" + recipientId + "@example.test"],
+    );
     await q.query(
       "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
-      [owner.tenant,recipientId]);
+      [owner.tenant, recipientId],
+    );
   });
-  const token=await db.tenant(owner.tenant,q=>createSession(q,owner.tenant,recipientId));
-  const recipient={
-    id:recipientId,tenant:owner.tenant,
-    cookie:"workspace_session="+token,csrf:csrf(token),
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, recipientId),
+  );
+  const recipient = {
+    id: recipientId,
+    tenant: owner.tenant,
+    cookie: "workspace_session=" + token,
+    csrf: csrf(token),
   };
-  const url="/notification-preferences";
-  assert.deepEqual(await ok("GET",url,undefined,recipient),{
-    mentions_enabled:true,replies_enabled:true,
-  },"Default behavior must retain existing delivery");
-  assert.equal((await req("PATCH",url,{mentions_enabled:false},recipient)).statusCode,400);
-  assert.equal((await req("PATCH",url,{
-    mentions_enabled:false,replies_enabled:false,secret:"not permitted",
-  },recipient)).statusCode,400);
-  const allOff=await ok("PATCH",url,{
-    mentions_enabled:false,replies_enabled:false,
-  },recipient);
-  assert.deepEqual(allOff,{mentions_enabled:false,replies_enabled:false});
-  const target=await ok("POST","/resources",{
-    kind:"page",parent_id:space.id,title:"Recipient alert choices",
+  const url = "/notification-preferences";
+  assert.deepEqual(
+    await ok("GET", url, undefined, recipient),
+    {
+      mentions_enabled: true,
+      replies_enabled: true,
+    },
+    "Default behavior must retain existing delivery",
+  );
+  assert.equal(
+    (await req("PATCH", url, { mentions_enabled: false }, recipient))
+      .statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        "PATCH",
+        url,
+        {
+          mentions_enabled: false,
+          replies_enabled: false,
+          secret: "not permitted",
+        },
+        recipient,
+      )
+    ).statusCode,
+    400,
+  );
+  const allOff = await ok(
+    "PATCH",
+    url,
+    {
+      mentions_enabled: false,
+      replies_enabled: false,
+    },
+    recipient,
+  );
+  assert.deepEqual(allOff, { mentions_enabled: false, replies_enabled: false });
+  const target = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "Recipient alert choices",
   });
-  const comments="/resources/"+target.id+"/comments";
-  const root=await ok("POST",comments,{body:"Root by notification recipient"},recipient);
-  await ok("POST",comments,{
-    reply_to:root.id,body:"Suppressed @{"+recipientId+"}",
+  const comments = "/resources/" + target.id + "/comments";
+  const root = await ok(
+    "POST",
+    comments,
+    { body: "Root by notification recipient" },
+    recipient,
+  );
+  await ok("POST", comments, {
+    reply_to: root.id,
+    body: "Suppressed @{" + recipientId + "}",
   });
-  let received=(await ok("GET","/notifications",undefined,recipient))
-    .filter((n:any)=>n.resource_id===target.id);
-  assert.equal(received.length,0,"Disabled modes must prevent insertion");
-  await ok("PATCH",url,{
-    mentions_enabled:true,replies_enabled:false,
-  },recipient);
-  await ok("POST",comments,{reply_to:root.id,
-    body:"Explicit mention @{"+recipientId+"} only"});
-  await ok("POST",comments,{reply_to:root.id,body:"Reply still muted"});
-  received=(await ok("GET","/notifications",undefined,recipient))
-    .filter((n:any)=>n.resource_id===target.id);
-  assert.equal(received.length,1);
-  assert.match(received[0].message,/mentioned you/);
-  await ok("PATCH",url,{
-    mentions_enabled:false,replies_enabled:true,
-  },recipient);
-  await ok("POST",comments,{reply_to:root.id,body:"Reply delivery now enabled"});
-  received=(await ok("GET","/notifications",undefined,recipient))
-    .filter((n:any)=>n.resource_id===target.id);
-  assert.equal(received.length,2);
-  assert.equal(received.filter((n:any)=>/replied to your comment/.test(n.message)).length,1);
+  let received = (
+    await ok("GET", "/notifications", undefined, recipient)
+  ).filter((n: any) => n.resource_id === target.id);
+  assert.equal(received.length, 0, "Disabled modes must prevent insertion");
+  await ok(
+    "PATCH",
+    url,
+    {
+      mentions_enabled: true,
+      replies_enabled: false,
+    },
+    recipient,
+  );
+  await ok("POST", comments, {
+    reply_to: root.id,
+    body: "Explicit mention @{" + recipientId + "} only",
+  });
+  await ok("POST", comments, { reply_to: root.id, body: "Reply still muted" });
+  received = (await ok("GET", "/notifications", undefined, recipient)).filter(
+    (n: any) => n.resource_id === target.id,
+  );
+  assert.equal(received.length, 1);
+  assert.match(received[0].message, /mentioned you/);
+  await ok(
+    "PATCH",
+    url,
+    {
+      mentions_enabled: false,
+      replies_enabled: true,
+    },
+    recipient,
+  );
+  await ok("POST", comments, {
+    reply_to: root.id,
+    body: "Reply delivery now enabled",
+  });
+  received = (await ok("GET", "/notifications", undefined, recipient)).filter(
+    (n: any) => n.resource_id === target.id,
+  );
+  assert.equal(received.length, 2);
+  assert.equal(
+    received.filter((n: any) => /replied to your comment/.test(n.message))
+      .length,
+    1,
+  );
   // Preferences are persisted per recipient and tenant, not per browser session.
-  const freshToken=await db.tenant(owner.tenant,q=>createSession(q,owner.tenant,recipientId));
-  const fresh={cookie:"workspace_session="+freshToken,csrf:csrf(freshToken)};
-  assert.deepEqual(await ok("GET",url,undefined,fresh),{
-    mentions_enabled:false,replies_enabled:true,
+  const freshToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, recipientId),
+  );
+  const fresh = {
+    cookie: "workspace_session=" + freshToken,
+    csrf: csrf(freshToken),
+  };
+  assert.deepEqual(await ok("GET", url, undefined, fresh), {
+    mentions_enabled: false,
+    replies_enabled: true,
   });
-  const foreignToken=await db.tenant(other.tenant,q=>
-    createSession(q,other.tenant,owner.id));
-  const foreign={cookie:"workspace_session="+foreignToken,csrf:csrf(foreignToken)};
-  await ok("PATCH",url,{mentions_enabled:true,replies_enabled:true},foreign);
-  assert.deepEqual(await ok("GET",url,undefined,recipient),{
-    mentions_enabled:false,replies_enabled:true,
-  },"Other tenant preferences may not change recipient defaults");
+  const foreignToken = await db.tenant(other.tenant, (q) =>
+    createSession(q, other.tenant, owner.id),
+  );
+  const foreign = {
+    cookie: "workspace_session=" + foreignToken,
+    csrf: csrf(foreignToken),
+  };
+  await ok(
+    "PATCH",
+    url,
+    { mentions_enabled: true, replies_enabled: true },
+    foreign,
+  );
+  assert.deepEqual(
+    await ok("GET", url, undefined, recipient),
+    {
+      mentions_enabled: false,
+      replies_enabled: true,
+    },
+    "Other tenant preferences may not change recipient defaults",
+  );
+});
+
+test("W17 portable archive export is tenant-safe, checksummed and bounded", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "Portable export slice",
+  });
+  await ok("PATCH", `/pages/${target.id}/content`, {
+    blocks: [{ type: "paragraph", content: "Round trip me" }],
+    expected_revision: 1,
+  });
+  const boundary = `----w17-export-${randomUUID()}`,
+    content = "Portable attachment bytes",
+    data = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="portable.txt"\r\nContent-Type: text/plain\r\n\r\n${content}\r\n--${boundary}--\r\n`;
+  const up = await req("POST", `/resources/${target.id}/files`, data, owner, {
+    "content-type": `multipart/form-data; boundary=${boundary}`,
+  });
+  assert.equal(up.statusCode, 200, up.body);
+  const upJson = up.json();
+  assert.ok(upJson.id, "Upload must return an attachment id");
+
+  const res = await req(
+    "GET",
+    `/resources/${target.id}/export/archive`,
+    undefined,
+    owner,
+  );
+  assert.equal(res.statusCode, 200, res.body);
+  assert.match(String(res.headers["content-type"]), /application\/zip/);
+  const bytes = res.rawPayload as Buffer;
+  const inspected = inspectPortableArchive(bytes, { collect: true });
+  assert.equal(inspected.manifest.format, PORTABLE_ARCHIVE_FORMAT);
+  assert.equal(inspected.manifest.version, PORTABLE_ARCHIVE_VERSION);
+  assert.equal(inspected.manifest.root.source_id, target.id);
+  assert.equal(inspected.manifest.counts.documents, 1);
+  assert.equal(inspected.manifest.counts.files, 1);
+  assert.equal(inspected.manifest.counts.resources, 1);
+
+  const tree = JSON.parse(String(inspected.entries.get("tree.json")));
+  assert.ok(tree.some((n: any) => n.id === target.id));
+  for (const node of tree)
+    assert.deepEqual(
+      Object.keys(node).sort(),
+      ["icon", "id", "kind", "parent_id", "position", "title"],
+      "Tree entries must stay portable metadata only",
+    );
+
+  const doc = JSON.parse(
+    String(inspected.entries.get(`documents/${target.id}.json`)),
+  );
+  assert.ok(String(doc.plain_text).includes("Round trip me"));
+
+  const blob = inspected.entries.get(`files/${upJson.id}.data`);
+  assert.equal(blob ? blob.toString() : undefined, content);
+  const fileIndex = JSON.parse(
+    String(inspected.entries.get("files/index.json")),
+  );
+  assert.equal(fileIndex[0].name, "portable.txt");
+  assert.equal(fileIndex[0].resource_id, target.id);
+
+  // A principal outside the tenant cannot export anything, and the
+  // archive itself never carries tenant identifiers or ACL grants.
+  const foreign = await req(
+    "GET",
+    `/resources/${target.id}/export/archive`,
+    undefined,
+    other,
+  );
+  // Fail closed without revealing existence across tenants (the permission
+  // layer hides cross-tenant resources with 404; 403 covers same-tenant
+  // principals without read access).
+  assert.ok(
+    [403, 404].includes(foreign.statusCode),
+    String(foreign.statusCode),
+  );
+  assert.ok(
+    !JSON.stringify(inspected.manifest).includes("tenant"),
+    "Manifest must not expose tenant-scoped fields",
+  );
 });

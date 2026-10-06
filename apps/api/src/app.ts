@@ -7,17 +7,30 @@ import { normalizedNetworkIdentity } from "../../../packages/security/rate-netwo
 import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
 import Redis from "ioredis";
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  hkdfSync,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import * as Y from "yjs";
 import { z } from "zod";
 import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
 import { stringify } from "csv-stringify/sync";
 import { Database, one, type Query } from "../../../packages/database/index.ts";
-import { databasePageFingerprint, decodeDatabasePageCursor,
-  encodeDatabasePageCursor, newDatabasePageCursor
+import {
+  databasePageFingerprint,
+  decodeDatabasePageCursor,
+  encodeDatabasePageCursor,
+  newDatabasePageCursor,
 } from "../../../packages/database/page-cursor.ts";
 import { oidcFromEnv, type OidcProvider } from "../../../packages/auth/oidc.ts";
-import { sealTenantOidcSecret, validateTenantOidcRegistration } from "../../../packages/auth/tenant-provider.ts";
+import {
+  sealTenantOidcSecret,
+  validateTenantOidcRegistration,
+} from "../../../packages/auth/tenant-provider.ts";
 import {
   authenticate,
   admin,
@@ -58,9 +71,21 @@ import {
   brandingSchema,
 } from "../../../packages/branding/index.ts";
 import { emit, encrypt } from "../../../packages/events/index.ts";
-import { beginEventCursor, decodeEventCursor, encodeEventCursor } from "../../../packages/events/cursor.ts";
-import { beginReconcileCursor, decodeReconcileCursor, encodeReconcileCursor } from "../../../packages/events/reconcile-cursor.ts";
-import { csvMappingSchema, previewCsvImport, csvSchemaDigest } from "../../../packages/imports/csv.ts";
+import {
+  beginEventCursor,
+  decodeEventCursor,
+  encodeEventCursor,
+} from "../../../packages/events/cursor.ts";
+import {
+  beginReconcileCursor,
+  decodeReconcileCursor,
+  encodeReconcileCursor,
+} from "../../../packages/events/reconcile-cursor.ts";
+import {
+  csvMappingSchema,
+  previewCsvImport,
+  csvSchemaDigest,
+} from "../../../packages/imports/csv.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -93,10 +118,7 @@ import {
   createAntivirus,
   type Antivirus,
 } from "../../../packages/security/antivirus.ts";
-import {
-  registerScim,
-  setScimGroupRoleMapping,
-} from "./scim.ts";
+import { registerScim, setScimGroupRoleMapping } from "./scim.ts";
 import {
   createResource,
   createRecord,
@@ -109,11 +131,17 @@ import {
   duplicateResourceTree,
 } from "./domain.ts";
 import {
-  indexedRecordText, validateRelationSchema, validateRelationWrites,
+  indexedRecordText,
+  validateRelationSchema,
+  validateRelationWrites,
 } from "./relations.ts";
 import { validateFormulaDefinitions } from "../../../packages/formulas/index.ts";
-import { presentedRecordValues, presentedSchema,
-  validateRollupDefinitions } from "./rollups.ts";
+import {
+  presentedRecordValues,
+  presentedSchema,
+  validateRollupDefinitions,
+} from "./rollups.ts";
+import { exportPortableTree } from "./portable-export.ts";
 type Request = FastifyRequest & {
   actor: Actor;
   sessionToken: string;
@@ -145,29 +173,36 @@ const pageScope = (k: string, w = false) =>
       ? "workspace"
       : "pages") + (w ? ".write" : ".read");
 
-const searchCursorSchema = z.object({
-  v: z.literal(1),
-  tenant: z.uuid(),
-  principal: z.uuid(),
-  role: z.enum(["owner", "admin", "member", "guest"]),
-  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  limit: z.number().int().min(1).max(50),
-  rank: z.number().finite().nonnegative(),
-  updated_us: z.string().regex(/^[0-9]{1,20}$/),
-  after: z.uuid(),
-  issued: z.number().int().nonnegative(),
-  expires: z.number().int().positive(),
-}).strict();
+const searchCursorSchema = z
+  .object({
+    v: z.literal(1),
+    tenant: z.uuid(),
+    principal: z.uuid(),
+    role: z.enum(["owner", "admin", "member", "guest"]),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    limit: z.number().int().min(1).max(50),
+    rank: z.number().finite().nonnegative(),
+    updated_us: z.string().regex(/^[0-9]{1,20}$/),
+    after: z.uuid(),
+    issued: z.number().int().nonnegative(),
+    expires: z.number().int().positive(),
+  })
+  .strict();
 type SearchCursor = z.infer<typeof searchCursorSchema>;
 const searchCursorLifetime = 1800;
 function searchCursorKey() {
   const raw = process.env.ENCRYPTION_KEY || "";
   if (!/^[a-f0-9]{64}$/i.test(raw))
     throw new Error("ENCRYPTION_KEY must be configured");
-  return Buffer.from(hkdfSync(
-    "sha256", Buffer.from(raw, "hex"), Buffer.from("openjm-workspace"),
-    Buffer.from("workspace-search-cursor-v1"), 32,
-  ));
+  return Buffer.from(
+    hkdfSync(
+      "sha256",
+      Buffer.from(raw, "hex"),
+      Buffer.from("openjm-workspace"),
+      Buffer.from("workspace-search-cursor-v1"),
+      32,
+    ),
+  );
 }
 function encodeSearchCursor(value: SearchCursor) {
   const state = searchCursorSchema.parse(value);
@@ -175,11 +210,13 @@ function encodeSearchCursor(value: SearchCursor) {
   const cipher = createCipheriv("aes-256-gcm", searchCursorKey(), nonce);
   cipher.setAAD(Buffer.from("openjm-workspace-search-cursor-v1"));
   const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(state), "utf8"), cipher.final(),
+    cipher.update(JSON.stringify(state), "utf8"),
+    cipher.final(),
   ]);
-  return "search-v1." + Buffer.concat([
-    nonce, cipher.getAuthTag(), encrypted,
-  ]).toString("base64url");
+  return (
+    "search-v1." +
+    Buffer.concat([nonce, cipher.getAuthTag(), encrypted]).toString("base64url")
+  );
 }
 function decodeSearchCursor(
   token: string,
@@ -193,30 +230,47 @@ function decodeSearchCursor(
   now = Math.floor(Date.now() / 1000),
 ) {
   try {
-    if (typeof token !== "string" || token.length < 50 ||
-        token.length > 2048 || !token.startsWith("search-v1."))
+    if (
+      typeof token !== "string" ||
+      token.length < 50 ||
+      token.length > 2048 ||
+      !token.startsWith("search-v1.")
+    )
       throw new Error("Invalid cursor");
     const encoded = token.slice("search-v1.".length);
     if (!/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error("Invalid cursor");
     const bytes = Buffer.from(encoded, "base64url");
-    if (bytes.length < 29 || bytes.length > 1024 ||
-        bytes.toString("base64url") !== encoded)
+    if (
+      bytes.length < 29 ||
+      bytes.length > 1024 ||
+      bytes.toString("base64url") !== encoded
+    )
       throw new Error("Invalid cursor");
     const decipher = createDecipheriv(
-      "aes-256-gcm", searchCursorKey(), bytes.subarray(0, 12),
+      "aes-256-gcm",
+      searchCursorKey(),
+      bytes.subarray(0, 12),
     );
     decipher.setAAD(Buffer.from("openjm-workspace-search-cursor-v1"));
     decipher.setAuthTag(bytes.subarray(12, 28));
-    const state = searchCursorSchema.parse(JSON.parse(Buffer.concat([
-      decipher.update(bytes.subarray(28)), decipher.final(),
-    ]).toString("utf8")));
-    if (state.tenant !== context.tenant ||
-        state.principal !== context.principal ||
-        state.role !== context.role ||
-        state.fingerprint !== context.fingerprint ||
-        state.limit !== context.limit ||
-        state.issued > now + 30 || state.expires <= now ||
-        state.expires - state.issued !== searchCursorLifetime)
+    const state = searchCursorSchema.parse(
+      JSON.parse(
+        Buffer.concat([
+          decipher.update(bytes.subarray(28)),
+          decipher.final(),
+        ]).toString("utf8"),
+      ),
+    );
+    if (
+      state.tenant !== context.tenant ||
+      state.principal !== context.principal ||
+      state.role !== context.role ||
+      state.fingerprint !== context.fingerprint ||
+      state.limit !== context.limit ||
+      state.issued > now + 30 ||
+      state.expires <= now ||
+      state.expires - state.issued !== searchCursorLifetime
+    )
       throw new Error("Wrong search cursor scope");
     return state;
   } catch {
@@ -238,9 +292,9 @@ async function backlinkPage(
   const scanLimit = Math.min(10000, Math.max(500, limit * 250));
   const allowedKinds = a.scopes
     ? [
-      ...(a.scopes.includes("pages.read") ? ["page"] : []),
-      ...(a.scopes.includes("databases.read") ? ["record"] : []),
-    ]
+        ...(a.scopes.includes("pages.read") ? ["page"] : []),
+        ...(a.scopes.includes("databases.read") ? ["record"] : []),
+      ]
     : ["page", "record"];
   if (!allowedKinds.length)
     return { items: [], hasMore: false, scanned: 0, after: null };
@@ -251,22 +305,28 @@ async function backlinkPage(
     rawValues.push(after.after_us, after.after);
     continuationSql =
       " AND ((extract(epoch from link.source_updated_at)*1000000)::bigint,link.source_id)<($" +
-      (rawValues.length - 1) + "::bigint,$" + rawValues.length + "::uuid)";
+      (rawValues.length - 1) +
+      "::bigint,$" +
+      rawValues.length +
+      "::uuid)";
   }
   rawValues.push(scanLimit + 1);
-  const raw = (await q.query(
-    "SELECT source.id," +
-    " ((extract(epoch from link.source_updated_at)*1000000)::bigint)::text updated_us" +
-    " FROM resource_links link" +
-    " JOIN resources source ON source.tenant_id=link.tenant_id" +
-    " AND source.id=link.source_id" +
-    " WHERE link.tenant_id=$1 AND link.target_id=$2" +
-    " AND source.deleted_at IS NULL" +
-    " AND source.kind=ANY($3::text[])" +
-    continuationSql +
-    " ORDER BY link.source_updated_at DESC,link.source_id DESC LIMIT $" + rawValues.length,
-    rawValues,
-  )).rows;
+  const raw = (
+    await q.query(
+      "SELECT source.id," +
+        " ((extract(epoch from link.source_updated_at)*1000000)::bigint)::text updated_us" +
+        " FROM resource_links link" +
+        " JOIN resources source ON source.tenant_id=link.tenant_id" +
+        " AND source.id=link.source_id" +
+        " WHERE link.tenant_id=$1 AND link.target_id=$2" +
+        " AND source.deleted_at IS NULL" +
+        " AND source.kind=ANY($3::text[])" +
+        continuationSql +
+        " ORDER BY link.source_updated_at DESC,link.source_id DESC LIMIT $" +
+        rawValues.length,
+      rawValues,
+    )
+  ).rows;
   const bounded = raw.slice(0, scanLimit);
   if (!bounded.length)
     return { items: [], hasMore: false, scanned: 0, after: null };
@@ -277,17 +337,19 @@ async function backlinkPage(
     bounded.map((candidate: any) => candidate.id),
   );
   const readableRows = readableIds.size
-    ? (await q.query(
-      "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
-      " FROM resources source" +
-      " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
-      " AND d.resource_id=source.id" +
-      " WHERE source.id=ANY($1::uuid[])" +
-      " AND source.tenant_id=$2" +
-      " AND source.deleted_at IS NULL" +
-      " AND source.kind=ANY($3::text[])",
-      [[...readableIds], a.tenant_id, allowedKinds],
-    )).rows
+    ? (
+        await q.query(
+          "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
+            " FROM resources source" +
+            " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
+            " AND d.resource_id=source.id" +
+            " WHERE source.id=ANY($1::uuid[])" +
+            " AND source.tenant_id=$2" +
+            " AND source.deleted_at IS NULL" +
+            " AND source.kind=ANY($3::text[])",
+          [[...readableIds], a.tenant_id, allowedKinds],
+        )
+      ).rows
     : [];
   const readable = new Map<string, any>(
     readableRows.map((source: any) => [source.id, source]),
@@ -318,10 +380,13 @@ async function backlinkPage(
     items,
     hasMore,
     scanned: processed,
-    after: hasMore && last ? {
-      after_us: String(last.updated_us),
-      after: last.id as string,
-    } : null,
+    after:
+      hasMore && last
+        ? {
+            after_us: String(last.updated_us),
+            after: last.id as string,
+          }
+        : null,
   };
 }
 const cookies = () => ({
@@ -408,9 +473,8 @@ export async function buildApp(
     bodyLimit: 6291456,
     // Fastify v5 accepts an explicit trust function; only hop 0 is Caddy.
     // Any additional upstream XFF entries remain untrusted.
-    trustProxy: proxyMode === "1"
-      ? (_address: string, hop: number) => hop === 0
-      : false,
+    trustProxy:
+      proxyMode === "1" ? (_address: string, hop: number) => hop === 0 : false,
     requestIdHeader: false,
   });
   const redis = process.env.REDIS_URL
@@ -434,11 +498,14 @@ export async function buildApp(
         !r.url.startsWith("/api/v1/") ||
         r.url.startsWith("/api/v1/auth/") ||
         r.url.startsWith("/api/v1/setup")
-      ) return networkKey;
+      )
+        return networkKey;
       const authorization = r.headers.authorization;
       const isBearer = !!authorization;
       const credential = isBearer
-        ? authorization?.startsWith("Bearer ") ? authorization.slice(7) : ""
+        ? authorization?.startsWith("Bearer ")
+          ? authorization.slice(7)
+          : ""
         : r.cookies.workspace_session;
       if (!credential) return networkKey;
       try {
@@ -517,9 +584,10 @@ export async function buildApp(
     r.sessionToken = header?.startsWith("Bearer ")
       ? header.slice(7)
       : r.cookies.workspace_session || "";
-    r.actor = r.rateSessionToken === r.sessionToken && r.rateActor
-      ? r.rateActor
-      : await authenticate(db, r.sessionToken);
+    r.actor =
+      r.rateSessionToken === r.sessionToken && r.rateActor
+        ? r.rateActor
+        : await authenticate(db, r.sessionToken);
     r.actor.requestId = r.id;
     assert(
       header ? !!r.actor.scopes : !r.actor.scopes,
@@ -844,7 +912,11 @@ export async function buildApp(
               403,
               "SSO account has no provisioned Workspace access",
             );
-            user = { id: randomUUID(), email: profile.email, is_service: false };
+            user = {
+              id: randomUUID(),
+              email: profile.email,
+              is_service: false,
+            };
             await q.query(
               "INSERT INTO users(id,email,name,password_hash) VALUES($1,$2,$3,NULL)",
               [user.id, profile.email, profile.name],
@@ -1210,10 +1282,10 @@ export async function buildApp(
             // Recent is a private visit timeline, not the organisation's
             // latest edits. Re-check active ACLs before returning each item.
             "SELECT r.*,b.visited_at AS viewed_at FROM bookmarks b JOIN resources r" +
-            " ON r.tenant_id=b.tenant_id AND r.id=b.resource_id" +
-            " WHERE b.user_id=$1 AND r.deleted_at IS NULL" +
-            " AND r.kind IN ('page','record','database')" +
-            " ORDER BY b.visited_at DESC,r.id DESC LIMIT $2 OFFSET $3",
+              " ON r.tenant_id=b.tenant_id AND r.id=b.resource_id" +
+              " WHERE b.user_id=$1 AND r.deleted_at IS NULL" +
+              " AND r.kind IN ('page','record','database')" +
+              " ORDER BY b.visited_at DESC,r.id DESC LIMIT $2 OFFSET $3",
             [a.user_id, limit, offset],
           )
         ).rows;
@@ -1255,8 +1327,11 @@ export async function buildApp(
     scope(a, pageScope(v.kind, true));
     const template = v.template ? templates[v.template] : undefined;
     assert(!v.template || template, 400, "Unknown template");
-    assert(!template || template.kind === v.kind, 400,
-      "Template does not match resource type");
+    assert(
+      !template || template.kind === v.kind,
+      400,
+      "Template does not match resource type",
+    );
     const created = await createResource(q, a, {
       ...v,
       icon: v.icon || template?.icon,
@@ -1266,9 +1341,14 @@ export async function buildApp(
     if (template?.children?.length) {
       for (const child of template.children) {
         scope(a, pageScope(child.kind, true));
-        const childTemplate = child.template ? templates[child.template] : undefined;
-        assert(!childTemplate || childTemplate.kind === child.kind, 500,
-          "Invalid built-in child template");
+        const childTemplate = child.template
+          ? templates[child.template]
+          : undefined;
+        assert(
+          !childTemplate || childTemplate.kind === child.kind,
+          500,
+          "Invalid built-in child template",
+        );
         await createResource(q, a, {
           kind: child.kind,
           parent_id: created.id,
@@ -1315,27 +1395,33 @@ export async function buildApp(
       assert(["page", "record"].includes(target.kind), 404, "Page not found");
       const p = query(r);
       const limit = p.limit === undefined ? 20 : Number(p.limit);
-      assert(Number.isInteger(limit) && limit >= 1 && limit <= 40,
-        400, "Invalid backlink page limit");
+      assert(
+        Number.isInteger(limit) && limit >= 1 && limit <= 40,
+        400,
+        "Invalid backlink page limit",
+      );
       const state = p.cursor
         ? decodeBacklinkPageCursor(p.cursor, {
-          tenant: a.tenant_id,
-          principal: a.user_id,
-          target: target.id,
-          limit,
-        })
+            tenant: a.tenant_id,
+            principal: a.user_id,
+            target: target.id,
+            limit,
+          })
         : null;
       const page = await backlinkPage(q, a, target.id, limit, state);
-      const next = page.hasMore && page.after
-        ? encodeBacklinkPageCursor(newBacklinkPageCursor(
-          a.tenant_id,
-          a.user_id,
-          target.id,
-          limit,
-          page.after.after_us,
-          page.after.after,
-        ))
-        : null;
+      const next =
+        page.hasMore && page.after
+          ? encodeBacklinkPageCursor(
+              newBacklinkPageCursor(
+                a.tenant_id,
+                a.user_id,
+                target.id,
+                limit,
+                page.after.after_us,
+                page.after.after,
+              ),
+            )
+          : null;
       return {
         items: page.items,
         next_cursor: next,
@@ -1349,26 +1435,36 @@ export async function buildApp(
     "Rebuild tenant link-index batches from canonical documents",
     async (q, a, r) => {
       admin(a);
-      const v = body(z.object({
-        cursor: z.string().min(1).max(2048).optional(),
-        limit: z.number().int().min(1).max(100).optional(),
-      }).strict(), r);
+      const v = body(
+        z
+          .object({
+            cursor: z.string().min(1).max(2048).optional(),
+            limit: z.number().int().min(1).max(100).optional(),
+          })
+          .strict(),
+        r,
+      );
       const limit = v.limit ?? 100;
       const state = v.cursor
         ? decodeLinkReconcileCursor(v.cursor, a.tenant_id, a.user_id)
         : beginLinkReconcileCursor(a.tenant_id, a.user_id);
-      const rows = (await q.query(
-        "SELECT d.resource_id,d.blocks FROM page_documents d" +
-        " JOIN resources r ON r.tenant_id=d.tenant_id AND r.id=d.resource_id" +
-        " WHERE d.tenant_id=$1 AND d.resource_id>$2::uuid" +
-        " AND r.kind IN ('page','record')" +
-        " ORDER BY d.resource_id LIMIT $3",
-        [a.tenant_id, state.after, limit + 1],
-      )).rows;
+      const rows = (
+        await q.query(
+          "SELECT d.resource_id,d.blocks FROM page_documents d" +
+            " JOIN resources r ON r.tenant_id=d.tenant_id AND r.id=d.resource_id" +
+            " WHERE d.tenant_id=$1 AND d.resource_id>$2::uuid" +
+            " AND r.kind IN ('page','record')" +
+            " ORDER BY d.resource_id LIMIT $3",
+          [a.tenant_id, state.after, limit + 1],
+        )
+      ).rows;
       const batch = rows.slice(0, limit);
       for (const row of batch)
         await syncWorkspaceResourceLinks(
-          q, a.tenant_id, row.resource_id, row.blocks,
+          q,
+          a.tenant_id,
+          row.resource_id,
+          row.blocks,
         );
       const hasMore = rows.length > limit;
       const last = batch.at(-1)?.resource_id || state.after;
@@ -1449,10 +1545,7 @@ export async function buildApp(
       assert(!a.scopes, 403, "Human session required for subtree duplication");
       const n = await requireAccess(q, a, id(r));
       scope(a, pageScope(n.kind, true));
-      const v = body(
-        z.object({ parent_id: uuid.optional() }).strict(),
-        r,
-      );
+      const v = body(z.object({ parent_id: uuid.optional() }).strict(), r);
       return duplicateResourceTree(q, a, n.id, v.parent_id);
     },
   );
@@ -1522,17 +1615,14 @@ export async function buildApp(
       return { ok: true };
     },
   );
-  route(
-    "GET",
-    "/retention",
-    "Read trash retention policy",
-    async (q, a) => {
-      admin(a);
-      return one(q, "SELECT trash_retention_days FROM organisations WHERE id=$1", [
-        a.tenant_id,
-      ]);
-    },
-  );
+  route("GET", "/retention", "Read trash retention policy", async (q, a) => {
+    admin(a);
+    return one(
+      q,
+      "SELECT trash_retention_days FROM organisations WHERE id=$1",
+      [a.tenant_id],
+    );
+  });
   route(
     "PATCH",
     "/retention",
@@ -1726,78 +1816,109 @@ export async function buildApp(
       const p = query(r),
         term = (p.q || "").trim().slice(0, 200),
         filter = String(p.kind || "all");
-      assert(["all", "page", "record", "database", "file"].includes(filter),
-        400, "Unsupported search kind");
-      const size = p.limit === undefined ? 20 : Number(p.limit);
-      assert(Number.isSafeInteger(size) && size >= 1 && size <= 50, 400,
-        "Search page limit must be an integer from 1 to 50");
-      if (!term)
-        return { items: [], next_cursor: null, has_more: false };
-
-      const resourceKinds = filter === "all"
-        ? ["space", "page", "database", "record"]
-        : filter === "file" ? [] : [filter];
-      const scopedKinds = resourceKinds.filter((kind) =>
-        !a.scopes || a.scopes.includes(pageScope(kind)));
-      const includeFiles = (filter === "all" || filter === "file") &&
-        (!a.scopes || a.scopes.includes("files.read"));
-      const fingerprint = createHash("sha256").update(JSON.stringify({
-        term, filter, kinds: scopedKinds, files: includeFiles,
-        scopes: [...(a.scopes || [])].sort(),
-      })).digest("hex");
-      const state = p.cursor === undefined ? null : decodeSearchCursor(
-        String(p.cursor), {
-          tenant: a.tenant_id,
-          principal: a.user_id,
-          role: a.role,
-          fingerprint,
-          limit: size,
-        },
+      assert(
+        ["all", "page", "record", "database", "file"].includes(filter),
+        400,
+        "Unsupported search kind",
       );
+      const size = p.limit === undefined ? 20 : Number(p.limit);
+      assert(
+        Number.isSafeInteger(size) && size >= 1 && size <= 50,
+        400,
+        "Search page limit must be an integer from 1 to 50",
+      );
+      if (!term) return { items: [], next_cursor: null, has_more: false };
+
+      const resourceKinds =
+        filter === "all"
+          ? ["space", "page", "database", "record"]
+          : filter === "file"
+            ? []
+            : [filter];
+      const scopedKinds = resourceKinds.filter(
+        (kind) => !a.scopes || a.scopes.includes(pageScope(kind)),
+      );
+      const includeFiles =
+        (filter === "all" || filter === "file") &&
+        (!a.scopes || a.scopes.includes("files.read"));
+      const fingerprint = createHash("sha256")
+        .update(
+          JSON.stringify({
+            term,
+            filter,
+            kinds: scopedKinds,
+            files: includeFiles,
+            scopes: [...(a.scopes || [])].sort(),
+          }),
+        )
+        .digest("hex");
+      const state =
+        p.cursor === undefined
+          ? null
+          : decodeSearchCursor(String(p.cursor), {
+              tenant: a.tenant_id,
+              principal: a.user_id,
+              role: a.role,
+              fingerprint,
+              limit: size,
+            });
       const escaped = `%${term.replace(/[\\%_]/g, "\\$&")}%`;
       const binds: any[] = [
-        term, escaped, scopedKinds, a.user_id, a.role, includeFiles,
+        term,
+        escaped,
+        scopedKinds,
+        a.user_id,
+        a.role,
+        includeFiles,
       ];
       let continuation = "";
       if (state) {
         binds.push(state.rank, state.updated_us, state.after);
         continuation =
-          " AND (rank,updated_at,id)<($" + (binds.length - 2) +
-          "::double precision,to_timestamp($" + (binds.length - 1) +
-          "::bigint/1000000.0),$" + binds.length + "::uuid)";
+          " AND (rank,updated_at,id)<($" +
+          (binds.length - 2) +
+          "::double precision,to_timestamp($" +
+          (binds.length - 1) +
+          "::bigint/1000000.0),$" +
+          binds.length +
+          "::uuid)";
       }
       binds.push(size + 1);
-      const rows = (await q.query(
-        "WITH candidates AS MATERIALIZED (" +
-        " SELECT r.id,r.id resource_id,r.title,r.kind,r.updated_at," +
-        " CASE WHEN r.search_text='' THEN '' ELSE left(r.search_text,240) END snippet," +
-        " round((CASE WHEN lower(r.title)=lower($1) THEN 3.0" +
-        " WHEN r.title ILIKE $2 ESCAPE '\\' THEN 2.0 ELSE 0.0 END +" +
-        " ts_rank_cd(to_tsvector('simple',r.title||' '||r.search_text)," +
-        " websearch_to_tsquery('simple',$1)))::numeric,6)::double precision rank" +
-        " FROM resources r WHERE cardinality($3::text[])>0" +
-        " AND r.kind=ANY($3::text[]) AND r.deleted_at IS NULL" +
-        " AND (to_tsvector('simple',r.title||' '||r.search_text)" +
-        " @@websearch_to_tsquery('simple',$1) OR r.title ILIKE $2 ESCAPE '\\')" +
-        " UNION ALL" +
-        " SELECT f.id,f.resource_id,f.name,'file',f.created_at,'' snippet," +
-        " (CASE WHEN lower(f.name)=lower($1) THEN 3.0 ELSE 2.0 END)::double precision rank" +
-        " FROM files f WHERE $6::boolean AND f.deleted_at IS NULL" +
-        " AND f.name ILIKE $2 ESCAPE '\\'" +
-        " AND workspace_can_read_resource(f.resource_id,$4::uuid,$5::text)" +
-        ")" +
-        " SELECT id,resource_id,title,kind,snippet,updated_at,rank," +
-        " ((extract(epoch from updated_at)*1000000)::bigint)::text updated_us" +
-        // Text filtering runs first inside the materialized candidates step
-        // so the GIN text index bounds the row set; the per-row ACL
-        // predicate then applies only to text-matched candidates. Files are
-        // ACL-checked inside their branch (their permission anchors on
-        // resource_id, not the file id).
-        " FROM candidates WHERE kind='file'" +
-        " OR workspace_can_read_resource(id,$4::uuid,$5::text)" + continuation +
-        " ORDER BY rank DESC,updated_at DESC,id DESC LIMIT $" + binds.length,
-        binds,
-      )).rows;
+      const rows = (
+        await q.query(
+          "WITH candidates AS MATERIALIZED (" +
+            " SELECT r.id,r.id resource_id,r.title,r.kind,r.updated_at," +
+            " CASE WHEN r.search_text='' THEN '' ELSE left(r.search_text,240) END snippet," +
+            " round((CASE WHEN lower(r.title)=lower($1) THEN 3.0" +
+            " WHEN r.title ILIKE $2 ESCAPE '\\' THEN 2.0 ELSE 0.0 END +" +
+            " ts_rank_cd(to_tsvector('simple',r.title||' '||r.search_text)," +
+            " websearch_to_tsquery('simple',$1)))::numeric,6)::double precision rank" +
+            " FROM resources r WHERE cardinality($3::text[])>0" +
+            " AND r.kind=ANY($3::text[]) AND r.deleted_at IS NULL" +
+            " AND (to_tsvector('simple',r.title||' '||r.search_text)" +
+            " @@websearch_to_tsquery('simple',$1) OR r.title ILIKE $2 ESCAPE '\\')" +
+            " UNION ALL" +
+            " SELECT f.id,f.resource_id,f.name,'file',f.created_at,'' snippet," +
+            " (CASE WHEN lower(f.name)=lower($1) THEN 3.0 ELSE 2.0 END)::double precision rank" +
+            " FROM files f WHERE $6::boolean AND f.deleted_at IS NULL" +
+            " AND f.name ILIKE $2 ESCAPE '\\'" +
+            " AND workspace_can_read_resource(f.resource_id,$4::uuid,$5::text)" +
+            ")" +
+            " SELECT id,resource_id,title,kind,snippet,updated_at,rank," +
+            " ((extract(epoch from updated_at)*1000000)::bigint)::text updated_us" +
+            // Text filtering runs first inside the materialized candidates step
+            // so the GIN text index bounds the row set; the per-row ACL
+            // predicate then applies only to text-matched candidates. Files are
+            // ACL-checked inside their branch (their permission anchors on
+            // resource_id, not the file id).
+            " FROM candidates WHERE kind='file'" +
+            " OR workspace_can_read_resource(id,$4::uuid,$5::text)" +
+            continuation +
+            " ORDER BY rank DESC,updated_at DESC,id DESC LIMIT $" +
+            binds.length,
+          binds,
+        )
+      ).rows;
       const items = rows.slice(0, size).map((row: any) => ({
         id: row.id,
         resource_id: row.resource_id,
@@ -1809,21 +1930,24 @@ export async function buildApp(
       const hasMore = rows.length > size;
       const tail = rows[size - 1];
       const now = Math.floor(Date.now() / 1000);
-      const nextCursor = hasMore && tail ? encodeSearchCursor(
-        searchCursorSchema.parse({
-          v: 1,
-          tenant: a.tenant_id,
-          principal: a.user_id,
-          role: a.role,
-          fingerprint,
-          limit: size,
-          rank: Number(tail.rank),
-          updated_us: String(tail.updated_us),
-          after: tail.id,
-          issued: now,
-          expires: now + searchCursorLifetime,
-        }),
-      ) : null;
+      const nextCursor =
+        hasMore && tail
+          ? encodeSearchCursor(
+              searchCursorSchema.parse({
+                v: 1,
+                tenant: a.tenant_id,
+                principal: a.user_id,
+                role: a.role,
+                fingerprint,
+                limit: size,
+                rank: Number(tail.rank),
+                updated_us: String(tail.updated_us),
+                after: tail.id,
+                issued: now,
+                expires: now + searchCursorLifetime,
+              }),
+            )
+          : null;
       return { items, next_cursor: nextCursor, has_more: hasMore };
     },
   );
@@ -1892,23 +2016,28 @@ function dataRoutes(
       const source = await requireAccess(q, a, id(r));
       assert(source.kind === "database", 404, "Database not found");
       const params = query(r),
-        search = String(params.search || "").slice(0, 120).toLowerCase(),
+        search = String(params.search || "")
+          .slice(0, 120)
+          .toLowerCase(),
         limit = Math.min(50, Math.max(1, Number(params.limit) || 20)),
         offset = Math.max(0, Math.min(10000, Number(params.offset) || 0));
       // Execute visibility inside SQL BEFORE sorting and paging; select one
       // extra permitted row to compute has_more without exposing hidden rows.
-      const rows = (await q.query(
-        "SELECT id,title FROM resources WHERE kind='database'" +
-        " AND deleted_at IS NULL AND id<>$1" +
-        " AND position($2 in lower(title))>0" +
-        " AND workspace_can_read_resource(id,$3::uuid,$4::text)" +
-        " ORDER BY lower(title),id LIMIT $5 OFFSET $6",
-        [source.id, search, a.user_id, a.role, limit + 1, offset],
-      )).rows;
+      const rows = (
+        await q.query(
+          "SELECT id,title FROM resources WHERE kind='database'" +
+            " AND deleted_at IS NULL AND id<>$1" +
+            " AND position($2 in lower(title))>0" +
+            " AND workspace_can_read_resource(id,$3::uuid,$4::text)" +
+            " ORDER BY lower(title),id LIMIT $5 OFFSET $6",
+          [source.id, search, a.user_id, a.role, limit + 1, offset],
+        )
+      ).rows;
       const readable = await visible(q, a, rows);
       return {
-        items: readable.slice(0, limit).map((item) =>
-          ({ id: item.id, title: item.title })),
+        items: readable
+          .slice(0, limit)
+          .map((item) => ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
         has_more: readable.length > limit,
       };
@@ -1922,12 +2051,15 @@ function dataRoutes(
     async (q, a, r) => {
       const source = await requireAccess(q, a, id(r));
       assert(source.kind === "database", 404, "Database not found");
-      const definition = await one(q,
+      const definition = await one(
+        q,
         "SELECT properties FROM databases WHERE resource_id=$1",
-        [source.id]);
+        [source.id],
+      );
       const params = query(r),
-        field = definition?.properties.find((p: any) =>
-          p.id === params.property && p.type === "relation");
+        field = definition?.properties.find(
+          (p: any) => p.id === params.property && p.type === "relation",
+        );
       assert(field?.target_database_id, 404, "Relation unavailable");
       const target = await requireAccess(q, a, field.target_database_id);
       assert(target.kind === "database", 404, "Target unavailable");
@@ -1937,18 +2069,25 @@ function dataRoutes(
         const chosen = String(params.selected).split(",");
         assert(chosen.length <= 20, 400, "Too many selected records");
         const ids = chosen.map((value) => uuid.parse(value));
-        const rows = (await q.query(
-          "SELECT id,title FROM resources WHERE id=ANY($1::uuid[])" +
-          " AND parent_id=$2 AND kind='record' AND deleted_at IS NULL",
-          [ids, target.id],
-        )).rows;
+        const rows = (
+          await q.query(
+            "SELECT id,title FROM resources WHERE id=ANY($1::uuid[])" +
+              " AND parent_id=$2 AND kind='record' AND deleted_at IS NULL",
+            [ids, target.id],
+          )
+        ).rows;
         return {
-          items: (await visible(q, a, rows)).map((item) =>
-            ({ id: item.id, title: item.title })),
-          next_offset: 0, has_more: false,
+          items: (await visible(q, a, rows)).map((item) => ({
+            id: item.id,
+            title: item.title,
+          })),
+          next_offset: 0,
+          has_more: false,
         };
       }
-      const search = String(params.search || "").slice(0, 120).toLowerCase();
+      const search = String(params.search || "")
+        .slice(0, 120)
+        .toLowerCase();
       // Source target database has been permission checked. Every candidate
       // record is an immediate child; use indexed personal/wildcard grants
       // instead of re-running ancestry for all search matches.
@@ -1956,27 +2095,41 @@ function dataRoutes(
       let gate = "TRUE";
       if (a.role === "member" || a.role === "guest") {
         bind.push(a.tenant_id, a.user_id, target.effective_permission);
-        gate = directChildCanReadSql("r", a.role,
-          bind.length - 2, bind.length - 1, bind.length);
+        gate = directChildCanReadSql(
+          "r",
+          a.role,
+          bind.length - 2,
+          bind.length - 1,
+          bind.length,
+        );
       } else {
-        assert(a.role === "owner" || a.role === "admin", 403,
-          "Unknown membership role");
+        assert(
+          a.role === "owner" || a.role === "admin",
+          403,
+          "Unknown membership role",
+        );
       }
       bind.push(limit + 1, offset);
       // Bind positions must be continuous for both member and admin; no
       // unused untyped parameters in the trusted owner fast path.
-      const sql = "SELECT r.id,r.title FROM resources r" +
+      const sql =
+        "SELECT r.id,r.title FROM resources r" +
         " WHERE r.kind='record' AND r.parent_id=$1" +
         " AND r.deleted_at IS NULL" +
         " AND position($2 in lower(r.title))>0" +
-        " AND " + gate + " ORDER BY lower(r.title),r.id LIMIT $" +
-        String(bind.length - 1) + " OFFSET $" + String(bind.length);
+        " AND " +
+        gate +
+        " ORDER BY lower(r.title),r.id LIMIT $" +
+        String(bind.length - 1) +
+        " OFFSET $" +
+        String(bind.length);
       const rows = (await q.query(sql, bind)).rows;
       // Defense in depth; visible() must agree with the SQL predicate.
       const readable = await visible(q, a, rows);
       return {
-        items: readable.slice(0, limit).map((item) =>
-          ({ id: item.id, title: item.title })),
+        items: readable
+          .slice(0, limit)
+          .map((item) => ({ id: item.id, title: item.title })),
         next_offset: offset + limit,
         has_more: readable.length > limit,
       };
@@ -2019,28 +2172,40 @@ function dataRoutes(
     "/databases/:id/records/page",
     "Read permission-filtered database records with an encrypted keyset cursor",
     async (q, a, r) => {
-      const params = query(r), databaseId = id(r);
-      assert(Object.keys(params).every((key) =>
-        ["view", "month", "limit", "cursor"].includes(key)), 400,
-        "Unsupported database cursor query parameter");
+      const params = query(r),
+        databaseId = id(r);
+      assert(
+        Object.keys(params).every((key) =>
+          ["view", "month", "limit", "cursor"].includes(key),
+        ),
+        400,
+        "Unsupported database cursor query parameter",
+      );
       const size = params.limit === undefined ? 100 : Number(params.limit);
-      assert(Number.isSafeInteger(size) && size >= 1 && size <= 200, 400,
-        "Cursor page limit must be an integer from 1 to 200");
+      assert(
+        Number.isSafeInteger(size) && size >= 1 && size <= 200,
+        400,
+        "Cursor page limit must be an integer from 1 to 200",
+      );
       let config = view.parse({ type: "table" });
       const viewId = params.view ? uuid.parse(params.view) : null;
       if (viewId) {
-        const stored = await one(q,
+        const stored = await one(
+          q,
           "SELECT config FROM database_views WHERE id=$1 AND database_id=$2",
-          [viewId, databaseId]);
+          [viewId, databaseId],
+        );
         assert(stored, 404, "View not found");
         config = view.parse(stored.config);
       }
       // Only scalar values with a deterministic text/numeric SQL order are
       // permitted in encrypted cursor sorts. Relation/derived values could
       // leak unreadable data if sorted by raw JSON, and lists are not scalar.
-      const definition = await one(q,
+      const definition = await one(
+        q,
         "SELECT properties FROM databases WHERE resource_id=$1",
-        [databaseId]);
+        [databaseId],
+      );
       // A continuation for a foreign/hidden database must not distinguish
       // cross-tenant resource presence from an invalid encrypted cursor.
       // First-page requests retain their ordinary 404 resource behavior.
@@ -2048,80 +2213,160 @@ function dataRoutes(
         throw new HttpError(400, "Invalid database page cursor");
       assert(definition, 404, "Database unavailable");
       const allowedSortTypes = new Set([
-        "title", "text", "number", "select", "status", "date",
-        "checkbox", "url", "email",
+        "title",
+        "text",
+        "number",
+        "select",
+        "status",
+        "date",
+        "checkbox",
+        "url",
+        "email",
       ]);
       const sortFields = config.sort.map((term: any) => {
-        const property = definition.properties.find((field: any) =>
-          field.id === term.property);
-        assert(property && allowedSortTypes.has(property.type), 400,
-          "Cursor sorting requires readable scalar properties");
-        return { id: property.id, type: property.type,
-          direction: term.direction };
+        const property = definition.properties.find(
+          (field: any) => field.id === term.property,
+        );
+        assert(
+          property && allowedSortTypes.has(property.type),
+          400,
+          "Cursor sorting requires readable scalar properties",
+        );
+        return {
+          id: property.id,
+          type: property.type,
+          direction: term.direction,
+        };
       });
       if (config.type === "calendar") {
-        assert(typeof params.month === "string" &&
-          /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(params.month), 400,
-          "Calendar view requires YYYY-MM month");
+        assert(
+          typeof params.month === "string" &&
+            /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(params.month),
+          400,
+          "Calendar view requires YYYY-MM month",
+        );
         await requireAccess(q, a, databaseId);
-        assert(definition.properties.some((field: any) =>
-          field.id === config.dateBy && field.type === "date"), 400,
-          "Calendar view requires a valid date property");
+        assert(
+          definition.properties.some(
+            (field: any) => field.id === config.dateBy && field.type === "date",
+          ),
+          400,
+          "Calendar view requires a valid date property",
+        );
         const begin = new Date(params.month + "-01T00:00:00.000Z");
         const last = new Date(begin.getTime() - 86400000)
-          .toISOString().slice(0, 10);
-        const next = new Date(Date.UTC(begin.getUTCFullYear(),
-          begin.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
+          .toISOString()
+          .slice(0, 10);
+        const next = new Date(
+          Date.UTC(begin.getUTCFullYear(), begin.getUTCMonth() + 1, 1),
+        )
+          .toISOString()
+          .slice(0, 10);
         config = {
-          ...config, filters: [
+          ...config,
+          filters: [
             ...config.filters,
             { property: config.dateBy!, op: "after", value: last },
             { property: config.dateBy!, op: "before", value: next },
           ],
         };
       } else {
-        assert(params.month === undefined, 400,
-          "Month filter requires a calendar view");
+        assert(
+          params.month === undefined,
+          400,
+          "Month filter requires a calendar view",
+        );
       }
       // Bind both view configuration and current sort property types.
       // A schema change invalidates old tokens even if view JSON is stable.
       const fingerprint = databasePageFingerprint(
-        { ...config, sortFields }, params.month);
-      const state = params.cursor === undefined ? null :
-        decodeDatabasePageCursor(params.cursor, {
-          tenant: a.tenant_id, principal: a.user_id, role: a.role,
-          database: databaseId, view: viewId, fingerprint, limit: size,
-        });
-      const pageRows = await records(q, a, databaseId, config, 0, size + 1,
-        state ? { position: state.position, id: state.after,
-          sort_values: state.sort_values } : undefined);
+        { ...config, sortFields },
+        params.month,
+      );
+      const state =
+        params.cursor === undefined
+          ? null
+          : decodeDatabasePageCursor(params.cursor, {
+              tenant: a.tenant_id,
+              principal: a.user_id,
+              role: a.role,
+              database: databaseId,
+              view: viewId,
+              fingerprint,
+              limit: size,
+            });
+      const pageRows = await records(
+        q,
+        a,
+        databaseId,
+        config,
+        0,
+        size + 1,
+        state
+          ? {
+              position: state.position,
+              id: state.after,
+              sort_values: state.sort_values,
+            }
+          : undefined,
+      );
       const hasMore = pageRows.length > size;
       const items = pageRows.slice(0, size);
       const tail = items.at(-1);
-      assert(!hasMore || tail && Number.isFinite(tail.position), 500,
-        "Invalid database record position");
-      const sortValues = tail ? sortFields.map((field: any) => {
-        const value = tail.values[field.id];
-        if (value === undefined || value === null) return null;
-        if (field.type === "number") {
-          assert(typeof value === "number" && Number.isFinite(value), 400,
-            "Cursor numeric value is invalid");
-          return value;
-        }
-        assert(["string", "boolean"].includes(typeof value), 400,
-          "Unsupported cursor sort value");
-        const scalar = String(value);
-        assert(scalar.length <= 512, 400,
-          "Sort value too large for encrypted cursor");
-        return scalar;
-      }) : [];
-      assert(JSON.stringify(sortValues).length <= 900, 400,
-        "Sort keys exceed encrypted cursor size budget");
-      const nextCursor = hasMore && tail
-        ? encodeDatabasePageCursor(newDatabasePageCursor(
-          a.tenant_id, a.user_id, a.role, databaseId, viewId,
-          fingerprint, size, tail.position, tail.id, undefined, sortValues))
-        : null;
+      assert(
+        !hasMore || (tail && Number.isFinite(tail.position)),
+        500,
+        "Invalid database record position",
+      );
+      const sortValues = tail
+        ? sortFields.map((field: any) => {
+            const value = tail.values[field.id];
+            if (value === undefined || value === null) return null;
+            if (field.type === "number") {
+              assert(
+                typeof value === "number" && Number.isFinite(value),
+                400,
+                "Cursor numeric value is invalid",
+              );
+              return value;
+            }
+            assert(
+              ["string", "boolean"].includes(typeof value),
+              400,
+              "Unsupported cursor sort value",
+            );
+            const scalar = String(value);
+            assert(
+              scalar.length <= 512,
+              400,
+              "Sort value too large for encrypted cursor",
+            );
+            return scalar;
+          })
+        : [];
+      assert(
+        JSON.stringify(sortValues).length <= 900,
+        400,
+        "Sort keys exceed encrypted cursor size budget",
+      );
+      const nextCursor =
+        hasMore && tail
+          ? encodeDatabasePageCursor(
+              newDatabasePageCursor(
+                a.tenant_id,
+                a.user_id,
+                a.role,
+                databaseId,
+                viewId,
+                fingerprint,
+                size,
+                tail.position,
+                tail.id,
+                undefined,
+                sortValues,
+              ),
+            )
+          : null;
       return { items, next_cursor: nextCursor, has_more: hasMore };
     },
     "databases.read",
@@ -2183,9 +2428,13 @@ function dataRoutes(
         assert(!p.month, 400, "Month filter requires a calendar view");
       }
       const requestedOffset = p.offset === undefined ? 0 : Number(p.offset);
-      assert(Number.isSafeInteger(requestedOffset) &&
-        requestedOffset >= 0 && requestedOffset <= 50000, 400,
-        "Database page offset must be an integer from 0 to 50000");
+      assert(
+        Number.isSafeInteger(requestedOffset) &&
+          requestedOffset >= 0 &&
+          requestedOffset <= 50000,
+        400,
+        "Database page offset must be an integer from 0 to 50000",
+      );
       return records(
         q,
         a,
@@ -2226,7 +2475,8 @@ function dataRoutes(
         );
       assert(v, 404, "Record not found");
       return {
-        ...n, ...v,
+        ...n,
+        ...v,
         properties: await presentedSchema(q, a, v.properties),
         values: await presentedRecordValues(q, a, v.properties, v.values),
       };
@@ -2276,9 +2526,11 @@ function dataRoutes(
         ],
       );
       await emit(q, a, "record.updated", n.id, d.revision + 1);
-      return { ...n,
+      return {
+        ...n,
         values: await presentedRecordValues(q, a, d.properties, values),
-        revision: d.revision + 1 };
+        revision: d.revision + 1,
+      };
     },
     "databases.write",
   );
@@ -2298,9 +2550,13 @@ function dataRoutes(
         assert(d, 404, "Database not found");
         const keys = d.properties.map((p: any) => p.id);
         for (const field of [...v.config.filters, ...v.config.sort])
-          assert(!["relation", "formula", "rollup"].includes(
-            d.properties.find((p: any) => p.id === field.property)?.type),
-            400, "Relation sorting/filtering requires permission-aware indexing");
+          assert(
+            !["relation", "formula", "rollup"].includes(
+              d.properties.find((p: any) => p.id === field.property)?.type,
+            ),
+            400,
+            "Relation sorting/filtering requires permission-aware indexing",
+          );
         for (const k of [
           ...v.config.filters.map((f) => f.property),
           ...v.config.sort.map((s) => s.property),
@@ -2383,90 +2639,149 @@ function dataRoutes(
           r,
         ),
         cid = randomUUID();
-      const parent=v.reply_to?await one(q,
-        "SELECT id,author_id,block_id,parent_comment_id,resolved FROM comments WHERE tenant_id=$1 AND resource_id=$2 AND id=$3 FOR SHARE",
-        [a.tenant_id,n.id,v.reply_to]):null;
-      if(v.reply_to){
-        assert(parent,404,"Comment not found");
-        assert(parent.parent_comment_id===null,400,
-          "Reply to a root discussion, not another reply");
-        assert(!parent.resolved,409,"Discussion resolved");
-        assert(!v.block_id && v.expected_revision===undefined,400,
-          "Replies inherit their parent anchor");
+      const parent = v.reply_to
+        ? await one(
+            q,
+            "SELECT id,author_id,block_id,parent_comment_id,resolved FROM comments WHERE tenant_id=$1 AND resource_id=$2 AND id=$3 FOR SHARE",
+            [a.tenant_id, n.id, v.reply_to],
+          )
+        : null;
+      if (v.reply_to) {
+        assert(parent, 404, "Comment not found");
+        assert(
+          parent.parent_comment_id === null,
+          400,
+          "Reply to a root discussion, not another reply",
+        );
+        assert(!parent.resolved, 409, "Discussion resolved");
+        assert(
+          !v.block_id && v.expected_revision === undefined,
+          400,
+          "Replies inherit their parent anchor",
+        );
       }
       // A supplied block anchor is a resource-owned *canonical Yjs block ID*.
       // Never accept an arbitrary or neighbouring DOM selector: a guessed
       // UUID can otherwise misdirect discussion into a different page.
       if (v.block_id) {
-        assert(["page", "record"].includes(n.kind), 400,
-          "Anchored comments require a page");
-        assert(v.expected_revision !== undefined, 400,
-          "Anchored comments require the current page revision");
+        assert(
+          ["page", "record"].includes(n.kind),
+          400,
+          "Anchored comments require a page",
+        );
+        assert(
+          v.expected_revision !== undefined,
+          400,
+          "Anchored comments require the current page revision",
+        );
         // Keep the authenticated document stable until this comment commits:
         // page replacement takes a conflicting row lock.
-        const current = await one(q,
+        const current = await one(
+          q,
           "SELECT revision,y_state FROM page_documents WHERE resource_id=$1 FOR SHARE",
-          [n.id]);
+          [n.id],
+        );
         assert(current, 404, "Block not found");
-        assert(current.revision === v.expected_revision, 409,
-          "Page changed; select the block again");
+        assert(
+          current.revision === v.expected_revision,
+          409,
+          "Page changed; select the block again",
+        );
         const doc = new Y.Doc();
         try {
           Y.applyUpdate(doc, current.y_state);
-          const blocks=project(doc).blocks;
-          const contains=(items:any[]):boolean=>
-            items.some((block)=>block.id===v.block_id ||
-              contains(Array.isArray(block.children)?block.children:[]));
-          assert(contains(blocks),404,"Block not found");
-        } finally { doc.destroy(); }
+          const blocks = project(doc).blocks;
+          const contains = (items: any[]): boolean =>
+            items.some(
+              (block) =>
+                block.id === v.block_id ||
+                contains(Array.isArray(block.children) ? block.children : []),
+            );
+          assert(contains(blocks), 404, "Block not found");
+        } finally {
+          doc.destroy();
+        }
       } else {
-        assert(v.expected_revision === undefined,400,
-          "A revision is only valid with a block anchor");
+        assert(
+          v.expected_revision === undefined,
+          400,
+          "A revision is only valid with a block anchor",
+        );
       }
-      const inheritedAnchor=parent?.block_id ?? v.block_id ?? null;
+      const inheritedAnchor = parent?.block_id ?? v.block_id ?? null;
       await q.query(
         "INSERT INTO comments(id,tenant_id,resource_id,author_id,body,block_id,parent_comment_id) VALUES($1,$2,$3,$4,$5,$6,$7)",
-        [cid, a.tenant_id, n.id, a.user_id, v.body,
-          inheritedAnchor,parent?.id ?? null],
+        [
+          cid,
+          a.tenant_id,
+          n.id,
+          a.user_id,
+          v.body,
+          inheritedAnchor,
+          parent?.id ?? null,
+        ],
       );
       // Deduplicate @mention and thread-owner notifications inside the
       // comment transaction; never notify revoked or unauthorized members.
       const delivered = new Set<string>();
       const notifyMember = async (
-        recipient:string,message:string,kind:"mention"|"reply",
+        recipient: string,
+        message: string,
+        kind: "mention" | "reply",
       ) => {
-        if(delivered.has(recipient))return;
-        const member=await one(q,
+        if (delivered.has(recipient)) return;
+        const member = await one(
+          q,
           "SELECT role FROM memberships WHERE user_id=$1 AND active",
-          [recipient]);
-        if(!member || !(await access(q,
-          {...a,user_id:recipient,role:member.role},n.id)))return;
-        const preferences=await one(q,
+          [recipient],
+        );
+        if (
+          !member ||
+          !(await access(
+            q,
+            { ...a, user_id: recipient, role: member.role },
+            n.id,
+          ))
+        )
+          return;
+        const preferences = await one(
+          q,
           "SELECT mentions_enabled,replies_enabled FROM notification_preferences WHERE user_id=$1",
-          [recipient]);
+          [recipient],
+        );
         // No preference row means both are on (preserving prior behavior).
-        if(kind==="mention" && preferences?.mentions_enabled===false)return;
-        if(kind==="reply" && preferences?.replies_enabled===false)return;
+        if (kind === "mention" && preferences?.mentions_enabled === false)
+          return;
+        if (kind === "reply" && preferences?.replies_enabled === false) return;
         await q.query(
           "INSERT INTO notifications(id,tenant_id,user_id,resource_id,message) VALUES($1,$2,$3,$4,$5)",
-          [randomUUID(),a.tenant_id,recipient,n.id,message],
+          [randomUUID(), a.tenant_id, recipient, n.id, message],
         );
         delivered.add(recipient);
       };
-      for(const mention of v.body.matchAll(/@\{([0-9a-f-]{36})\}/g)){
-        await notifyMember(mention[1],
-          `${a.name} mentioned you in ${n.title}`,"mention");
+      for (const mention of v.body.matchAll(/@\{([0-9a-f-]{36})\}/g)) {
+        await notifyMember(
+          mention[1],
+          `${a.name} mentioned you in ${n.title}`,
+          "mention",
+        );
       }
-      if(parent?.author_id && parent.author_id!==a.user_id){
-        await notifyMember(parent.author_id,
-          `${a.name} replied to your comment in ${n.title}`,"reply");
+      if (parent?.author_id && parent.author_id !== a.user_id) {
+        await notifyMember(
+          parent.author_id,
+          `${a.name} replied to your comment in ${n.title}`,
+          "reply",
+        );
       }
       await emit(q, a, "comment.created", n.id);
       // Preserve W11a's legacy response contract: no new block_id key for
       // unanchored root comments. A reply explicitly carries its inherited
       // anchor and parent ID, even when that anchor was later orphaned.
-      return { id: cid, ...v,
-        ...(parent ? { block_id: inheritedAnchor, parent_comment_id: parent.id }
+      return {
+        id: cid,
+        ...v,
+        ...(parent
+          ? { block_id: inheritedAnchor, parent_comment_id: parent.id }
           : { parent_comment_id: null }),
       };
     },
@@ -2647,19 +2962,14 @@ function dataRoutes(
     },
     "files.write",
   );
-  route(
-    "GET",
-    "/scim/connectors",
-    "List SCIM connectors",
-    async (q, a) => {
-      admin(a);
-      return (
-        await q.query(
-          "SELECT id,label,default_role,created_at,last_used_at,revoked_at FROM scim_connectors ORDER BY created_at DESC",
-        )
-      ).rows;
-    },
-  );
+  route("GET", "/scim/connectors", "List SCIM connectors", async (q, a) => {
+    admin(a);
+    return (
+      await q.query(
+        "SELECT id,label,default_role,created_at,last_used_at,revoked_at FROM scim_connectors ORDER BY created_at DESC",
+      )
+    ).rows;
+  });
   route(
     "POST",
     "/scim/connectors",
@@ -2691,7 +3001,8 @@ function dataRoutes(
           "/scim/v2",
           process.env.APP_URL || "http://localhost:3000",
         ).href.replace(/\/$/, ""),
-        warning: "This token is shown once. Store it in the identity provider secret store.",
+        warning:
+          "This token is shown once. Store it in the identity provider secret store.",
       };
     },
   );
@@ -2746,13 +3057,7 @@ function dataRoutes(
           .strict(),
         r,
       );
-      await setScimGroupRoleMapping(
-        q,
-        a.tenant_id,
-        id(r),
-        v.role,
-        a.user_id,
-      );
+      await setScimGroupRoleMapping(q, a.tenant_id, id(r), v.role, a.user_id);
       await emit(q, a, "scim.group_role_mapping_updated", null);
       return { ok: true, role: v.role };
     },
@@ -3123,19 +3428,23 @@ function dataRoutes(
     "/notifications/:notice",
     "Set own visible notification read state",
     async (q, a, r) => {
-      const noticeId=id(r,"notice");
-      const v=body(z.object({read:z.boolean()}).strict(),r);
-      const notice=await one(q,
+      const noticeId = id(r, "notice");
+      const v = body(z.object({ read: z.boolean() }).strict(), r);
+      const notice = await one(
+        q,
         "SELECT id,resource_id FROM notifications WHERE id=$1 AND user_id=$2 FOR UPDATE",
-        [noticeId,a.user_id]);
-      assert(notice,404,"Notification not found");
+        [noticeId, a.user_id],
+      );
+      assert(notice, 404, "Notification not found");
       // An old notification identifier never conveys a lasting capability.
       // Reauthorize against the resource on every mutation, just like GET.
-      await requireAccess(q,a,notice.resource_id);
-      const updated=await one(q,
+      await requireAccess(q, a, notice.resource_id);
+      const updated = await one(
+        q,
         "UPDATE notifications SET read_at=CASE WHEN $3::boolean THEN COALESCE(read_at,now()) ELSE NULL END WHERE id=$1 AND user_id=$2 RETURNING id,read_at",
-        [noticeId,a.user_id,v.read]);
-      assert(updated,404,"Notification not found");
+        [noticeId, a.user_id, v.read],
+      );
+      assert(updated, 404, "Notification not found");
       return updated;
     },
   );
@@ -3144,13 +3453,15 @@ function dataRoutes(
     "GET",
     "/notification-preferences",
     "Read own notification preferences",
-    async (q,a) => {
-      const saved=await one(q,
+    async (q, a) => {
+      const saved = await one(
+        q,
         "SELECT mentions_enabled,replies_enabled FROM notification_preferences WHERE user_id=$1",
-        [a.user_id]);
+        [a.user_id],
+      );
       return {
-        mentions_enabled:saved?.mentions_enabled ?? true,
-        replies_enabled:saved?.replies_enabled ?? true,
+        mentions_enabled: saved?.mentions_enabled ?? true,
+        replies_enabled: saved?.replies_enabled ?? true,
       };
     },
   );
@@ -3158,14 +3469,26 @@ function dataRoutes(
     "PATCH",
     "/notification-preferences",
     "Update own notification preferences",
-    async (q,a,r) => {
-      const choices=body(z.object({
-        mentions_enabled:z.boolean(),
-        replies_enabled:z.boolean(),
-      }).strict(),r);
-      const saved=await one(q,
+    async (q, a, r) => {
+      const choices = body(
+        z
+          .object({
+            mentions_enabled: z.boolean(),
+            replies_enabled: z.boolean(),
+          })
+          .strict(),
+        r,
+      );
+      const saved = await one(
+        q,
         "INSERT INTO notification_preferences(tenant_id,user_id,mentions_enabled,replies_enabled) VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id,user_id) DO UPDATE SET mentions_enabled=EXCLUDED.mentions_enabled,replies_enabled=EXCLUDED.replies_enabled,updated_at=now() RETURNING mentions_enabled,replies_enabled",
-        [a.tenant_id,a.user_id,choices.mentions_enabled,choices.replies_enabled]);
+        [
+          a.tenant_id,
+          a.user_id,
+          choices.mentions_enabled,
+          choices.replies_enabled,
+        ],
+      );
       return saved;
     },
   );
@@ -3181,9 +3504,9 @@ function dataRoutes(
       return (
         await q.query(
           "SELECT id,label,issuer,client_id,token_auth_method,scopes," +
-          " require_verified_email,enabled,revision,created_at,revoked_at" +
-          " FROM oidc_tenant_providers WHERE tenant_id=$1" +
-          " ORDER BY created_at DESC,id LIMIT 100",
+            " require_verified_email,enabled,revision,created_at,revoked_at" +
+            " FROM oidc_tenant_providers WHERE tenant_id=$1" +
+            " ORDER BY created_at DESC,id LIMIT 100",
           [a.tenant_id],
         )
       ).rows;
@@ -3231,11 +3554,11 @@ function dataRoutes(
       const provider = await one(
         q,
         "INSERT INTO oidc_tenant_providers" +
-        " (id,tenant_id,label,issuer,client_id,client_secret_encrypted," +
-        " token_auth_method,scopes,created_by)" +
-        " VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)" +
-        " RETURNING id,label,issuer,client_id,token_auth_method,scopes," +
-        " require_verified_email,enabled,revision,created_at,revoked_at",
+          " (id,tenant_id,label,issuer,client_id,client_secret_encrypted," +
+          " token_auth_method,scopes,created_by)" +
+          " VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)" +
+          " RETURNING id,label,issuer,client_id,token_auth_method,scopes," +
+          " require_verified_email,enabled,revision,created_at,revoked_at",
         [
           providerId,
           a.tenant_id,
@@ -3262,9 +3585,9 @@ function dataRoutes(
       const revoked = await one(
         q,
         "UPDATE oidc_tenant_providers" +
-        " SET revoked_at=now(),revision=revision+1" +
-        " WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL" +
-        " RETURNING id,revision,revoked_at",
+          " SET revoked_at=now(),revision=revision+1" +
+          " WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL" +
+          " RETURNING id,revision,revoked_at",
         [a.tenant_id, providerId],
       );
       assert(revoked, 404, "Identity provider not found");
@@ -3368,8 +3691,13 @@ function dataRoutes(
     async (q, a, r) => {
       const p = query(r);
       assert(!(p.cursor && p.since), 400, "Provide cursor or since, not both");
-      const limit = z.coerce.number().int().min(1).max(200)
-        .default(100).parse(p.limit);
+      const limit = z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .default(100)
+        .parse(p.limit);
       const marker = p.cursor
         ? decodeEventCursor(p.cursor, a.tenant_id, a.user_id)
         : beginEventCursor(a.tenant_id, a.user_id, p.since);
@@ -3380,19 +3708,21 @@ function dataRoutes(
       const scanned = (
         await q.query(
           "SELECT id,tenant_id,type,resource_id,version,created_at," +
-          " to_char(created_at AT TIME ZONE 'UTC'," +
-          " 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS cursor_at" +
-          " FROM event_outbox" +
-          " WHERE tenant_id=$1 AND (created_at,id)>($2::timestamptz,$3::uuid)" +
-          " ORDER BY created_at,id LIMIT $4",
+            " to_char(created_at AT TIME ZONE 'UTC'," +
+            ' \'YYYY-MM-DD"T"HH24:MI:SS.US"Z"\') AS cursor_at' +
+            " FROM event_outbox" +
+            " WHERE tenant_id=$1 AND (created_at,id)>($2::timestamptz,$3::uuid)" +
+            " ORDER BY created_at,id LIMIT $4",
           [a.tenant_id, marker.at, marker.id, limit + 1],
         )
       ).rows;
       const batch = scanned.slice(0, limit);
       const events = [];
       for (const event of batch) {
-        if (!event.resource_id ||
-            !(await access(q, a, event.resource_id, true)))
+        if (
+          !event.resource_id ||
+          !(await access(q, a, event.resource_id, true))
+        )
           continue;
         events.push({
           id: event.id,
@@ -3406,9 +3736,9 @@ function dataRoutes(
       const last = batch.at(-1);
       return {
         events,
-        next_cursor: encodeEventCursor(last
-          ? { ...marker, at: last.cursor_at, id: last.id }
-          : marker),
+        next_cursor: encodeEventCursor(
+          last ? { ...marker, at: last.cursor_at, id: last.id } : marker,
+        ),
         has_more: scanned.length > limit,
       };
     },
@@ -3420,8 +3750,13 @@ function dataRoutes(
     "Scan currently accessible resource references for integration reconciliation",
     async (q, a, r) => {
       const p = query(r);
-      const limit = z.coerce.number().int().min(1).max(100)
-        .default(50).parse(p.limit);
+      const limit = z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .default(50)
+        .parse(p.limit);
       const state = p.cursor
         ? decodeReconcileCursor(p.cursor, a.tenant_id, a.user_id)
         : beginReconcileCursor(a.tenant_id, a.user_id);
@@ -3429,19 +3764,23 @@ function dataRoutes(
       // The query consumes bounded raw scan positions under enforced tenant
       // RLS, even for inaccessible resources. Never put scanned IDs or
       // inaccessible totals in the response or an unencrypted cursor.
-      const scanned = (await q.query(
-        "SELECT id,kind,parent_id,updated_at FROM resources" +
-        " WHERE tenant_id=$1 AND id>$2::uuid AND deleted_at IS NULL" +
-        " ORDER BY id LIMIT $3",
-        [a.tenant_id, state.after, limit + 1],
-      )).rows;
+      const scanned = (
+        await q.query(
+          "SELECT id,kind,parent_id,updated_at FROM resources" +
+            " WHERE tenant_id=$1 AND id>$2::uuid AND deleted_at IS NULL" +
+            " ORDER BY id LIMIT $3",
+          [a.tenant_id, state.after, limit + 1],
+        )
+      ).rows;
       const batch = scanned.slice(0, limit);
       const resources = [];
       for (const item of batch) {
         if (a.scopes && !a.scopes.includes(pageScope(item.kind))) continue;
         if (!(await access(q, a, item.id))) continue;
         resources.push({
-          id: item.id, kind: item.kind, parent_id: item.parent_id,
+          id: item.id,
+          kind: item.kind,
+          parent_id: item.parent_id,
           updated_at: item.updated_at,
         });
       }
@@ -3449,7 +3788,8 @@ function dataRoutes(
       return {
         resources,
         next_cursor: encodeReconcileCursor({
-          ...state, after: last?.id || state.after,
+          ...state,
+          after: last?.id || state.after,
         }),
         has_more: scanned.length > limit,
       };
@@ -3635,12 +3975,12 @@ function dataRoutes(
       const deliveryId = id(r);
       const resumed = await q.query(
         "UPDATE webhook_deliveries AS d" +
-        " SET status='pending',attempts=0,next_at=now(),last_error=NULL" +
-        " FROM webhook_subscriptions AS s" +
-        " WHERE d.id=$1 AND d.tenant_id=$2" +
-        " AND d.subscription_id=s.id AND s.tenant_id=$2" +
-        " AND s.active=true AND d.status='dead'" +
-        " RETURNING d.id",
+          " SET status='pending',attempts=0,next_at=now(),last_error=NULL" +
+          " FROM webhook_subscriptions AS s" +
+          " WHERE d.id=$1 AND d.tenant_id=$2" +
+          " AND d.subscription_id=s.id AND s.tenant_id=$2" +
+          " AND s.active=true AND d.status='dead'" +
+          " RETURNING d.id",
         [deliveryId, a.tenant_id],
       );
       // Uniform 404 avoids leaking whether a delivery exists in another
@@ -3650,46 +3990,75 @@ function dataRoutes(
       return { ok: true, id: deliveryId, status: "pending" };
     },
   );
-  route("POST", "/imports/preview", "Validate and preview a bounded CSV without writes",
+  route(
+    "POST",
+    "/imports/preview",
+    "Validate and preview a bounded CSV without writes",
     async (q, a, r) => {
-      const request = body(z.object({
-        parent_id: uuid,
-        content: z.string().max(2097152),
-        target_database_id: uuid.optional(),
-      }).strict(), r);
+      const request = body(
+        z
+          .object({
+            parent_id: uuid,
+            content: z.string().max(2097152),
+            target_database_id: uuid.optional(),
+          })
+          .strict(),
+        r,
+      );
       scope(a, "databases.write");
       const parent = await requireAccess(q, a, request.parent_id, 3);
-      assert(["space", "page"].includes(parent.kind), 400,
-        "Import destination must be a page or space");
+      assert(
+        ["space", "page"].includes(parent.kind),
+        400,
+        "Import destination must be a page or space",
+      );
       const preview = previewCsvImport(request.content);
       if (!request.target_database_id) return preview;
-      const target = await requireAccess(q, a,
-        request.target_database_id, 3);
-      assert(target.kind === "database" && !target.deleted_at &&
-        target.parent_id === parent.id, 404,
-        "Import target unavailable in selected destination");
-      const schema = await one(q,
+      const target = await requireAccess(q, a, request.target_database_id, 3);
+      assert(
+        target.kind === "database" &&
+          !target.deleted_at &&
+          target.parent_id === parent.id,
+        404,
+        "Import target unavailable in selected destination",
+      );
+      const schema = await one(
+        q,
         "SELECT properties FROM databases WHERE resource_id=$1",
-        [target.id]);
+        [target.id],
+      );
       assert(schema, 404, "Import target unavailable");
-      const allowed = new Set(["title","text","number","date","checkbox"]);
-      const columns = schema.properties.filter((p: any) =>
-        allowed.has(p.type));
+      const allowed = new Set(["title", "text", "number", "date", "checkbox"]);
+      const columns = schema.properties.filter((p: any) => allowed.has(p.type));
       const suggestions = preview.mapping.map((m) => {
-        const targetProperty = columns.find((p: any) =>
-          p.name.toLowerCase() === m.source.toLowerCase());
-        return targetProperty ? {
-          source: m.source, id: targetProperty.id,
-          name: targetProperty.name, type: targetProperty.type,
-        } : { ...m, skip: true };
+        const targetProperty = columns.find(
+          (p: any) => p.name.toLowerCase() === m.source.toLowerCase(),
+        );
+        return targetProperty
+          ? {
+              source: m.source,
+              id: targetProperty.id,
+              name: targetProperty.name,
+              type: targetProperty.type,
+            }
+          : { ...m, skip: true };
       });
-      return { ...preview, mapping: suggestions, target: {
-        id: target.id, schema_digest: csvSchemaDigest(schema.properties),
-        properties: columns.map((p: any) => ({
-          id:p.id, name:p.name, type:p.type,
-        })),
-      } };
-    }, "databases.write");
+      return {
+        ...preview,
+        mapping: suggestions,
+        target: {
+          id: target.id,
+          schema_digest: csvSchemaDigest(schema.properties),
+          properties: columns.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            type: p.type,
+          })),
+        },
+      };
+    },
+    "databases.write",
+  );
   route("POST", "/imports", "Queue Markdown or CSV import", async (q, a, r) => {
     const v = body(
       z
@@ -3700,81 +4069,138 @@ function dataRoutes(
           content: z.string().max(2097152),
           mapping: csvMappingSchema.optional(),
           target_database_id: uuid.optional(),
-          expected_schema_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+          expected_schema_digest: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
           existing_mode: z.literal("append").optional(),
-          idempotency_key: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/).optional(),
+          idempotency_key: z
+            .string()
+            .regex(/^[A-Za-z0-9_-]{16,128}$/)
+            .optional(),
         })
         .strict(),
       r,
     );
     scope(a, v.format === "csv" ? "databases.write" : "pages.write");
-    assert(v.format === "csv" || (v.mapping === undefined &&
-      v.target_database_id === undefined && v.idempotency_key === undefined), 400,
-      "CSV-specific options require CSV format");
+    assert(
+      v.format === "csv" ||
+        (v.mapping === undefined &&
+          v.target_database_id === undefined &&
+          v.idempotency_key === undefined),
+      400,
+      "CSV-specific options require CSV format",
+    );
     const parent = await requireAccess(q, a, v.parent_id, 3);
     const { idempotency_key, ...payload } = v;
     // Bind the replay identity to *all* validated import parameters and the
     // signed-in principal. CSV bytes are hashed, never logged in a response.
-    const digest = idempotency_key ? createHash("sha256").update(JSON.stringify({
-      operation: "workspace.csv.import.v1",
-      tenant: a.tenant_id, principal: a.user_id, payload,
-    })).digest("hex") : null;
+    const digest = idempotency_key
+      ? createHash("sha256")
+          .update(
+            JSON.stringify({
+              operation: "workspace.csv.import.v1",
+              tenant: a.tenant_id,
+              principal: a.user_id,
+              payload,
+            }),
+          )
+          .digest("hex")
+      : null;
     // A successful submit may have committed even when its HTTP response was
     // lost. Recheck current write access first, then return the original job
     // even if the target's schema changed *after* that original submission.
     if (v.target_database_id) {
-      assert(v.format === "csv" && v.mapping &&
-        v.existing_mode === "append" && v.expected_schema_digest, 400,
-        "Existing imports require explicit append mode, mapping and schema digest");
+      assert(
+        v.format === "csv" &&
+          v.mapping &&
+          v.existing_mode === "append" &&
+          v.expected_schema_digest,
+        400,
+        "Existing imports require explicit append mode, mapping and schema digest",
+      );
       const target = await requireAccess(q, a, v.target_database_id, 3);
-      assert(target.kind === "database" && !target.deleted_at &&
-        target.parent_id === parent.id, 404, "Import target unavailable");
+      assert(
+        target.kind === "database" &&
+          !target.deleted_at &&
+          target.parent_id === parent.id,
+        404,
+        "Import target unavailable",
+      );
     } else {
-      assert(v.existing_mode === undefined &&
-        v.expected_schema_digest === undefined,400,
-        "Existing import controls require a target database");
+      assert(
+        v.existing_mode === undefined && v.expected_schema_digest === undefined,
+        400,
+        "Existing import controls require a target database",
+      );
     }
     if (idempotency_key) {
-      const previous = await one(q,
+      const previous = await one(
+        q,
         "SELECT id,status,resource_id,request_digest FROM jobs WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3",
-        [a.tenant_id, a.user_id, idempotency_key]);
+        [a.tenant_id, a.user_id, idempotency_key],
+      );
       if (previous) {
-        assert(previous.request_digest === digest, 409,
-          "Import key already belongs to another request");
+        assert(
+          previous.request_digest === digest,
+          409,
+          "Import key already belongs to another request",
+        );
         await requireAccess(q, a, previous.resource_id, 3);
         return { id: previous.id, status: previous.status };
       }
     }
     if (v.target_database_id) {
-      const definition = await one(q,
+      const definition = await one(
+        q,
         "SELECT properties FROM databases WHERE resource_id=$1",
-        [v.target_database_id]);
-      assert(definition && csvSchemaDigest(definition.properties) ===
-        v.expected_schema_digest, 409,
-        "Target schema changed; preview again");
+        [v.target_database_id],
+      );
+      assert(
+        definition &&
+          csvSchemaDigest(definition.properties) === v.expected_schema_digest,
+        409,
+        "Target schema changed; preview again",
+      );
     }
     const jid = randomUUID();
     if (!idempotency_key) {
       await q.query(
         "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload) VALUES($1,$2,$3,$4,$5)",
-        [jid, a.tenant_id, a.user_id, v.parent_id, json(payload)]);
+        [jid, a.tenant_id, a.user_id, v.parent_id, json(payload)],
+      );
       return { id: jid, status: "pending" };
     }
     // Partial unique index serializes concurrent same-key submissions. The
     // loser sees precisely the first job, never creates a second job/append.
-    const inserted = await one(q,
+    const inserted = await one(
+      q,
       `INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload,idempotency_key,request_digest)
        VALUES($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (tenant_id,user_id,idempotency_key)
        WHERE idempotency_key IS NOT NULL DO NOTHING
        RETURNING id,status`,
-      [jid,a.tenant_id,a.user_id,v.parent_id,json(payload),idempotency_key,digest]);
+      [
+        jid,
+        a.tenant_id,
+        a.user_id,
+        v.parent_id,
+        json(payload),
+        idempotency_key,
+        digest,
+      ],
+    );
     if (inserted) return { id: inserted.id, status: inserted.status };
-    const original = await one(q,
+    const original = await one(
+      q,
       "SELECT id,status,resource_id,request_digest FROM jobs WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3",
-      [a.tenant_id,a.user_id,idempotency_key]);
-    assert(original && original.request_digest === digest, 409,
-      "Import key already belongs to another request");
+      [a.tenant_id, a.user_id, idempotency_key],
+    );
+    assert(
+      original && original.request_digest === digest,
+      409,
+      "Import key already belongs to another request",
+    );
     await requireAccess(q, a, original.resource_id, 3);
     return { id: original.id, status: original.status };
   });
@@ -3817,9 +4243,11 @@ function dataRoutes(
             10000,
           );
         if (format === "json")
-          return { resource: n,
+          return {
+            resource: n,
             schema: await presentedSchema(q, a, d.properties),
-            records: rows };
+            records: rows,
+          };
         assert(format === "csv", 400, "Database export requires CSV or JSON");
         reply
           .type("text/csv")
@@ -3855,6 +4283,25 @@ function dataRoutes(
         .type("text/markdown")
         .header("Content-Disposition", 'attachment; filename="page.md"');
       return reply.send(`# ${n.title}\n\n${await blocksToMarkdown(d.blocks)}`);
+    },
+  );
+  route(
+    "GET",
+    "/resources/:id/export/archive",
+    "Export a bounded portable workspace archive",
+    async (q, a, r, reply) => {
+      const n = await requireAccess(q, a, id(r));
+      scope(a, pageScope(n.kind));
+      const archive = await exportPortableTree(q, a, n.id, storage);
+      await emit(q, a, "export.performed", n.id);
+      reply
+        .type("application/zip")
+        .header("X-Content-Type-Options", "nosniff")
+        .header(
+          "Content-Disposition",
+          `attachment; filename="workspace-archive.zip"`,
+        );
+      return reply.send(archive);
     },
   );
 }
