@@ -80,6 +80,14 @@ Example:
 7. The event contains CI metadata, not GitHub credentials, repository source, or logs.
 8. A green event does not grant permission to merge by itself. The agent must verify exact-head acceptance and roadmap prerequisites.
 9. A red event does not authorize broad log ingestion. Inspect failed jobs first, then only the relevant failing step/log range.
+10. Merge authorization is separate from CI health. A green exact-head event lets the agent continue branch work autonomously (diagnose, correct, advance the roadmap, open PRs), but merging a PR into `main` always requires explicit operator authorization at a defined acceptance boundary. `rerun-until-green` is not a merge policy: a retried green run on the same head proves flakiness, not correctness, and only the operator may accept that evidence for a merge.
+
+## Model-pin acceptance record (2026-10-06)
+
+After merging the bridge model configuration, the model pin was accepted empirically against the deployed main checkout:
+
+- The deployment job ran green on the merged main head (`7ba2bf6f48f236bea51299a89daa2be06533e292`, run `37421247640`, both `backend` and `deployment` checks successful).
+- The bridge-launched Hermes sessions on the deployed main checkout resolved in `state.db` to `z-ai/glm-5.3-flash` with provider `openrouter`, confirming `CI_HERMES_MODEL` and `CI_HERMES_PROVIDER` reached the wrapper and the pinned model was used instead of the fallback chain.
 
 ## Cloudflare resources
 
