@@ -170,13 +170,13 @@ async function backlinkPage(
   if (after) {
     rawValues.push(after.after_us, after.after);
     continuationSql =
-      " AND ((extract(epoch from source.updated_at)*1000000)::bigint,source.id)<($" +
+      " AND ((extract(epoch from link.source_updated_at)*1000000)::bigint,link.source_id)<($" +
       (rawValues.length - 1) + "::bigint,$" + rawValues.length + "::uuid)";
   }
   rawValues.push(scanLimit + 1);
   const raw = (await q.query(
     "SELECT source.id," +
-    " ((extract(epoch from source.updated_at)*1000000)::bigint)::text updated_us" +
+    " ((extract(epoch from link.source_updated_at)*1000000)::bigint)::text updated_us" +
     " FROM resource_links link" +
     " JOIN resources source ON source.tenant_id=link.tenant_id" +
     " AND source.id=link.source_id" +
@@ -184,7 +184,7 @@ async function backlinkPage(
     " AND source.deleted_at IS NULL" +
     " AND source.kind=ANY($3::text[])" +
     continuationSql +
-    " ORDER BY source.updated_at DESC,source.id DESC LIMIT $" + rawValues.length,
+    " ORDER BY link.source_updated_at DESC,link.source_id DESC LIMIT $" + rawValues.length,
     rawValues,
   )).rows;
   const bounded = raw.slice(0, scanLimit);
