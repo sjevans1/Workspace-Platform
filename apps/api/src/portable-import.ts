@@ -538,5 +538,11 @@ export async function importPortableArchive(
   const rootId = ids.get(root.id);
   assert(rootId, 400, "Imported root mapping is missing");
   await emit(q, a, "import.completed", rootId);
-  return { resource_id: rootId, report };
+  return {
+    resource_id: rootId,
+    report,
+    // Internal worker compensation handle. API/job responses must not expose
+    // destination object keys.
+    stored_object_keys: written,
+  };
 }
