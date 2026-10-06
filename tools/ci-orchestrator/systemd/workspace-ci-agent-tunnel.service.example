@@ -1,0 +1,21 @@
+[Unit]
+Description=Cloudflare quick tunnel for Workspace CI bridge
+After=network-online.target workspace-ci-agent-bridge.service
+Wants=network-online.target workspace-ci-agent-bridge.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/workspace-ci-orchestrator/cloudflare.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CLOUDFLARED_BIN=%h/.local/bin/cloudflared
+Environment=CI_AGENT_BRIDGE_ORIGIN=http://127.0.0.1:8788
+Environment=CI_ORCHESTRATOR_WRANGLER_CONFIG=%h/Workspace-Platform/tools/ci-orchestrator/wrangler.toml
+Environment=CI_AGENT_TUNNEL_URL_FILE=%h/.config/workspace-ci-orchestrator/tunnel-url
+ExecStart=/usr/bin/env node %h/Workspace-Platform/tools/ci-orchestrator/bin/run-quick-tunnel.mjs
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

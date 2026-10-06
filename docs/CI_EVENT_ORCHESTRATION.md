@@ -92,6 +92,29 @@ The implementation expects:
 
 Cloudflare Queues are used so webhook receipt can complete quickly while downstream delivery has independent retries and DLQ handling.
 
+## Deployed Workspace instance
+
+The live receiver is deployed as:
+
+- Worker: `workspace-ci-orchestrator`
+- Receiver: `https://workspace-ci-orchestrator.sjevans097.workers.dev`
+- D1 database: `workspace-ci-orchestrator` (`347fbfc7-1407-4b6d-92d1-da6d6e584ed4`)
+- Queue: `workspace-ci-events` (`226277fe6b584cfe9bac32280e868679`)
+- DLQ: `workspace-ci-events-dlq` (`def60a0da7ce44889cb4e91c131d25bb`)
+- GitHub repository webhook: hook `692802160`, active, `workflow_run` only, JSON content, SSL verification enabled
+- Allowed repository: `sjevans1/Workspace-Platform`
+- Allowed workflow: `Workspace verification` or `.github/workflows/ci.yml`
+
+The deployed Worker secrets are named:
+
+- `GITHUB_WEBHOOK_SECRET`
+- `AGENT_DISPATCH_URL`
+- `AGENT_DISPATCH_TOKEN`
+
+Values are not stored in this repository. The host keeps secret files with mode `0600` under `~/.config/workspace-ci-orchestrator/`. The account-specific `wrangler.toml` is locally ignored through `.git/info/exclude`; `wrangler.toml.example` remains the committed template.
+
+The bridge host currently has no Cloudflare-managed DNS zone. Cloudflare Access and a stable named public hostname therefore cannot be attached yet. The deployed bridge route uses a supervised Cloudflare Quick Tunnel with HTTPS transport, keeps the origin bound to loopback, and still requires the independent bridge bearer token. `run-quick-tunnel.mjs` updates `AGENT_DISPATCH_URL` and redeploys the Worker whenever a Quick Tunnel restart assigns a new hostname. Move this deployment to a named tunnel plus Access service-token policy when a managed zone is available. Do not remove the bridge bearer token after that migration.
+
 ## Deployment
 
 From `tools/ci-orchestrator`:
@@ -198,6 +221,80 @@ Do not bind the bridge directly to a public interface. If the agent runs on a wo
 
 If the agent runs on an always-on cloud host, terminate HTTPS at the platform/reverse proxy and keep the bridge itself bound to loopback.
 
+### Hermes wrapper
+
+`tools/ci-orchestrator/bin/hermes-wrapper.mjs` is the agent-specific adapter. It:
+
+1. reads exactly one JSON envelope from stdin;
+2. validates the instruction and normalized event contract;
+3. verifies that the selected Git repository root has origin `sjevans1/Workspace-Platform`;
+4. invokes Hermes without a shell as:
+
+```text
+hermes chat --query-file - --oneshot -Q --source tool \
+  --in <Workspace-Platform-root> --run-budget 1800 --yolo
+```
+
+The wrapper sends the instruction and normalized CI metadata through stdin, returns Hermes' exit code, and never interpolates event data into a shell command. The bridge remains agent-neutral and only knows the wrapper executable path.
+
+### Durable host services
+
+The WSL host uses these enabled `systemd --user` units:
+
+- `workspace-ci-agent-bridge.service`
+- `workspace-ci-agent-tunnel.service`
+
+Committed templates are under `tools/ci-orchestrator/systemd/`. Install them into `~/.config/systemd/user/`, adjust host paths, create the mode-`0600` environment files, then run:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now workspace-ci-agent-bridge.service
+systemctl --user enable --now workspace-ci-agent-tunnel.service
+```
+
+The bridge unit uses `Restart=on-failure`, a persistent `.data/ci-agent-bridge` spool, and one process managed by systemd. On startup, the bridge moves any orphaned `running/` event back to `pending/` before processing. This makes an interrupted agent launch recoverable without running two bridge instances.
+
+Required local environment files and non-secret settings:
+
+```text
+~/.config/workspace-ci-orchestrator/bridge.env
+  CI_AGENT_COMMAND=<repo>/tools/ci-orchestrator/bin/hermes-wrapper.mjs
+  CI_AGENT_ARGS_JSON=[]
+  CI_AGENT_SPOOL_DIR=<repo>/.data/ci-agent-bridge
+  CI_AGENT_BRIDGE_HOST=127.0.0.1
+  CI_AGENT_BRIDGE_PORT=8788
+  WORKSPACE_PLATFORM_REPO=<repo>
+  HERMES_BIN=<absolute Hermes executable>
+  CI_HERMES_RUN_BUDGET_SECONDS=1800
+  CI_AGENT_BRIDGE_TOKEN=<secret>
+
+~/.config/workspace-ci-orchestrator/cloudflare.env
+  CLOUDFLARE_ACCOUNT_ID=<account id>
+  CF_API_TOKEN=<scoped Cloudflare token>
+```
+
+The Quick Tunnel unit launches `run-quick-tunnel.mjs`. The supervisor waits for HTTPS health, writes the current public URL to `~/.config/workspace-ci-orchestrator/tunnel-url`, updates the Worker secret, and deploys the updated Worker version. A service restart therefore does not leave the Worker pointing at an expired Quick Tunnel hostname.
+
+Service status and logs:
+
+```bash
+systemctl --user status workspace-ci-agent-bridge.service
+systemctl --user status workspace-ci-agent-tunnel.service
+journalctl --user-unit workspace-ci-agent-bridge.service -n 100 --no-pager
+journalctl --user-unit workspace-ci-agent-tunnel.service -n 100 --no-pager
+```
+
+### Health checks
+
+```bash
+curl --fail https://workspace-ci-orchestrator.sjevans097.workers.dev/healthz
+curl --fail http://127.0.0.1:8788/healthz
+curl --fail "$(cat ~/.config/workspace-ci-orchestrator/tunnel-url)/healthz"
+ss -ltnp 'sport = :8788'
+```
+
+The final command must show only `127.0.0.1:8788`, never `0.0.0.0:8788`.
+
 ## Testing
 
 Run:
@@ -214,17 +311,82 @@ The tests cover:
 - repository/workflow filtering,
 - success/failure normalization,
 - authenticated downstream dispatch,
-- retry on downstream failure.
+- retry on downstream failure,
+- durable bridge dedupe and startup recovery,
+- Hermes wrapper validation and exit-code propagation,
+- safe Quick Tunnel URL parsing.
 
 The root GitHub Actions backend job runs this test suite independently from product tests.
 
+### Live end-to-end validation
+
+Use a harmless branch or an event SHA that is deliberately stale. Never weaken a product gate to produce a test failure.
+
+1. Push a harmless commit or use `workflow_dispatch` to run `Workspace verification`.
+2. Confirm the exact-head run completes in GitHub Actions.
+3. Inspect the repository webhook delivery and require HTTP 2xx.
+4. Query D1 by the `X-GitHub-Delivery` ID.
+5. Confirm one matching file moves through `.data/ci-agent-bridge/pending` or `running` to `done`.
+6. Confirm the bridge journal shows one Hermes session for that delivery.
+7. Redeliver the same GitHub delivery or replay the same synthetic delivery ID and confirm D1 returns `duplicate: true` and no second spool file appears.
+8. Confirm `git status --short` is unchanged when the test event is stale or requires no correction.
+
+The initial live acceptance used stale SHA `0000000000000000000000000000000000000000`. Hermes checked GitHub, reported the event stale, changed no files, ran no tests, and pushed nothing. This proved automatic Hermes launch without creating an artificial repository mutation.
+
 ## Failure and recovery
 
-- **Receiver unavailable:** GitHub records a failed webhook delivery. Redeliver it after recovery.
+- **Receiver unavailable:** GitHub records a failed webhook delivery. Restore the Worker and redeliver from repository webhook deliveries.
 - **Duplicate/redelivery:** D1 delivery ID makes normal replay idempotent.
-- **Agent bridge unavailable:** Queue retries; exhausted messages move to the DLQ.
+- **Agent bridge unavailable:** Queue delivery fails and retries. After `max_retries`, the normalized event moves to `workspace-ci-events-dlq`; it is not silently discarded.
+- **Agent command fails:** `runOne` moves the event from `running/` back to `pending/`. An unexpected bridge-process exit leaves the event in `running/`; startup recovery returns it to `pending/` before the next launch. The spool key prevents concurrent duplicate execution.
+- **Quick Tunnel restarts:** the tunnel supervisor obtains a new HTTPS hostname, health-checks it, updates `AGENT_DISPATCH_URL`, deploys the Worker, and writes the current URL file.
 - **CI provider changes:** add an adapter that emits the same normalized event contract. Do not change agent policy.
 - **GitHub Actions outage:** an alternate provider may emit the same contract, allowing the agent bridge and roadmap logic to remain unchanged.
+
+Restart and verify the local path with:
+
+```bash
+systemctl --user restart workspace-ci-agent-bridge.service
+systemctl --user restart workspace-ci-agent-tunnel.service
+systemctl --user is-active workspace-ci-agent-bridge.service workspace-ci-agent-tunnel.service
+curl --fail "$(cat ~/.config/workspace-ci-orchestrator/tunnel-url)/healthz"
+```
+
+### DLQ inspection and recovery
+
+The deployed DLQ has an HTTP pull consumer for operator inspection. Pulling changes message visibility, so do not acknowledge a message until its metadata and recovery decision are recorded.
+
+```bash
+# The token needs Cloudflare Queues Read and Edit on this account.
+source ~/.config/workspace-ci-orchestrator/cloudflare.env
+curl --fail --request POST \
+  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/queues/def60a0da7ce44889cb4e91c131d25bb/messages/pull" \
+  --header "Authorization: Bearer $CF_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"visibility_timeout_ms":30000,"batch_size":10}'
+```
+
+Inspect only operational metadata: delivery ID, repository, workflow run ID, SHA, conclusion, attempt count and timestamps. To redrive, publish the unchanged normalized `body` to the main queue's `/messages` endpoint, verify it reaches the bridge, then acknowledge the DLQ lease through `/messages/ack`. Never acknowledge first. Never alter the delivery ID during redrive.
+
+### Temporarily disable the event loop
+
+Pause new GitHub events and queue delivery without deleting state:
+
+```bash
+gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -f active=false
+source ~/.config/workspace-ci-orchestrator/cloudflare.env
+CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx wrangler queues pause-delivery workspace-ci-events
+```
+
+Resume in the opposite order:
+
+```bash
+source ~/.config/workspace-ci-orchestrator/cloudflare.env
+CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx wrangler queues resume-delivery workspace-ci-events
+gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -f active=true
+```
+
+The hourly/manual CI-checking fallback remains enabled during the reliability period. To operate manually, use exact-head `gh pr checks` and `gh run view` commands, inspect failed jobs only, make one focused correction, push, and stop. Do not remove the hourly fallback until multiple real event-driven CI cycles have completed reliably.
 
 ## Phase 2
 

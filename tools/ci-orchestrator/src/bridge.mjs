@@ -45,6 +45,23 @@ export function createSpool(root) {
     ]);
   }
 
+  async function recover() {
+    await init();
+    const files = (await readdir(running))
+      .filter((name) => name.endsWith(".json"))
+      .sort();
+    for (const name of files) {
+      const from = join(running, name);
+      const to = join(pending, name);
+      try {
+        await link(from, to);
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error;
+      }
+      await rm(from, { force: true });
+    }
+  }
+
   async function put(event) {
     await init();
     const key = eventKey(event.delivery_id);
@@ -111,7 +128,7 @@ export function createSpool(root) {
     await rename(join(running, job.name), join(pending, job.name));
   }
 
-  return { init, put, claimNext, complete, retry };
+  return { init, recover, put, claimNext, complete, retry };
 }
 
 export function executableRunner(command, args = []) {
@@ -132,6 +149,12 @@ export function executableRunner(command, args = []) {
         env: { ...process.env, CI_EVENT_ID: String(event.delivery_id) },
       });
       child.once("error", reject);
+      child.stdin.on("error", (error) => {
+        // A successful command may exit before consuming the entire envelope.
+        // Its exit status remains authoritative; this prevents an uncaught
+        // EPIPE from terminating the bridge process.
+        if (error?.code !== "EPIPE") reject(error);
+      });
       child.once("exit", (code, signal) => {
         if (code === 0) resolve();
         else reject(new Error(`Agent command exited code=${code} signal=${signal || ""}`));
@@ -215,7 +238,7 @@ export function createBridge({ token, spool }) {
 
 export async function startFromEnv(env = process.env) {
   const spool = createSpool(env.CI_AGENT_SPOOL_DIR || ".data/ci-agent-bridge");
-  await spool.init();
+  await spool.recover();
   const args = env.CI_AGENT_ARGS_JSON ? JSON.parse(env.CI_AGENT_ARGS_JSON) : [];
   const runner = executableRunner(env.CI_AGENT_COMMAND, args);
   const server = createBridge({

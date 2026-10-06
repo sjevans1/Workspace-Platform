@@ -7,6 +7,7 @@ import {
   buildAgentInstruction,
   createBridge,
   createSpool,
+  executableRunner,
   runOne,
 } from "../src/bridge.mjs";
 
@@ -67,6 +68,23 @@ test("failed runner returns event to pending for a later attempt", async (t) => 
   let calls = 0;
   await runOne(spool, async () => calls++);
   assert.equal(calls, 1);
+});
+
+test("startup recovery returns orphaned running events to pending", async (t) => {
+  const { root, spool } = await tempSpool();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await spool.put(event("orphaned-event"));
+  assert.equal((await spool.claimNext()).event.delivery_id, "orphaned-event");
+
+  const restarted = createSpool(root);
+  await restarted.recover();
+  let recovered;
+  await runOne(restarted, async (value) => { recovered = value; });
+  assert.equal(recovered.delivery_id, "orphaned-event");
+});
+
+test("runner tolerates a successful child closing stdin early", async () => {
+  await executableRunner("/usr/bin/true")(event("early-close-event"));
 });
 
 test("agent instruction keeps failure work narrow and exact-head aware", () => {
