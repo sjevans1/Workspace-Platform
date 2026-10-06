@@ -366,8 +366,6 @@ export async function importPortableArchive(
           relationIds.has(property.rollup_relation_id)));
     const parsed = properties.parse(withoutBrokenRollups);
     validateFormulaDefinitions(parsed);
-    await validateRelationSchema(q, a, targetDatabaseId, parsed);
-    await validateRollupDefinitions(q, a, parsed);
     importedProperties.set(sourceDatabaseId, parsed);
     await q.query("UPDATE databases SET properties=$2 WHERE resource_id=$1",
       [targetDatabaseId, json(parsed)]);
@@ -390,6 +388,16 @@ export async function importPortableArchive(
         [randomUUID(), a.tenant_id, targetDatabaseId,
           json({ type: "table", filters: [], sort: [] })],
       );
+  }
+
+  // Every target database now has its remapped schema installed. Validate
+  // cross-database relations/rollups only after this point so validation is
+  // independent of archive/database iteration order.
+  for (const [sourceDatabaseId, parsed] of importedProperties) {
+    const targetDatabaseId = ids.get(sourceDatabaseId);
+    assert(targetDatabaseId, 400, "Archive database mapping is incomplete");
+    await validateRelationSchema(q, a, targetDatabaseId, parsed);
+    await validateRollupDefinitions(q, a, parsed);
   }
 
   // Create records without source user IDs or source relation IDs. Relations
