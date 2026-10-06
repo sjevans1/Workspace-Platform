@@ -9,7 +9,8 @@ FROM resources source
 WHERE source.tenant_id=link.tenant_id AND source.id=link.source_id;
 
 ALTER TABLE resource_links
-  ALTER COLUMN source_updated_at SET NOT NULL;
+  ALTER COLUMN source_updated_at SET NOT NULL,
+  ALTER COLUMN source_updated_at SET DEFAULT now();
 
 CREATE INDEX resource_links_target_updated
   ON resource_links(tenant_id,target_id,source_updated_at DESC,source_id DESC);
