@@ -39,6 +39,43 @@ export async function api(path: string, method = "GET", data?: any) {
   }
   return value;
 }
+async function apiError(response: Response) {
+  const value = await response.clone().json().catch(() => ({}));
+  const retry = response.headers.get("Retry-After");
+  const seconds = retry && /^\d+$/.test(retry) ? Number(retry) : null;
+  return new ApiError(
+    typeof value?.error === "string" ? value.error : "Request failed",
+    response.status,
+    seconds,
+  );
+}
+
+export async function uploadWorkspaceArchive(
+  path: string,
+  archive: Blob,
+) {
+  const response = await fetch(`/api/v1${path}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/zip",
+      "X-CSRF-Token": csrf,
+    },
+    body: archive,
+  });
+  if (!response.ok) throw await apiError(response);
+  return response.json();
+}
+
+export async function downloadWorkspaceArchive(path: string) {
+  const response = await fetch(`/api/v1${path}`, {
+    method: "GET",
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw await apiError(response);
+  return response.blob();
+}
+
 export function notify(message: string) {
   window.dispatchEvent(
     new CustomEvent("workspace-notice", { detail: message }),
