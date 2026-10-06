@@ -126,6 +126,56 @@ test("runner tolerates a successful child closing stdin early", async () => {
   await executableRunner("/usr/bin/true")(event("early-close-event"));
 });
 
+test("runner rejects an invalid run budget at construction time", () => {
+  assert.throws(() => executableRunner("/usr/bin/true", [], { runBudgetSeconds: 0 }), /positive/);
+  assert.throws(() => executableRunner("/usr/bin/true", [], { runBudgetSeconds: -5 }), /positive/);
+  assert.throws(() => executableRunner("/usr/bin/true", [], { runBudgetSeconds: "nope" }), /positive/);
+});
+
+test("a hanging child is terminated when the bridge run budget expires", async () => {
+  const runner = executableRunner("/bin/sleep", ["30"], { runBudgetSeconds: 0.2 });
+  await assert.rejects(runner(event("hung-child-event")), (error) => {
+    assert.equal(error.code, "budget_exceeded");
+    assert.equal(error.budgetExceeded, true);
+    assert.match(error.message, /run budget of 0\.2s exceeded/);
+    assert.match(error.message, /process group terminated/);
+    return true;
+  });
+});
+
+test("budget termination covers the full child process group", async (t) => {
+  const { root } = await tempSpool();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pidFile = join(root, "grandchild.pid");
+  // The shell backgrounds a grandchild, records its pid, then waits forever.
+  // A hung agent is exactly this shape: a silent process with a live child.
+  const script = `sleep 30 & echo $! > "${pidFile}"; wait`;
+  const runner = executableRunner("/bin/sh", ["-c", script], { runBudgetSeconds: 0.3 });
+  await assert.rejects(runner(event("process-group-event")), /budget/);
+
+  const grandchildPid = Number((await readFile(pidFile, "utf8")).trim());
+  let alive = true;
+  for (let i = 0; i < 50; i += 1) {
+    try {
+      process.kill(grandchildPid, 0);
+      alive = true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } catch (cause) {
+      if (cause?.code === "ESRCH") {
+        alive = false;
+        break;
+      }
+      throw cause;
+    }
+  }
+  assert.equal(alive, false, "grandchild survived the budget termination");
+});
+
+test("a normal successful run completes within the run budget", async () => {
+  const runner = executableRunner("/usr/bin/true", [], { runBudgetSeconds: 5 });
+  await runner(event("fast-run-event"));
+});
+
 test("agent instruction keeps failure work narrow and exact-head aware", () => {
   const instruction = buildAgentInstruction(event("focused-event", "failure"));
   assert.match(instruction, /exact head/);
