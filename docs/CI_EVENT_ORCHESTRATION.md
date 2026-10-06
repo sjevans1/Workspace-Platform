@@ -80,6 +80,14 @@ Example:
 7. The event contains CI metadata, not GitHub credentials, repository source, or logs.
 8. A green event does not grant permission to merge by itself. The agent must verify exact-head acceptance and roadmap prerequisites.
 9. A red event does not authorize broad log ingestion. Inspect failed jobs first, then only the relevant failing step/log range.
+10. Merge authorization is separate from CI health. A green exact-head event lets the agent continue branch work autonomously (diagnose, correct, advance the roadmap, open PRs), but merging a PR into `main` always requires explicit operator authorization at a defined acceptance boundary. `rerun-until-green` is not a merge policy: a retried green run on the same head proves flakiness, not correctness, and only the operator may accept that evidence for a merge.
+
+## Model-pin acceptance record (2026-10-06)
+
+After merging the bridge model configuration, the model pin was accepted empirically against the deployed main checkout:
+
+- The deployment job ran green on the merged main head (`7ba2bf6f48f236bea51299a89daa2be06533e292`, run `37421247640`, both `backend` and `deployment` checks successful).
+- The bridge-launched Hermes sessions on the deployed main checkout resolved in `state.db` to `z-ai/glm-5.3-flash` with provider `openrouter`, confirming `CI_HERMES_MODEL` and `CI_HERMES_PROVIDER` reached the wrapper and the pinned model was used instead of the fallback chain.
 
 ## Cloudflare resources
 
@@ -167,7 +175,7 @@ For `conclusion=success`:
 1. verify that `head_sha` is still the relevant PR/current roadmap head;
 2. verify all required jobs/checks, not merely this one workflow event;
 3. capture acceptance evidence if this is an acceptance boundary;
-4. merge/advance only when policy permits;
+4. merge only under the merge authorization policy below;
 5. otherwise take no action.
 
 For any non-success terminal conclusion:
@@ -178,6 +186,37 @@ For any non-success terminal conclusion:
 4. fetch logs only for the failing job when needed;
 5. make the smallest correction;
 6. push once and stop; the next CI completion event wakes the loop again.
+
+### Merge authorization policy
+
+Autonomous branch work, controlled merges. This policy is embedded in the agent instruction produced by `buildAgentInstruction()` so it travels with every event.
+
+Autonomous, without further approval:
+
+- creating and updating branches;
+- opening pull requests;
+- diagnosing CI failures and making bounded corrections;
+- rerunning targeted verification;
+- updating documentation;
+- progressing roadmap work inside an already-authorized work package;
+- infrastructure recovery that does not alter product or repository state: retrying delivery, restarting the supervised bridge, recovering the durable spool, superseding stale CI events.
+
+Not autonomous: merging. A merge is permitted only when one of these holds:
+
+1. the user has explicitly authorized that specific pull request to merge once named acceptance conditions are satisfied; or
+2. the user has explicitly pre-authorized a defined roadmap acceptance boundary, such as "complete and merge all pull requests required to close W14 once each exact-head acceptance gate is satisfied".
+
+Before merging, the agent must verify:
+
+- the pull request exact head is still current;
+- required CI and acceptance gates are satisfied;
+- no unresolved security or review finding remains;
+- prerequisite roadmap items are satisfied;
+- the change remains within the authorized scope.
+
+If CI is flaky, or the acceptance evidence is ambiguous, that is **not** authorization to merge. The agent may diagnose and fix the instability autonomously, but the merge gate stays intact. A green result obtained only by re-running a flaky gate is not acceptance evidence.
+
+After merging an authorized pull request the agent may continue to the next already-authorized roadmap action. Crossing into an acceptance boundary that has not been pre-authorized requires user approval.
 
 This intentionally produces a **push -> CI -> event -> focused action -> push** cycle rather than a continuously polling agent.
 
