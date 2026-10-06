@@ -9,8 +9,7 @@ CREATE TABLE job_artifacts(
   size bigint NOT NULL CHECK(size>=0),
   sha256 text NOT NULL CHECK(sha256 ~ '^[a-f0-9]{64}$'),
   expires_at timestamptz NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  FOREIGN KEY(tenant_id,job_id) REFERENCES jobs(tenant_id,id)
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX job_artifacts_one_kind_per_job
   ON job_artifacts(tenant_id,job_id,kind);
