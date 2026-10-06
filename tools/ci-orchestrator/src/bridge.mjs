@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -59,15 +59,24 @@ export function createSpool(root) {
         if (error?.code !== "ENOENT") throw error;
       }
     }
-    const temp = join(pending, `.${key}.${process.pid}.tmp`);
-    await writeFile(temp, JSON.stringify(event) + "\n", { flag: "wx", mode: 0o600 });
+    const temp = join(
+      pending,
+      `.${key}.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+    await writeFile(temp, JSON.stringify(event) + "\n", {
+      flag: "wx",
+      mode: 0o600,
+    });
     try {
-      await rename(temp, queued);
+      // link(2) fails with EEXIST instead of replacing another concurrent
+      // delivery claim; the final name therefore acts as an atomic spool key.
+      await link(temp, queued);
     } catch (error) {
-      await rm(temp, { force: true });
       if (error?.code === "EEXIST")
         return { accepted: false, duplicate: true, key };
       throw error;
+    } finally {
+      await rm(temp, { force: true });
     }
     return { accepted: true, duplicate: false, key };
   }
