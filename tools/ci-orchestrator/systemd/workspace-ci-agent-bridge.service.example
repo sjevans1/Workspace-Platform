@@ -1,0 +1,18 @@
+[Unit]
+Description=Workspace CI Hermes agent bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Workspace-Platform
+EnvironmentFile=%h/.config/workspace-ci-orchestrator/bridge.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node %h/Workspace-Platform/tools/ci-orchestrator/src/bridge.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
