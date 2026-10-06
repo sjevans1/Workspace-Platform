@@ -24,6 +24,34 @@ test.beforeEach(async ({ request }) => {
   }
 });
 
+async function ensurePrincipalReadBudget(
+  page: Page,
+  minimum = 160,
+) {
+  // Authenticated GETs are limited by tenant+principal, not by the shared
+  // Caddy/IP bucket checked in beforeEach. The owner session is intentionally
+  // reused across this long sequential suite, so heavy multi-principal tests
+  // must wait for that real principal budget rather than misreading a 429 as
+  // missing collaboration state.
+  for (let attempt = 0; attempt < 26; attempt++) {
+    const response = await page.request.get("/api/v1/me");
+    const raw = response.headers()["x-ratelimit-remaining"];
+    const remaining = raw === undefined ? NaN : Number(raw);
+    if (response.ok() && Number.isFinite(remaining) && remaining >= minimum)
+      return;
+    if (attempt === 25) {
+      throw new Error(
+        `Authenticated principal rate-limit budget did not replenish; status=${response.status()} remaining=${raw ?? "missing"}`,
+      );
+    }
+    const retryAfter = Number(response.headers()["retry-after"]);
+    const delay = Number.isFinite(retryAfter) && retryAfter >= 0
+      ? Math.min(60, retryAfter + 1)
+      : 5;
+    await page.waitForTimeout(delay * 1000);
+  }
+}
+
 async function login(page: Page, reuseSession = true) {
   if (reuseSession && cachedAuthCookies.length)
     await page.context().addCookies(cachedAuthCookies);
@@ -2976,7 +3004,10 @@ test("W10c4d distinct principals merge same quote and honor live ACL changes",as
 test("W10c4e structural move/delete and peer edit converge with scoped history", async ({page,browser})=>{
   test.setTimeout(180000);
   await login(page);
-  const me=await (await page.request.get("/api/v1/me")).json();
+  await ensurePrincipalReadBudget(page);
+  const meResponse=await page.request.get("/api/v1/me");
+  expect(meResponse.ok(),await meResponse.text()).toBeTruthy();
+  const me=await meResponse.json();
   const headers={"X-CSRF-Token":me.csrf};
   const roots=await (await page.request.get("/api/v1/resources")).json();
   const spaceRes=await page.request.post("/api/v1/resources",{
@@ -3341,7 +3372,10 @@ test("W11b browser: anchored comment, orphan badge and preserved stale draft", a
 test("W11d browser: two principals reply, resolve and revoke thread access",async ({page,browser})=>{
   test.setTimeout(180000);
   await login(page);
-  const owner=await (await page.request.get("/api/v1/me")).json();
+  await ensurePrincipalReadBudget(page);
+  const ownerResponse=await page.request.get("/api/v1/me");
+  expect(ownerResponse.ok(),await ownerResponse.text()).toBeTruthy();
+  const owner=await ownerResponse.json();
   const ownerHeaders={"X-CSRF-Token":owner.csrf};
   const invitation=await page.request.post("/api/v1/members/invite",{
     headers:ownerHeaders,
@@ -3380,7 +3414,9 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
       .fill("W11D_ROOT_KEEP_EXACT");
     await ownerDialog.getByRole("button",{name:"Post comment"}).click();
     await expect(ownerDialog).toContainText("W11D_ROOT_KEEP_EXACT");
-    const rootList=await (await page.request.get(commentsApi)).json();
+    const rootListResponse=await page.request.get(commentsApi);
+    expect(rootListResponse.ok(),await rootListResponse.text()).toBeTruthy();
+    const rootList=await rootListResponse.json();
     const root=rootList.find((c:any)=>c.body==="W11D_ROOT_KEEP_EXACT");
     expect(root?.id).toBeTruthy();
     await ownerDialog.getByRole("button",{name:"Close dialog"}).click();
@@ -3393,7 +3429,9 @@ test("W11d browser: two principals reply, resolve and revoke thread access",asyn
       .fill("W11D_PEER_REPLY_KEEP_EXACT");
     await peerDialog.getByRole("button",{name:"Post reply"}).click();
     await expect(peerDialog).toContainText("W11D_PEER_REPLY_KEEP_EXACT");
-    const list=await (await page.request.get(commentsApi)).json();
+    const listResponse=await page.request.get(commentsApi);
+    expect(listResponse.ok(),await listResponse.text()).toBeTruthy();
+    const list=await listResponse.json();
     const reply=list.find((c:any)=>c.body==="W11D_PEER_REPLY_KEEP_EXACT");
     expect(reply?.parent_comment_id).toBe(root.id);
     await expect(peerDialog.locator('[data-parent-comment-id="'+root.id+'"]'))
