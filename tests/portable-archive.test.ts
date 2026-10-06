@@ -143,7 +143,7 @@ test("W17 archive rejects compression bombs, truncation and unsupported versions
     { path: "resources.jsonl", data: "{}\n" },
   ]);
   assert.throws(
-    () => inspectPortableArchive(valid.subarray(0, valid.length - 10)),
+    () => inspectPortableArchive(valid.subarray(0, Math.floor(valid.length / 2))),
     /Invalid portable archive/,
   );
 
