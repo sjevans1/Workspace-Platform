@@ -746,26 +746,56 @@ function Dashboard({
 }
 function SearchDialog({ close }: { close: () => void }) {
   const [q, setQ] = useState(""),
+    [kind, setKind] = useState("all"),
     [items, setItems] = useState<any[]>([]),
-    [active, setActive] = useState(0);
+    [active, setActive] = useState(0),
+    [cursor, setCursor] = useState<string | null>(null),
+    [hasMore, setHasMore] = useState(false),
+    [loading, setLoading] = useState(false);
+  async function fetchPage(next: string | null, append: boolean) {
+    const params = new URLSearchParams({ q, kind, limit: "20" });
+    if (next) params.set("cursor", next);
+    setLoading(true);
+    try {
+      const result = await api("/search?" + params.toString());
+      setItems((previous) => append ? [...previous, ...result.items] : result.items);
+      setCursor(result.next_cursor);
+      setHasMore(result.has_more);
+      if (!append) setActive(0);
+    } finally {
+      setLoading(false);
+    }
+  }
   useEffect(() => {
-    const c = new AbortController();
-    const t = setTimeout(
-      () =>
-        run(async () => {
-          const v = await api("/search?q=" + encodeURIComponent(q));
-          if (!c.signal.aborted) {
-            setItems(v);
-            setActive(0);
-          }
-        }),
-      200,
-    );
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (!q.trim()) {
+        setItems([]);
+        setCursor(null);
+        setHasMore(false);
+        setActive(0);
+        return;
+      }
+      setLoading(true);
+      const params = new URLSearchParams({ q, kind, limit: "20" });
+      run(async () => {
+        try {
+          const result = await api("/search?" + params.toString());
+          if (cancelled) return;
+          setItems(result.items);
+          setCursor(result.next_cursor);
+          setHasMore(result.has_more);
+          setActive(0);
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      });
+    }, 200);
     return () => {
+      cancelled = true;
       clearTimeout(t);
-      c.abort();
     };
-  }, [q]);
+  }, [q, kind]);
   const openResult = (item: any) => {
     go(item.resource_id || item.id);
     close();
@@ -786,11 +816,13 @@ function SearchDialog({ close }: { close: () => void }) {
             items[active] ? "workspace-search-option-" + active : undefined
           }
           aria-describedby="workspace-search-help"
-          placeholder="Find pages, projects, or files…"
+          placeholder="Find pages, records, databases, or files…"
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
             setItems([]);
+            setCursor(null);
+            setHasMore(false);
             setActive(0);
           }}
           onKeyDown={(e) => {
@@ -807,6 +839,26 @@ function SearchDialog({ close }: { close: () => void }) {
           }}
         />
       </div>
+      <label className="field">
+        <span>Result type</span>
+        <select
+          aria-label="Search result type"
+          value={kind}
+          onChange={(e) => {
+            setKind(e.target.value);
+            setItems([]);
+            setCursor(null);
+            setHasMore(false);
+            setActive(0);
+          }}
+        >
+          <option value="all">All accessible content</option>
+          <option value="page">Pages</option>
+          <option value="record">Records</option>
+          <option value="database">Databases</option>
+          <option value="file">Files</option>
+        </select>
+      </label>
       <div
         className="search-results"
         role="listbox"
@@ -818,7 +870,7 @@ function SearchDialog({ close }: { close: () => void }) {
             role="option"
             id={"workspace-search-option-" + index}
             aria-selected={index === active}
-            key={n.id}
+            key={n.kind + ":" + n.id}
             onMouseEnter={() => setActive(index)}
             onClick={() => openResult(n)}
           >
@@ -830,11 +882,21 @@ function SearchDialog({ close }: { close: () => void }) {
             <ArrowUpRight size={16} aria-hidden="true" />
           </button>
         ))}
-        {q && !items.length && <Empty title="No matching pages" />}
+        {q && !loading && !items.length && <Empty title="No matching content" />}
       </div>
+      {hasMore && cursor && (
+        <button
+          type="button"
+          className="button"
+          disabled={loading}
+          onClick={() => void fetchPage(cursor, true)}
+        >
+          {loading ? "Loading…" : "Load more results"}
+        </button>
+      )}
       <div className="modal-foot muted" id="workspace-search-help">
-        Use <kbd>↑</kbd> <kbd>↓</kbd> to select and <kbd>Enter</kbd> to open. Search
-        only includes content you can access. <kbd>Esc</kbd> closes.
+        Use <kbd>↑</kbd> <kbd>↓</kbd> to select and <kbd>Enter</kbd> to open.
+        Search only returns content you can access. <kbd>Esc</kbd> closes.
       </div>
     </Modal>
   );

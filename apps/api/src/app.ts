@@ -7,7 +7,7 @@ import { normalizedNetworkIdentity } from "../../../packages/security/rate-netwo
 import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
 import Redis from "ioredis";
-import { createHash, randomUUID } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, randomUUID } from "node:crypto";
 import * as Y from "yjs";
 import { z } from "zod";
 import { integrationOpenApi } from "../../../packages/contracts/openapi.ts";
@@ -143,6 +143,85 @@ const pageScope = (k: string, w = false) =>
     : ["workspace", "space"].includes(k)
       ? "workspace"
       : "pages") + (w ? ".write" : ".read");
+
+const searchCursorSchema = z.object({
+  v: z.literal(1),
+  tenant: z.uuid(),
+  principal: z.uuid(),
+  role: z.enum(["owner", "admin", "member", "guest"]),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  limit: z.number().int().min(1).max(50),
+  rank: z.number().finite().nonnegative(),
+  updated_us: z.string().regex(/^[0-9]{1,20}$/),
+  after: z.uuid(),
+  issued: z.number().int().nonnegative(),
+  expires: z.number().int().positive(),
+}).strict();
+type SearchCursor = z.infer<typeof searchCursorSchema>;
+const searchCursorLifetime = 1800;
+function searchCursorKey() {
+  const raw = process.env.ENCRYPTION_KEY || "";
+  if (!/^[a-f0-9]{64}$/i.test(raw))
+    throw new Error("ENCRYPTION_KEY must be configured");
+  return Buffer.from(hkdfSync(
+    "sha256", Buffer.from(raw, "hex"), Buffer.from("openjm-workspace"),
+    Buffer.from("workspace-search-cursor-v1"), 32,
+  ));
+}
+function encodeSearchCursor(value: SearchCursor) {
+  const state = searchCursorSchema.parse(value);
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", searchCursorKey(), nonce);
+  cipher.setAAD(Buffer.from("openjm-workspace-search-cursor-v1"));
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(state), "utf8"), cipher.final(),
+  ]);
+  return "search-v1." + Buffer.concat([
+    nonce, cipher.getAuthTag(), encrypted,
+  ]).toString("base64url");
+}
+function decodeSearchCursor(
+  token: string,
+  context: {
+    tenant: string;
+    principal: string;
+    role: SearchCursor["role"];
+    fingerprint: string;
+    limit: number;
+  },
+  now = Math.floor(Date.now() / 1000),
+) {
+  try {
+    if (typeof token !== "string" || token.length < 50 ||
+        token.length > 2048 || !token.startsWith("search-v1."))
+      throw new Error("Invalid cursor");
+    const encoded = token.slice("search-v1.".length);
+    if (!/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error("Invalid cursor");
+    const bytes = Buffer.from(encoded, "base64url");
+    if (bytes.length < 29 || bytes.length > 1024 ||
+        bytes.toString("base64url") !== encoded)
+      throw new Error("Invalid cursor");
+    const decipher = createDecipheriv(
+      "aes-256-gcm", searchCursorKey(), bytes.subarray(0, 12),
+    );
+    decipher.setAAD(Buffer.from("openjm-workspace-search-cursor-v1"));
+    decipher.setAuthTag(bytes.subarray(12, 28));
+    const state = searchCursorSchema.parse(JSON.parse(Buffer.concat([
+      decipher.update(bytes.subarray(28)), decipher.final(),
+    ]).toString("utf8")));
+    if (state.tenant !== context.tenant ||
+        state.principal !== context.principal ||
+        state.role !== context.role ||
+        state.fingerprint !== context.fingerprint ||
+        state.limit !== context.limit ||
+        state.issued > now + 30 || state.expires <= now ||
+        state.expires - state.issued !== searchCursorLifetime)
+      throw new Error("Wrong search cursor scope");
+    return state;
+  } catch {
+    throw new HttpError(400, "Invalid search cursor");
+  }
+}
 
 async function backlinkPage(
   q: Query,
@@ -1626,29 +1705,110 @@ export async function buildApp(
   route(
     "GET",
     "/search",
-    "Permission-filtered full-text and file metadata search",
+    "Ranked, permission-safe workspace search",
     async (q, a, r) => {
-      const term = (query(r).q || "").trim().slice(0, 200);
-      if (!term) return [];
+      const p = query(r),
+        term = (p.q || "").trim().slice(0, 200),
+        filter = String(p.kind || "all");
+      assert(["all", "page", "record", "database", "file"].includes(filter),
+        400, "Unsupported search kind");
+      const size = p.limit === undefined ? 20 : Number(p.limit);
+      assert(Number.isSafeInteger(size) && size >= 1 && size <= 50, 400,
+        "Search page limit must be an integer from 1 to 50");
+      if (!term)
+        return { items: [], next_cursor: null, has_more: false };
+
+      const resourceKinds = filter === "all"
+        ? ["space", "page", "database", "record"]
+        : filter === "file" ? [] : [filter];
+      const scopedKinds = resourceKinds.filter((kind) =>
+        !a.scopes || a.scopes.includes(pageScope(kind)));
+      const includeFiles = (filter === "all" || filter === "file") &&
+        (!a.scopes || a.scopes.includes("files.read"));
+      const fingerprint = createHash("sha256").update(JSON.stringify({
+        term, filter, kinds: scopedKinds, files: includeFiles,
+        scopes: [...(a.scopes || [])].sort(),
+      })).digest("hex");
+      const state = p.cursor === undefined ? null : decodeSearchCursor(
+        String(p.cursor), {
+          tenant: a.tenant_id,
+          principal: a.user_id,
+          role: a.role,
+          fingerprint,
+          limit: size,
+        },
+      );
       const escaped = `%${term.replace(/[\\%_]/g, "\\$&")}%`;
-      const rows = (
-        await q.query(
-          "SELECT id,title,kind,left(search_text,240) snippet,parent_id,updated_at FROM resources WHERE deleted_at IS NULL AND(to_tsvector('simple',title||' '||search_text)@@websearch_to_tsquery('simple',$1) OR title ILIKE $2 ESCAPE '\\') ORDER BY updated_at DESC LIMIT 300",
-          [term, escaped],
-        )
-      ).rows;
-      const result = (await visible(q, a, rows))
-        .filter((n) => !a.scopes || a.scopes.includes(pageScope(n.kind)))
-        .slice(0, 50);
-      if (!a.scopes || a.scopes.includes("files.read"))
-        for (const f of (
-          await q.query(
-            "SELECT id,resource_id,name title,'file' kind,created_at updated_at FROM files WHERE deleted_at IS NULL AND name ILIKE $1 ESCAPE '\\' LIMIT 100",
-            [escaped],
-          )
-        ).rows)
-          if (await access(q, a, f.resource_id)) result.push(f);
-      return result.slice(0, 60);
+      const binds: any[] = [
+        term, escaped, scopedKinds, a.user_id, a.role, includeFiles,
+      ];
+      let continuation = "";
+      if (state) {
+        binds.push(state.rank, state.updated_us, state.after);
+        continuation =
+          " AND (rank,updated_at,id)<($" + (binds.length - 2) +
+          "::double precision,to_timestamp($" + (binds.length - 1) +
+          "::bigint/1000000.0),$" + binds.length + "::uuid)";
+      }
+      binds.push(size + 1);
+      const rows = (await q.query(
+        "WITH candidates AS MATERIALIZED (" +
+        " SELECT r.id,r.id resource_id,r.title,r.kind,r.updated_at," +
+        " CASE WHEN r.search_text='' THEN '' ELSE left(r.search_text,240) END snippet," +
+        " round((CASE WHEN lower(r.title)=lower($1) THEN 3.0" +
+        " WHEN r.title ILIKE $2 ESCAPE '\\' THEN 2.0 ELSE 0.0 END +" +
+        " ts_rank_cd(to_tsvector('simple',r.title||' '||r.search_text)," +
+        " websearch_to_tsquery('simple',$1)))::numeric,6)::double precision rank" +
+        " FROM resources r WHERE cardinality($3::text[])>0" +
+        " AND r.kind=ANY($3::text[]) AND r.deleted_at IS NULL" +
+        " AND (to_tsvector('simple',r.title||' '||r.search_text)" +
+        " @@websearch_to_tsquery('simple',$1) OR r.title ILIKE $2 ESCAPE '\\')" +
+        " UNION ALL" +
+        " SELECT f.id,f.resource_id,f.name,'file',f.created_at,'' snippet," +
+        " (CASE WHEN lower(f.name)=lower($1) THEN 3.0 ELSE 2.0 END)::double precision rank" +
+        " FROM files f WHERE $6::boolean AND f.deleted_at IS NULL" +
+        " AND f.name ILIKE $2 ESCAPE '\\'" +
+        " AND workspace_can_read_resource(f.resource_id,$4::uuid,$5::text)" +
+        ")" +
+        " SELECT id,resource_id,title,kind,snippet,updated_at,rank," +
+        " ((extract(epoch from updated_at)*1000000)::bigint)::text updated_us" +
+        // Text filtering runs first inside the materialized candidates step
+        // so the GIN text index bounds the row set; the per-row ACL
+        // predicate then applies only to text-matched candidates. Files are
+        // ACL-checked inside their branch (their permission anchors on
+        // resource_id, not the file id).
+        " FROM candidates WHERE kind='file'" +
+        " OR workspace_can_read_resource(id,$4::uuid,$5::text)" + continuation +
+        " ORDER BY rank DESC,updated_at DESC,id DESC LIMIT $" + binds.length,
+        binds,
+      )).rows;
+      const items = rows.slice(0, size).map((row: any) => ({
+        id: row.id,
+        resource_id: row.resource_id,
+        title: row.title,
+        kind: row.kind,
+        snippet: row.snippet,
+        updated_at: row.updated_at,
+      }));
+      const hasMore = rows.length > size;
+      const tail = rows[size - 1];
+      const now = Math.floor(Date.now() / 1000);
+      const nextCursor = hasMore && tail ? encodeSearchCursor(
+        searchCursorSchema.parse({
+          v: 1,
+          tenant: a.tenant_id,
+          principal: a.user_id,
+          role: a.role,
+          fingerprint,
+          limit: size,
+          rank: Number(tail.rank),
+          updated_us: String(tail.updated_us),
+          after: tail.id,
+          issued: now,
+          expires: now + searchCursorLifetime,
+        }),
+      ) : null;
+      return { items, next_cursor: nextCursor, has_more: hasMore };
     },
   );
   route(

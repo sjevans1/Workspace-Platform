@@ -54,8 +54,8 @@ function Body({
     if (!query) return setSuggestions([]);
     setSearching(true);
     try {
-      const results = await api("/search?q=" + encodeURIComponent(query));
-      setSuggestions(results.filter((entry: any) =>
+      const result = await api("/search?q=" + encodeURIComponent(query));
+      setSuggestions(result.items.filter((entry: any) =>
         ["page", "record"].includes(entry.kind) && entry.id !== id,
       ).slice(0, 20));
     } catch (error) {
