@@ -39,6 +39,7 @@ export function createSpool(root, options = {}) {
   const done = join(root, "done");
   const failed = join(root, "failed");
   const retries = join(root, "retries");
+  const superseded = join(root, "superseded");
   const retryBaseMs = options.retryBaseMs ?? 5_000;
   const retryMaxMs = options.retryMaxMs ?? 300_000;
   const maxAttempts = options.maxAttempts ?? 10;
@@ -71,6 +72,7 @@ export function createSpool(root, options = {}) {
       mkdir(done, { recursive: true }),
       mkdir(failed, { recursive: true }),
       mkdir(retries, { recursive: true }),
+      mkdir(superseded, { recursive: true }),
     ]);
     await syncPath(root);
   }
@@ -95,7 +97,7 @@ export function createSpool(root, options = {}) {
       await syncPath(running);
     }
 
-    for (const stateDir of [pending, running, done, failed]) {
+    for (const stateDir of [pending, running, done, failed, superseded]) {
       const legacy = (await readdir(stateDir))
         .filter((name) => name.endsWith(".json"))
         .sort();
@@ -113,7 +115,7 @@ export function createSpool(root, options = {}) {
       .filter((name) => name.endsWith(".json"))
       .sort();
     for (const name of claimed) {
-      const locations = [pending, running, done, failed].map((dir) => join(dir, name));
+      const locations = [pending, running, done, failed, superseded].map((dir) => join(dir, name));
       if ((await Promise.all(locations.map(exists))).some(Boolean)) continue;
       await link(join(claims, name), join(pending, name));
       await syncPath(pending);
@@ -160,12 +162,68 @@ export function createSpool(root, options = {}) {
     await syncPath(retries);
   }
 
-  async function claimNext() {
-    await init();
+  async function pendingEntries() {
     const files = (await readdir(pending))
       .filter((name) => name.endsWith(".json"))
       .sort();
+    const entries = [];
     for (const name of files) {
+      try {
+        const event = JSON.parse(await readFile(join(pending, name), "utf8"));
+        entries.push({ name, event });
+      } catch {
+        // A partially written or unreadable pending file is left untouched.
+      }
+    }
+    return entries;
+  }
+
+  function supersedeKey(event) {
+    const workflow = event?.workflow || {};
+    return [
+      event?.repository || "",
+      workflow.head_branch || "",
+      workflow.name || workflow.path || "",
+    ].join("\u0000");
+  }
+
+  // Only the newest completion for a given repository/branch/workflow is still
+  // relevant; older queued completions are stale by definition and must not
+  // consume a run. Move them to superseded/ without deleting their claims.
+  async function supersede() {
+    await init();
+    const groups = new Map();
+    for (const entry of await pendingEntries()) {
+      const key = supersedeKey(entry.event);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(entry);
+    }
+    let moved = 0;
+    for (const entries of groups.values()) {
+      if (entries.length < 2) continue;
+      entries.sort((a, b) =>
+        String(b.event.received_at || "").localeCompare(String(a.event.received_at || "")),
+      );
+      for (const stale of entries.slice(1)) {
+        try {
+          await rename(join(pending, stale.name), join(superseded, stale.name));
+          await Promise.all([syncPath(pending), syncPath(superseded)]);
+          moved++;
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
+      }
+    }
+    return moved;
+  }
+
+  async function claimNext() {
+    await init();
+    // Newest first: the current head must be handled before stale completions.
+    const entries = (await pendingEntries()).sort((a, b) =>
+      String(b.event.received_at || "").localeCompare(String(a.event.received_at || "")),
+    );
+    for (const { name, event } of entries) {
       const state = await retryState(name);
       if (Number(state.next_attempt_at || 0) > now()) continue;
       const from = join(pending, name);
@@ -173,10 +231,7 @@ export function createSpool(root, options = {}) {
       try {
         await rename(from, to);
         await Promise.all([syncPath(pending), syncPath(running)]);
-        return {
-          name,
-          event: JSON.parse(await readFile(to, "utf8")),
-        };
+        return { name, event };
       } catch (error) {
         if (["ENOENT", "EEXIST"].includes(error?.code)) continue;
         throw error;
@@ -211,7 +266,7 @@ export function createSpool(root, options = {}) {
     return { attempts, quarantined: false };
   }
 
-  return { init, recover, put, claimNext, complete, retry };
+  return { init, recover, put, claimNext, complete, retry, supersede };
 }
 
 export function executableRunner(command, args = []) {
@@ -342,6 +397,8 @@ export async function startFromEnv(env = process.env) {
   const work = async () => {
     if (stopped) return;
     try {
+      const collapsed = await spool.supersede();
+      if (collapsed) console.log("Superseded stale queued CI events", { count: collapsed });
       while (await runOne(spool, runner)) {}
     } catch (error) {
       const status = error?.bridgeRetry;
