@@ -540,6 +540,74 @@ test("W16 touch phone and tablet complete navigation database calendar and recov
   }
 });
 
+test("W17 browser exports and re-imports a portable workspace archive", async ({ page }) => {
+  await login(page);
+  const meResponse = await page.request.get("/api/v1/me");
+  expect(meResponse.ok(), await meResponse.text()).toBeTruthy();
+  const me = await meResponse.json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const rootsResponse = await page.request.get("/api/v1/resources");
+  expect(rootsResponse.ok(), await rootsResponse.text()).toBeTruthy();
+  const roots = await rootsResponse.json();
+  const root = roots[0];
+  const stamp = randomUUID().slice(0, 8);
+  const title = "W17 browser archive " + stamp;
+
+  const sourceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "space",
+      parent_id: root.id,
+      title,
+    },
+  });
+  expect(sourceResponse.ok(), await sourceResponse.text()).toBeTruthy();
+  const source = await sourceResponse.json();
+  const childResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "page",
+      parent_id: source.id,
+      title: "Portable child " + stamp,
+    },
+  });
+  expect(childResponse.ok(), await childResponse.text()).toBeTruthy();
+
+  await page.goto("/?page=" + source.id);
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(title);
+  await page.getByRole("button", { name: "Page actions" }).click();
+
+  const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
+  await page.getByRole("button", {
+    name: "Export workspace archive",
+    exact: true,
+  }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/archive\.zip$/);
+  const archivePath = await download.path();
+  expect(archivePath).toBeTruthy();
+
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await page.getByRole("button", { name: "Import your work", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Import your work" });
+  const input = dialog.getByLabel("Markdown, CSV, or Workspace archive");
+  await input.setInputFiles(archivePath!);
+  await expect(dialog.getByText(
+    "Workspace archives preserve their original page, database, and space titles.",
+  )).toBeVisible();
+  await expect(dialog.getByLabel("Create in")).toHaveValue(root.id);
+  await dialog.getByRole("button", { name: "Import", exact: true }).click();
+
+  await expect(page.getByLabel("Page title", { exact: true }))
+    .toHaveValue(title, { timeout: 120_000 });
+  const importedId = new URL(page.url()).searchParams.get("page");
+  expect(importedId).toBeTruthy();
+  expect(importedId).not.toBe(source.id);
+  await expect(page.getByText("Portable child " + stamp, { exact: true }))
+    .toBeVisible();
+});
+
 test("admin can create and revoke a SCIM connector from Settings", async ({
   page,
 }) => {
