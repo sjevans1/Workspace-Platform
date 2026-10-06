@@ -1265,6 +1265,7 @@ export async function buildApp(
     });
     if (template?.children?.length) {
       for (const child of template.children) {
+        scope(a, pageScope(child.kind, true));
         const childTemplate = child.template ? templates[child.template] : undefined;
         assert(!childTemplate || childTemplate.kind === child.kind, 500,
           "Invalid built-in child template");
@@ -1445,6 +1446,7 @@ export async function buildApp(
     "/resources/:id/duplicate",
     "Safely duplicate a page, database or space subtree",
     async (q, a, r) => {
+      assert(!a.scopes, 403, "Human session required for subtree duplication");
       const n = await requireAccess(q, a, id(r));
       scope(a, pageScope(n.kind, true));
       const v = body(
