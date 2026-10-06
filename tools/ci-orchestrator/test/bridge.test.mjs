@@ -182,3 +182,44 @@ test("HTTP bridge authenticates, validates and durably accepts events", async (t
   );
   assert.equal(queued.delivery_id, "delivery-1");
 });
+
+function eventAt(id, receivedAt, branch = "main") {
+  const value = event(id);
+  value.received_at = receivedAt;
+  value.workflow.head_branch = branch;
+  value.workflow.name = "Workspace verification";
+  return value;
+}
+
+test("claiming prefers the newest pending completion, not the oldest", async (t) => {
+  const { root, spool } = await tempSpool();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await spool.put(eventAt("oldest", "2026-10-06T01:00:00.000Z", "branch-a"));
+  await spool.put(eventAt("middle", "2026-10-06T02:00:00.000Z", "branch-b"));
+  await spool.put(eventAt("newest", "2026-10-06T03:00:00.000Z", "branch-c"));
+  const job = await spool.claimNext();
+  assert.equal(job.event.delivery_id, "newest");
+});
+
+test("supersede collapses stale completions for the same branch", async (t) => {
+  const { root, spool } = await tempSpool();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await spool.put(eventAt("stale-old", "2026-10-06T01:00:00.000Z"));
+  await spool.put(eventAt("stale-mid", "2026-10-06T02:00:00.000Z"));
+  await spool.put(eventAt("current", "2026-10-06T03:00:00.000Z"));
+  await spool.put(eventAt("other-branch", "2026-10-06T03:30:00.000Z", "branch-z"));
+
+  assert.equal(await spool.supersede(), 2);
+
+  const listed = (dir) =>
+    import("node:fs/promises").then((fs) => fs.readdir(join(root, dir)));
+  assert.equal((await listed("superseded")).length, 2);
+  assert.equal((await listed("pending")).length, 2);
+
+  // The newest event for the shared branch and the other branch remain eligible.
+  const first = await spool.claimNext();
+  assert.equal(first.event.delivery_id, "other-branch");
+  const second = await spool.claimNext();
+  assert.equal(second.event.delivery_id, "current");
+  assert.equal(await spool.claimNext(), null);
+});
