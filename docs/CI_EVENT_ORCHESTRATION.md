@@ -151,6 +151,53 @@ For any non-success terminal conclusion:
 
 This intentionally produces a **push -> CI -> event -> focused action -> push** cycle rather than a continuously polling agent.
 
+## Local agent bridge
+
+The repository also includes `tools/ci-orchestrator/src/bridge.mjs`. This is the second hop when the coding agent runs on a host you control.
+
+The bridge:
+
+- listens on `127.0.0.1:8788` by default;
+- requires `Authorization: Bearer $CI_AGENT_BRIDGE_TOKEN`;
+- durably spools accepted events before returning HTTP 202;
+- deduplicates the GitHub delivery ID again at the bridge boundary;
+- launches one configured executable without a shell;
+- writes a JSON envelope to the child process on stdin;
+- moves successful events to `done/`;
+- returns failed launches to `pending/` so they can run again;
+- tells the agent to stop after a push and await the next CI completion event.
+
+Required bridge environment:
+
+```text
+CI_AGENT_BRIDGE_TOKEN=<independent high-entropy token>
+CI_AGENT_COMMAND=<absolute or trusted PATH executable>
+CI_AGENT_ARGS_JSON=["arg1","arg2"]
+CI_AGENT_SPOOL_DIR=.data/ci-agent-bridge
+CI_AGENT_BRIDGE_HOST=127.0.0.1
+CI_AGENT_BRIDGE_PORT=8788
+```
+
+`CI_AGENT_ARGS_JSON` is parsed as an array and passed directly to `spawn(..., { shell: false })`. Do not configure a shell command string.
+
+The configured agent executable must consume one JSON object from stdin:
+
+```json
+{
+  "version": 1,
+  "instruction": "<bounded continuation instruction>",
+  "ci_event": { "...": "normalized CI event" }
+}
+```
+
+For a local Hermes/Astra wrapper, the wrapper is responsible for converting that envelope into the agent's native invocation and for selecting the Workspace repository. The bridge intentionally does not know agent-specific CLI syntax.
+
+### Exposing a local bridge
+
+Do not bind the bridge directly to a public interface. If the agent runs on a workstation, expose `127.0.0.1:8788` through an authenticated reverse tunnel (for example Cloudflare Tunnel + Access/service-token policy) and point `AGENT_DISPATCH_URL` at that protected HTTPS endpoint. Keep the bridge bearer token even when the tunnel has its own authentication.
+
+If the agent runs on an always-on cloud host, terminate HTTPS at the platform/reverse proxy and keep the bridge itself bound to loopback.
+
 ## Testing
 
 Run:
