@@ -11,3 +11,7 @@ test-results/
 *.tsbuildinfo
 
 /apps/web/next-env.d.ts
+
+# Local CI orchestrator deployment/configuration
+tools/ci-orchestrator/wrangler.toml
+tools/ci-orchestrator/*.env
