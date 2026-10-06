@@ -51,6 +51,7 @@ import {
   visible,
   ancestry,
   directChildCanReadSql,
+  batchReadableResourceIds,
 } from "../../../packages/permissions/index.ts";
 import {
   defaultBranding,
@@ -150,12 +151,11 @@ async function backlinkPage(
   limit: number,
   after?: Pick<BacklinkPageCursor, "after_us" | "after"> | null,
 ) {
-  // Bound the target-index scan first. The hierarchy ACL function is then
-  // evaluated for at most this fixed candidate window, avoiding an N x
-  // recursive permission walk across an arbitrarily hot target. Hidden
-  // candidates never materialize titles/document bodies into application
-  // memory; canonical content remains the final disclosure authority.
-  const scanLimit = Math.min(500, Math.max(100, limit * 10));
+  // Bound the target-index scan first. Full hierarchy ACL is then evaluated
+  // once, set-wise, for at most this fixed candidate window. Hidden candidates
+  // never materialize titles/document bodies into application memory;
+  // canonical content remains the final disclosure authority.
+  const scanLimit = Math.min(10000, Math.max(500, limit * 250));
   const allowedKinds = a.scopes
     ? [
       ...(a.scopes.includes("pages.read") ? ["page"] : []),
@@ -191,24 +191,24 @@ async function backlinkPage(
   if (!bounded.length)
     return { items: [], hasMore: false, scanned: 0, after: null };
 
-  const readableRows = (await q.query(
-    "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
-    " FROM resources source" +
-    " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
-    " AND d.resource_id=source.id" +
-    " WHERE source.id=ANY($1::uuid[])" +
-    " AND source.tenant_id=$2" +
-    " AND source.deleted_at IS NULL" +
-    " AND source.kind=ANY($5::text[])" +
-    " AND workspace_can_read_resource(source.id,$3::uuid,$4::text)",
-    [
-      bounded.map((candidate: any) => candidate.id),
-      a.tenant_id,
-      a.user_id,
-      a.role,
-      allowedKinds,
-    ],
-  )).rows;
+  const readableIds = await batchReadableResourceIds(
+    q,
+    a,
+    bounded.map((candidate: any) => candidate.id),
+  );
+  const readableRows = readableIds.size
+    ? (await q.query(
+      "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
+      " FROM resources source" +
+      " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
+      " AND d.resource_id=source.id" +
+      " WHERE source.id=ANY($1::uuid[])" +
+      " AND source.tenant_id=$2" +
+      " AND source.deleted_at IS NULL" +
+      " AND source.kind=ANY($3::text[])",
+      [[...readableIds], a.tenant_id, allowedKinds],
+    )).rows
+    : [];
   const readable = new Map<string, any>(
     readableRows.map((source: any) => [source.id, source]),
   );
