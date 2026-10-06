@@ -7998,3 +7998,69 @@ test("W17 failed malware import rolls back database writes and leaves only catal
   assert.equal(retained.object_key, artifact.object_key,
     "Failed staged input remains cataloged for bounded expiry/retry evidence");
 });
+
+
+test("W17 export redacts unreadable external relation schema metadata", async () => {
+  const hiddenTarget = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: space.id,
+    title: "W17 hidden relation target",
+  });
+  const visibleSource = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: space.id,
+    title: "W17 visible relation source",
+  });
+  await ok("PATCH", `/databases/${visibleSource.id}`, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      {
+        id: "secret_relation",
+        name: "Secret relation",
+        type: "relation",
+        target_database_id: hiddenTarget.id,
+      },
+    ],
+  });
+  await permissionPatch(`/resources/${hiddenTarget.id}/permissions`, {
+    inherit: true,
+    grants: [{ principal_id: member.id, level: 0 }],
+  });
+  assert.equal(
+    (await req("GET", `/resources/${hiddenTarget.id}`, undefined, member))
+      .statusCode,
+    404,
+  );
+  assert.equal(
+    (await req("GET", `/resources/${visibleSource.id}`, undefined, member))
+      .statusCode,
+    200,
+  );
+
+  const exported = await req(
+    "GET",
+    `/resources/${visibleSource.id}/export/archive`,
+    undefined,
+    member,
+  );
+  assert.equal(exported.statusCode, 200, exported.body);
+  const inspected = inspectPortableArchive(
+    exported.rawPayload as Buffer,
+    { collect: true },
+  );
+  const schema = JSON.parse(String(
+    inspected.entries.get(`databases/${visibleSource.id}.json`),
+  ));
+  assert.ok(
+    !schema.properties.some((property: any) =>
+      property.id === "secret_relation"),
+    "Unreadable relation targets remove the relation property from portable schema",
+  );
+  for (const [entryPath, bytes] of inspected.entries)
+    if (entryPath.endsWith(".json"))
+      assert.doesNotMatch(
+        bytes.toString("utf8"),
+        new RegExp(hiddenTarget.id),
+        "Hidden relation target UUID must not leak into archive metadata",
+      );
+});
