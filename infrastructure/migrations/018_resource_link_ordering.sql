@@ -12,6 +12,11 @@ ALTER TABLE resource_links
   ALTER COLUMN source_updated_at SET NOT NULL,
   ALTER COLUMN source_updated_at SET DEFAULT now();
 
+-- The trigger below runs as the NOBYPASSRLS application role. Preserve
+-- least privilege: runtime may update only the ordering snapshot column,
+-- never the graph identity (tenant/source/target) through UPDATE.
+GRANT UPDATE(source_updated_at) ON resource_links TO workspace_app;
+
 CREATE INDEX resource_links_target_updated
   ON resource_links(tenant_id,target_id,source_updated_at DESC,source_id DESC);
 
