@@ -381,6 +381,34 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   expect(errors).toEqual([]);
 });
 
+test("W15 project-space template creates guided starter content", async ({ page }) => {
+  await login(page);
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Start with a little structure." }),
+  ).toBeVisible();
+
+  const projectSpace = page.locator(".template-card").filter({
+    has: page.getByRole("heading", { name: "Project space", exact: true }),
+  });
+  await expect(projectSpace).toContainText(
+    "A ready-made home for a project, decisions and delivery.",
+  );
+  await projectSpace.click();
+
+  const dialog = page.getByRole("dialog", { name: "Create something new" });
+  await expect(dialog.getByLabel("Type")).toHaveValue("space");
+  await expect(dialog.getByLabel("Name", { exact: true }))
+    .toHaveValue("Project space");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+
+  await expect(page.getByLabel("Page title", { exact: true }))
+    .toHaveValue("Project space");
+  await expect(page.getByText("Project plan", { exact: true })).toBeVisible();
+  await expect(page.getByText("Tasks", { exact: true })).toBeVisible();
+  await expect(page.getByText("Decision log", { exact: true })).toBeVisible();
+});
+
 test("admin can create and revoke a SCIM connector from Settings", async ({
   page,
 }) => {
