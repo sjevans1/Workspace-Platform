@@ -31,6 +31,7 @@ ALTER TABLE object_deletions
     'resource_purge',
     'file_retention',
     'upload_rollback',
+    'storage_encryption_migration',
     'job_artifact_expired',
     'job_input_consumed'
   ));
