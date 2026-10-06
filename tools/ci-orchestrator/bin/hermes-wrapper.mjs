@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const MAX_ENVELOPE_BYTES = 1_000_000;
 const EXPECTED_REPOSITORY = "sjevans1/Workspace-Platform";
@@ -88,12 +91,134 @@ function verifiedRepository() {
   ) {
     fail("repository origin is not sjevans1/Workspace-Platform");
   }
+  const branch = spawnSync("git", ["-C", repository, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+    encoding: "utf8",
+  });
+  const expectedBranch = (process.env.CI_AGENT_CANONICAL_BRANCH || "main").trim();
+  if (branch.status !== 0 || branch.stdout.trim() !== expectedBranch)
+    fail(`deployment checkout must stay on canonical branch ${expectedBranch}`);
+
   return repository;
+}
+
+function worktreeRoot() {
+  return resolve(
+    process.env.CI_AGENT_WORKTREE_ROOT ||
+      join(tmpdir(), "workspace-ci-agent-worktrees"),
+  );
+}
+
+function pathWithin(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+async function acquireWorktreeLease(root) {
+  await mkdir(root, { recursive: true });
+  const path = join(root, ".wrapper.lock");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const handle = await open(path, "wx", 0o600);
+      await handle.writeFile(String(process.pid) + "\n");
+      await handle.sync();
+      await handle.close();
+      return async () => {
+        await rm(path, { force: true });
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const owner = Number((await readFile(path, "utf8").catch(() => "")).trim());
+      if (Number.isInteger(owner) && owner > 0) {
+        try {
+          process.kill(owner, 0);
+          throw new Error(`another Hermes wrapper is active with pid ${owner}`);
+        } catch (probe) {
+          if (probe?.code !== "ESRCH") throw probe;
+        }
+      }
+      await rm(path, { force: true });
+    }
+  }
+  throw new Error("could not acquire Hermes worktree lease");
+}
+
+async function removeWorktree(repository, path) {
+  const removed = spawnSync(
+    "git",
+    ["-C", repository, "worktree", "remove", "--force", path],
+    { encoding: "utf8" },
+  );
+  if (removed.status !== 0) {
+    // If git no longer knows about it, filesystem cleanup is still safe
+    // because paths are constrained beneath CI_AGENT_WORKTREE_ROOT.
+    const stderr = removed.stderr || "";
+    if (!/not a working tree|is not a working tree|does not exist/i.test(stderr))
+      throw new Error(`could not remove agent worktree: ${stderr.trim()}`);
+  }
+  await rm(path, { recursive: true, force: true });
+}
+
+async function recoverScratchWorktrees(repository, root) {
+  await mkdir(root, { recursive: true });
+  const listed = spawnSync(
+    "git",
+    ["-C", repository, "worktree", "list", "--porcelain"],
+    { encoding: "utf8" },
+  );
+  if (listed.status !== 0)
+    throw new Error(`could not list agent worktrees: ${listed.stderr.trim()}`);
+
+  const paths = listed.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => resolve(line.slice("worktree ".length).trim()))
+    .filter((path) => path !== repository && pathWithin(root, path));
+
+  for (const path of paths) await removeWorktree(repository, path);
+
+  const pruned = spawnSync("git", ["-C", repository, "worktree", "prune"], {
+    encoding: "utf8",
+  });
+  if (pruned.status !== 0)
+    throw new Error(`could not prune agent worktrees: ${pruned.stderr.trim()}`);
+}
+
+async function createScratchWorktree(repository, deliveryId) {
+  const root = worktreeRoot();
+  const release = await acquireWorktreeLease(root);
+  try {
+    await recoverScratchWorktrees(repository, root);
+    const safeId = String(deliveryId).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
+    const path = join(root, `${safeId || "event"}-${randomUUID()}`);
+    const added = spawnSync(
+      "git",
+      ["-C", repository, "worktree", "add", "--detach", path, "HEAD"],
+      { encoding: "utf8" },
+    );
+    if (added.status !== 0)
+      throw new Error(`could not create agent worktree: ${added.stderr.trim()}`);
+    return { path, release };
+  } catch (error) {
+    await release();
+    throw error;
+  }
 }
 
 async function main() {
   const envelope = await readEnvelope();
   const repository = verifiedRepository();
+  let worktree;
+  let releaseWorktreeLease;
+  try {
+    const scratch = await createScratchWorktree(
+      repository,
+      envelope.ci_event.delivery_id,
+    );
+    worktree = scratch.path;
+    releaseWorktreeLease = scratch.release;
+  } catch (error) {
+    fail(error.message);
+  }
   const prompt = [
     envelope.instruction.trim(),
     "",
@@ -107,7 +232,7 @@ async function main() {
     "--oneshot",
     "-Q",
     "--source", "tool",
-    "--in", repository,
+    "--in", worktree,
     "--run-budget", process.env.CI_HERMES_RUN_BUDGET_SECONDS || "1800",
     ...modelSelection(),
     "--yolo",
@@ -115,7 +240,7 @@ async function main() {
 
   const code = await new Promise((resolveExit, reject) => {
     const child = spawn(command, args, {
-      cwd: repository,
+      cwd: worktree,
       shell: false,
       stdio: ["pipe", "inherit", "inherit"],
       env: agentEnvironment(),
@@ -131,7 +256,17 @@ async function main() {
     return 1;
   });
 
-  process.exitCode = code;
+  let cleanupFailed = false;
+  try {
+    await removeWorktree(repository, worktree);
+  } catch (error) {
+    cleanupFailed = true;
+    process.stderr.write(`Hermes wrapper: cleanup failed: ${error.message}\n`);
+  } finally {
+    await releaseWorktreeLease();
+  }
+
+  process.exitCode = cleanupFailed ? 1 : code;
 }
 
 await main();
