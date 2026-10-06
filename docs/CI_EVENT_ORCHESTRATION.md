@@ -115,13 +115,20 @@ Values are not stored in this repository. The host keeps secret files with mode 
 
 The bridge host currently has no Cloudflare-managed DNS zone. Cloudflare Access and a stable named public hostname therefore cannot be attached yet. The deployed bridge route uses a supervised Cloudflare Quick Tunnel with HTTPS transport, keeps the origin bound to loopback, and still requires the independent bridge bearer token. `run-quick-tunnel.mjs` updates `AGENT_DISPATCH_URL` and redeploys the Worker whenever a Quick Tunnel restart assigns a new hostname. Move this deployment to a named tunnel plus Access service-token policy when a managed zone is available. Do not remove the bridge bearer token after that migration.
 
+## Trust boundaries
+
+- **Fork pull requests fail closed.** `shouldProcessWorkflow` rejects any `workflow_run` whose `head_repository.full_name` is not the allowed repository, and rejects `pull_request` events with no `head_repository`. A fork PR can therefore never launch the privileged autonomous agent.
+- **Only signed, allowlisted events enqueue.** The webhook requires a valid HMAC signature and matches the allowed repository plus workflow name/path before any D1 write or queue send.
+- **Two independent layers protect the bridge.** The public route is an HTTPS Quick Tunnel (Cloudflare edge) in front of a loopback-only origin, and the bridge itself requires `Authorization: Bearer CI_AGENT_BRIDGE_TOKEN`.
+- **Bridge secrets never reach the agent.** The Hermes wrapper strips `CI_AGENT_BRIDGE_TOKEN`, `AGENT_DISPATCH_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `CLOUDFLARE_API_TOKEN`, and `CF_API_TOKEN` from the environment it passes to Hermes, while leaving the agent's own provider/config variables intact.
+
 ## Deployment
 
 From `tools/ci-orchestrator`:
 
 1. Copy `wrangler.toml.example` to `wrangler.toml`.
 2. Create the D1 database and replace `<replace-with-d1-database-id>`.
-3. Apply `migrations/0001_github_deliveries.sql`.
+3. Apply the migrations in order: `migrations/0001_github_deliveries.sql` then `migrations/0002_delivery_queue_state.sql`.
 4. Create `workspace-ci-events` and `workspace-ci-events-dlq`.
 5. Set Worker secrets:
    - `GITHUB_WEBHOOK_SECRET`
@@ -308,14 +315,15 @@ The tests cover:
 
 - valid signed completion,
 - signature tampering,
-- duplicate delivery suppression,
+- duplicate delivery suppression and unqueued-claim recovery,
+- fork pull request rejection,
 - repository/workflow filtering,
 - success/failure normalization,
 - authenticated downstream dispatch,
 - retry on downstream failure,
 - atomic concurrent bridge dedupe, fsynced claims and startup recovery,
 - agent-failure backoff, non-starvation and quarantine,
-- Hermes wrapper origin validation and exit-code propagation,
+- Hermes wrapper origin validation, secret stripping and exit-code propagation,
 - safe Quick Tunnel URL parsing, pinned Wrangler and supervisor exit behavior.
 
 The root GitHub Actions backend job runs this test suite independently from product tests.
@@ -338,7 +346,7 @@ The initial live acceptance used stale SHA `000000000000000000000000000000000000
 ## Failure and recovery
 
 - **Receiver unavailable:** GitHub records a failed webhook delivery. Restore the Worker and redeliver from repository webhook deliveries.
-- **Duplicate/redelivery:** D1 delivery ID makes normal replay idempotent.
+- **Duplicate/redelivery:** `github_deliveries.queued_at` is the durable ledger. A row with `queued_at` set is a true duplicate and is acknowledged without re-enqueueing; a row without `queued_at` means a prior attempt failed after the D1 write, so the redelivery re-enqueues instead of losing the event. There is no best-effort DELETE.
 - **Agent bridge unavailable:** Queue delivery fails and retries. After `max_retries`, the normalized event moves to `workspace-ci-events-dlq`; it is not silently discarded.
 - **Agent command fails:** `runOne` moves the event from `running/` back to `pending/` with a persisted exponential backoff. Other eligible events continue. After 10 failed launches, the state link moves to `failed/` for operator recovery while its immutable claim remains. An unexpected bridge-process exit leaves the event in `running/`; startup recovery returns it to `pending/` before the next launch. To redrive a quarantined event, stop the bridge, inspect only its operational metadata and root cause, move its `failed/<key>.json` link to `pending/<key>.json`, remove `retries/<key>.json`, then restart the bridge. Never delete `claims/<key>.json`.
 - **Quick Tunnel restarts:** the tunnel supervisor obtains a new HTTPS hostname, health-checks it, updates `AGENT_DISPATCH_URL`, deploys the Worker, and writes the current URL file.

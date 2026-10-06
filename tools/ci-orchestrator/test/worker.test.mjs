@@ -41,6 +41,7 @@ function payload(overrides = {}) {
       conclusion: "failure",
       head_sha: "a".repeat(40),
       head_branch: "feature/example",
+      head_repository: { full_name: "sjevans1/Workspace-Platform" },
       html_url: "https://github.com/example/run/123",
       pull_requests: [{ number: 131 }],
       ...overrides,
@@ -50,25 +51,46 @@ function payload(overrides = {}) {
 
 class FakeD1 {
   constructor() {
-    this.ids = new Set();
+    this.rows = new Map();
   }
   prepare(sql) {
-    if (sql.startsWith("DELETE")) {
+    const rows = this.rows;
+    if (sql.startsWith("INSERT")) {
       return {
         bind: (id) => ({
-          run: async () => ({ meta: { changes: this.ids.delete(id) ? 1 : 0 } }),
+          run: async () => {
+            if (rows.has(id)) return { meta: { changes: 0 } };
+            rows.set(id, { queued_at: null });
+            return { meta: { changes: 1 } };
+          },
         }),
       };
     }
-    return {
-      bind: (id) => ({
-        run: async () => {
-          const duplicate = this.ids.has(id);
-          this.ids.add(id);
-          return { meta: { changes: duplicate ? 0 : 1 } };
-        },
-      }),
-    };
+    if (sql.startsWith("UPDATE")) {
+      return {
+        bind: (id, queuedAt) => ({
+          run: async () => {
+            const row = rows.get(id);
+            if (!row) return { meta: { changes: 0 } };
+            row.queued_at = queuedAt;
+            return { meta: { changes: 1 } };
+          },
+        }),
+      };
+    }
+    if (sql.startsWith("SELECT")) {
+      return {
+        bind: (id) => ({ first: async () => rows.get(id) || null }),
+      };
+    }
+    if (sql.startsWith("DELETE")) {
+      return {
+        bind: (id) => ({
+          run: async () => ({ meta: { changes: rows.delete(id) ? 1 : 0 } }),
+        }),
+      };
+    }
+    throw new Error(`Unsupported SQL in fake D1: ${sql}`);
   }
 }
 
@@ -121,7 +143,18 @@ test("tampered signature is rejected before queue or dedupe work", async () => {
   const response = await handleWebhook(request, bindings);
   assert.equal(response.status, 401);
   assert.equal(bindings.sent.length, 0);
-  assert.equal(bindings.DELIVERIES.ids.size, 0);
+  assert.equal(bindings.DELIVERIES.rows.size, 0);
+});
+
+test("fork pull request completion is ignored and never enqueued", async () => {
+  const body = JSON.stringify(payload({
+    head_repository: { full_name: "attacker/Workspace-Platform" },
+  }));
+  const bindings = env();
+  const response = await handleWebhook(await requestFor(body), bindings);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).ignored, true);
+  assert.equal(bindings.sent.length, 0);
 });
 
 test("duplicate GitHub delivery is acknowledged but not requeued", async () => {
@@ -135,7 +168,7 @@ test("duplicate GitHub delivery is acknowledged but not requeued", async () => {
   assert.equal((await second.json()).duplicate, true);
 });
 
-test("queue failure releases the D1 claim so GitHub retry can enqueue", async () => {
+test("queue failure keeps a durable claim that redelivery re-enqueues", async () => {
   const body = JSON.stringify(payload());
   const bindings = env();
   let attempts = 0;
@@ -149,12 +182,15 @@ test("queue failure releases the D1 claim so GitHub retry can enqueue", async ()
     handleWebhook(await requestFor(body), bindings),
     /queue unavailable/,
   );
-  assert.equal(bindings.DELIVERIES.ids.size, 0);
+  // The row survives with no queued_at, so the event is not lost and the same
+  // GitHub delivery is re-enqueued rather than reported as a duplicate.
+  assert.equal(bindings.DELIVERIES.rows.get("delivery-1").queued_at, null);
 
   const retried = await handleWebhook(await requestFor(body), bindings);
   assert.equal(retried.status, 202);
   assert.equal(bindings.sent.length, 1);
   assert.equal(attempts, 2);
+  assert.match(bindings.DELIVERIES.rows.get("delivery-1").queued_at, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test("irrelevant workflow and repository events are ignored", async () => {

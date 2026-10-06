@@ -5,6 +5,22 @@ import { resolve } from "node:path";
 const MAX_ENVELOPE_BYTES = 1_000_000;
 const EXPECTED_REPOSITORY = "sjevans1/Workspace-Platform";
 
+// Bridge-only secrets that must never reach the autonomous agent or anything
+// it spawns. Hermes keeps its own provider/config variables untouched.
+const STRIPPED_ENV_KEYS = [
+  "CI_AGENT_BRIDGE_TOKEN",
+  "AGENT_DISPATCH_TOKEN",
+  "GITHUB_WEBHOOK_SECRET",
+  "CLOUDFLARE_API_TOKEN",
+  "CF_API_TOKEN",
+];
+
+function agentEnvironment() {
+  const env = { ...process.env };
+  for (const key of STRIPPED_ENV_KEYS) delete env[key];
+  return env;
+}
+
 function fail(message, code = 2) {
   process.stderr.write(`Hermes wrapper: ${message}\n`);
   process.exit(code);
@@ -89,7 +105,7 @@ async function main() {
       cwd: repository,
       shell: false,
       stdio: ["pipe", "inherit", "inherit"],
-      env: process.env,
+      env: agentEnvironment(),
     });
     child.once("error", reject);
     child.once("exit", (exitCode, signal) => {

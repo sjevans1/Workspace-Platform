@@ -12,7 +12,7 @@ async function runWrapper({ envelope, exitCode = 0, repository = repoRoot }) {
   const root = await mkdtemp(join(tmpdir(), "workspace-hermes-wrapper-"));
   const capture = join(root, "capture.json");
   const fakeHermes = join(root, "fake-hermes.mjs");
-  await writeFile(fakeHermes, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nlet body = "";\nfor await (const chunk of process.stdin) body += chunk;\nwriteFileSync(process.env.HERMES_FAKE_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), body }));\nprocess.exit(Number(process.env.HERMES_FAKE_EXIT || 0));\n`, { mode: 0o700 });
+  await writeFile(fakeHermes, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nlet body = "";\nfor await (const chunk of process.stdin) body += chunk;\nwriteFileSync(process.env.HERMES_FAKE_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), body, env: { bridgeToken: process.env.CI_AGENT_BRIDGE_TOKEN ?? null, dispatchToken: process.env.AGENT_DISPATCH_TOKEN ?? null, hasPath: Boolean(process.env.PATH) } }));\nprocess.exit(Number(process.env.HERMES_FAKE_EXIT || 0));\n`, { mode: 0o700 });
   await chmod(fakeHermes, 0o700);
 
   const result = await new Promise((resolveResult) => {
@@ -24,6 +24,8 @@ async function runWrapper({ envelope, exitCode = 0, repository = repoRoot }) {
         HERMES_FAKE_CAPTURE: capture,
         HERMES_FAKE_EXIT: String(exitCode),
         WORKSPACE_PLATFORM_REPO: repository,
+        CI_AGENT_BRIDGE_TOKEN: "must-not-reach-agent",
+        AGENT_DISPATCH_TOKEN: "must-not-reach-agent",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -58,6 +60,9 @@ test("Hermes wrapper passes one validated envelope without shell interpolation",
   ]);
   assert.match(result.captured.body, /Inspect \$\(touch \/tmp\/must-not-exist\) `uname`/);
   assert.match(result.captured.body, /"delivery_id":"wrapper-test"/);
+  assert.equal(result.captured.env.bridgeToken, null);
+  assert.equal(result.captured.env.dispatchToken, null);
+  assert.equal(result.captured.env.hasPath, true);
 });
 
 test("Hermes wrapper returns Hermes actual nonzero exit code", async () => {

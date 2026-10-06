@@ -68,6 +68,7 @@ export function normalizeWorkflowRun(payload, deliveryId, receivedAt = new Date(
       conclusion: run.conclusion ?? null,
       head_sha: run.head_sha,
       head_branch: run.head_branch ?? null,
+      head_repository: run.head_repository?.full_name ?? null,
       html_url: run.html_url ?? null,
     },
     pull_requests: Array.isArray(run.pull_requests)
@@ -87,30 +88,50 @@ export function shouldProcessWorkflow(payload, env) {
   const allowedRepository = String(env.ALLOWED_REPOSITORY || "").trim();
   if (allowedRepository && repository !== allowedRepository) return false;
 
+  const run = payload.workflow_run || {};
+
+  // Fail closed on fork pull requests: a workflow_run that ran against another
+  // repository (a fork) must never launch the privileged autonomous agent.
+  const headRepository = run.head_repository?.full_name;
+  if (headRepository && allowedRepository && headRepository !== allowedRepository)
+    return false;
+  if (!headRepository && run.event === "pull_request") return false;
+
   const allowedWorkflows = csv(env.ALLOWED_WORKFLOWS);
   if (!allowedWorkflows.length) return true;
-  const run = payload.workflow_run || {};
   return allowedWorkflows.includes(run.name) || allowedWorkflows.includes(run.path);
 }
 
 async function claimDelivery(env, event, deliveryId) {
   if (!env.DELIVERIES?.prepare)
     throw new Error("Missing required D1 binding: DELIVERIES");
-  const result = await env.DELIVERIES.prepare(
+  const insert = await env.DELIVERIES.prepare(
     "INSERT OR IGNORE INTO github_deliveries" +
       " (delivery_id,event_type,repository,received_at)" +
       " VALUES (?1,?2,?3,?4)",
   )
     .bind(deliveryId, "workflow_run", event.repository, event.received_at)
     .run();
-  return Number(result?.meta?.changes || 0) === 1;
-}
+  if (Number(insert?.meta?.changes || 0) === 1)
+    return { needsEnqueue: true, duplicate: false };
 
-async function releaseDelivery(env, deliveryId) {
-  await env.DELIVERIES.prepare(
-    "DELETE FROM github_deliveries WHERE delivery_id = ?1",
+  const row = await env.DELIVERIES.prepare(
+    "SELECT queued_at FROM github_deliveries WHERE delivery_id = ?1",
   )
     .bind(deliveryId)
+    .first();
+  // A row without queued_at is an unqueued claim from a prior attempt that
+  // failed after the D1 write. Re-attempting the enqueue keeps the delivery
+  // idempotent without ever losing the event when release also fails.
+  if (row && row.queued_at) return { needsEnqueue: false, duplicate: true };
+  return { needsEnqueue: true, duplicate: false };
+}
+
+async function markQueued(env, deliveryId, queuedAt) {
+  await env.DELIVERIES.prepare(
+    "UPDATE github_deliveries SET queued_at = ?2 WHERE delivery_id = ?1",
+  )
+    .bind(deliveryId, queuedAt)
     .run();
 }
 
@@ -164,22 +185,15 @@ export async function handleWebhook(request, env) {
     return jsonResponse({ error: "Invalid workflow_run payload" }, 400);
   }
 
-  if (!(await claimDelivery(env, normalized, deliveryId)))
+  const claim = await claimDelivery(env, normalized, deliveryId);
+  if (!claim.needsEnqueue)
     return jsonResponse({ ok: true, duplicate: true }, 200);
 
-  try {
-    await enqueue(env, normalized);
-  } catch (error) {
-    try {
-      await releaseDelivery(env, deliveryId);
-    } catch (releaseError) {
-      console.error("Failed to release unqueued GitHub delivery claim", {
-        delivery_id: deliveryId,
-        error: releaseError instanceof Error ? releaseError.message : String(releaseError),
-      });
-    }
-    throw error;
-  }
+  // The D1 row is the durable ledger; a failure here throws so GitHub redelivers
+  // and the same row is re-enqueued instead of being lost. The row is only
+  // marked queued after the Queue accepts it.
+  await enqueue(env, normalized);
+  await markQueued(env, deliveryId, normalized.received_at);
   return jsonResponse({ ok: true, queued: true }, 202);
 }
 
