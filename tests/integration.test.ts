@@ -7728,3 +7728,197 @@ test("W17 portable archive export is tenant-safe, checksummed and bounded", asyn
     "Manifest must not expose tenant-scoped fields",
   );
 });
+
+
+test("W17 async portable archive round-trips fresh IDs links relations files and ACL inheritance", async () => {
+  const source = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W17 round trip source",
+  });
+  const targetPage = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: source.id,
+    title: "W17 linked target",
+  });
+  const linkingPage = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: source.id,
+    title: "W17 linking page",
+  });
+  await ok("PATCH", `/pages/${linkingPage.id}/content`, {
+    blocks: [{
+      type: "paragraph",
+      content: [{
+        type: "link",
+        href: "/?page=" + targetPage.id,
+        content: [{ type: "text", text: "Follow the imported target", styles: {} }],
+      }],
+    }],
+    expected_revision: 1,
+  });
+
+  const targetDb = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: source.id,
+    title: "W17 relation target",
+  });
+  const sourceDb = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: source.id,
+    title: "W17 relation source",
+  });
+  await ok("PATCH", `/databases/${sourceDb.id}`, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      {
+        id: "related",
+        name: "Related",
+        type: "relation",
+        target_database_id: targetDb.id,
+      },
+      { id: "owner", name: "Owner", type: "person" },
+    ],
+  });
+  const targetRecord = await ok(
+    "POST", `/databases/${targetDb.id}/records`, {
+      values: { name: "Portable target record" },
+    });
+  const sourceRecord = await ok(
+    "POST", `/databases/${sourceDb.id}/records`, {
+      values: {
+        name: "Portable source record",
+        related: [targetRecord.id],
+        owner: owner.id,
+      },
+    });
+
+  const boundary = `----w17-roundtrip-${randomUUID()}`,
+    attachmentText = "W17 semantic attachment bytes",
+    multipart = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="roundtrip.txt"\r\nContent-Type: text/plain\r\n\r\n${attachmentText}\r\n--${boundary}--\r\n`;
+  const uploaded = await req(
+    "POST",
+    `/resources/${linkingPage.id}/files`,
+    multipart,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+
+  await permissionPatch(`/resources/${linkingPage.id}/permissions`, {
+    inherit: false,
+    grants: [],
+  });
+  assert.equal(
+    (await req("GET", `/resources/${linkingPage.id}`, undefined, member))
+      .statusCode,
+    404,
+  );
+
+  const exportJob = await ok(
+    "POST", `/resources/${source.id}/export/archive/jobs`, {});
+  await tick(db, undefined, fakeAntivirus);
+  const exported = await ok("GET", `/jobs/${exportJob.id}`);
+  assert.equal(exported.status, "completed");
+  assert.equal(exported.result.resource_id, source.id);
+  assert.match(exported.result.sha256, /^[a-f0-9]{64}$/);
+
+  const download = await req(
+    "GET", `/jobs/${exportJob.id}/archive`, undefined, owner);
+  assert.equal(download.statusCode, 200, download.body);
+  assert.match(String(download.headers["content-type"]), /application\/zip/);
+  const archive = download.rawPayload as Buffer;
+  assert.ok(archive.length > 0);
+  assert.doesNotMatch(
+    archive.toString("latin1"),
+    new RegExp(owner.id),
+    "Portable archive bytes must not carry Person-property user UUIDs",
+  );
+
+  const queuedImport = await req(
+    "POST",
+    `/imports/archive?parent_id=${root.id}`,
+    archive,
+    owner,
+    { "content-type": "application/zip" },
+  );
+  assert.equal(queuedImport.statusCode, 200, queuedImport.body);
+  const importJob = queuedImport.json();
+  await tick(db, undefined, fakeAntivirus);
+  const imported = await ok("GET", `/jobs/${importJob.id}`);
+  assert.equal(imported.status, "completed");
+  assert.notEqual(imported.result.resource_id, source.id);
+  assert.equal(imported.result.report.acl_copied, false);
+  assert.equal(imported.result.report.files, 1);
+
+  const importedRootId = imported.result.resource_id;
+  const children = await ok(
+    "GET", `/resources?parent_id=${importedRootId}&limit=50`);
+  const byTitle = new Map<string, any>(
+    children.map((item: any) => [item.title, item]),
+  );
+  const clonedTargetPage = byTitle.get("W17 linked target");
+  const clonedLinkingPage = byTitle.get("W17 linking page");
+  const clonedTargetDb = byTitle.get("W17 relation target");
+  const clonedSourceDb = byTitle.get("W17 relation source");
+  assert.ok(clonedTargetPage && clonedLinkingPage &&
+    clonedTargetDb && clonedSourceDb);
+
+  const clonedBody = await ok(
+    "GET", `/pages/${clonedLinkingPage.id}/content`);
+  assert.match(JSON.stringify(clonedBody.blocks),
+    new RegExp(clonedTargetPage.id));
+  assert.doesNotMatch(JSON.stringify(clonedBody.blocks),
+    new RegExp(targetPage.id));
+
+  const clonedDefinition = await ok(
+    "GET", `/databases/${clonedSourceDb.id}`);
+  const relation = clonedDefinition.properties.find(
+    (property: any) => property.id === "related");
+  assert.equal(relation.target_database_id, clonedTargetDb.id);
+
+  const clonedTargetRecords = await ok(
+    "GET", `/databases/${clonedTargetDb.id}/records`);
+  const clonedSourceRecords = await ok(
+    "GET", `/databases/${clonedSourceDb.id}/records`);
+  assert.equal(clonedTargetRecords.length, 1);
+  assert.equal(clonedSourceRecords.length, 1);
+  assert.notEqual(clonedTargetRecords[0].id, targetRecord.id);
+  assert.notEqual(clonedSourceRecords[0].id, sourceRecord.id);
+  assert.deepEqual(
+    clonedSourceRecords[0].values.related,
+    [clonedTargetRecords[0].id],
+  );
+  assert.equal(clonedSourceRecords[0].values.owner ?? null, null);
+
+  const importedFiles = await ok(
+    "GET", `/resources/${clonedLinkingPage.id}/files`);
+  assert.equal(importedFiles.length, 1);
+  assert.notEqual(importedFiles[0].id, uploaded.json().id);
+  const importedBytes = await req(
+    "GET", `/files/${importedFiles[0].id}/content`);
+  assert.equal(importedBytes.statusCode, 200);
+  assert.equal(importedBytes.rawPayload.toString(), attachmentText);
+
+  assert.equal(
+    (await req("GET", `/resources/${clonedLinkingPage.id}`, undefined, member))
+      .statusCode,
+    200,
+    "Imported resources inherit destination ACLs instead of source ACL rows",
+  );
+
+  const inputArtifacts = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT kind FROM job_artifacts WHERE job_id=$1", [importJob.id]));
+  assert.equal(inputArtifacts.rows.length, 0);
+  const queuedDeletion = await db.tenant(owner.tenant, (q) =>
+    one(q,
+      "SELECT status FROM object_deletions WHERE reason='job_input_consumed'" +
+        " ORDER BY created_at DESC LIMIT 1"));
+  assert.ok(queuedDeletion);
+  await tick(db, undefined, fakeAntivirus);
+  const completedDeletion = await db.tenant(owner.tenant, (q) =>
+    one(q,
+      "SELECT status FROM object_deletions WHERE reason='job_input_consumed'" +
+        " ORDER BY created_at DESC LIMIT 1"));
+  assert.equal(completedDeletion.status, "completed");
+});
