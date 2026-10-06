@@ -409,6 +409,136 @@ test("W15 project-space template creates guided starter content", async ({ page 
   await expect(page.getByText("Decision log", { exact: true })).toBeVisible();
 });
 
+test("W16 touch phone and tablet complete navigation database calendar and recovery", async ({ page, browser }) => {
+  await login(page);
+  const meResponse = await page.request.get("/api/v1/me");
+  expect(meResponse.ok(), await meResponse.text()).toBeTruthy();
+  const me = await meResponse.json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const rootsResponse = await page.request.get("/api/v1/resources");
+  expect(rootsResponse.ok(), await rootsResponse.text()).toBeTruthy();
+  const roots = await rootsResponse.json();
+  const root = roots[0];
+  expect(root?.id).toBeTruthy();
+
+  const stamp = randomUUID().slice(0, 8);
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "space",
+      parent_id: root.id,
+      title: "W16 mobile space " + stamp,
+    },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const databaseResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "database",
+      parent_id: space.id,
+      title: "W16 mobile tasks " + stamp,
+      template: "tasks",
+    },
+  });
+  expect(databaseResponse.ok(), await databaseResponse.text()).toBeTruthy();
+  const database = await databaseResponse.json();
+  const today = new Date();
+  const due = today.getFullYear() + "-" +
+    String(today.getMonth() + 1).padStart(2, "0") + "-15";
+  const recordResponse = await page.request.post(
+    `/api/v1/databases/${database.id}/records`,
+    {
+      headers,
+      data: {
+        values: {
+          name: "Mobile calendar task " + stamp,
+          status: "In progress",
+          priority: "High",
+          assignee: me.user.id,
+          due,
+        },
+      },
+    },
+  );
+  expect(recordResponse.ok(), await recordResponse.text()).toBeTruthy();
+
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+  });
+  try {
+    await context.addCookies(await page.context().cookies());
+    const mobile = await context.newPage();
+    await mobile.goto("/?page=" + database.id);
+    await expect(mobile.getByLabel("Page title", { exact: true }))
+      .toHaveValue("W16 mobile tasks " + stamp);
+
+    const toggle = mobile.getByRole("button", { name: "Toggle sidebar" });
+    await toggle.tap();
+    const backdrop = mobile.getByRole("button", { name: "Close navigation" });
+    await expect(backdrop).toBeVisible();
+    await backdrop.tap();
+    await expect(mobile.locator(".sidebar")).toBeHidden();
+
+    await toggle.tap();
+    await expect(backdrop).toBeVisible();
+    await mobile.keyboard.press("Escape");
+    await expect(mobile.locator(".sidebar")).toBeHidden();
+
+    const newRecord = mobile.getByRole("button", {
+      name: "New record",
+      exact: true,
+    });
+    const target = await newRecord.boundingBox();
+    expect(target?.height || 0,
+      "Primary mobile database actions must be touch-sized").toBeGreaterThanOrEqual(44);
+
+    await mobile.getByRole("button", { name: "Calendar", exact: true }).tap();
+    await expect(
+      mobile.locator(".calendar-event").filter({
+        hasText: "Mobile calendar task " + stamp,
+      }),
+    ).toBeVisible();
+    const calendar = await mobile.locator(".calendar-grid").boundingBox();
+    expect(calendar?.width || 1000,
+      "390px calendar should fit its responsive content area")
+      .toBeLessThanOrEqual(390);
+    expect(await mobile.evaluate(() =>
+      document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+
+    await mobile.setViewportSize({ width: 768, height: 1024 });
+    await expect(mobile.getByRole("button", {
+      name: "Filter & sort",
+    })).toBeVisible();
+    expect(await mobile.evaluate(() =>
+      document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+
+    const definitionPattern = `**/api/v1/databases/${database.id}`;
+    await mobile.route(definitionPattern, async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Synthetic W16 database outage" }),
+      });
+    });
+    await mobile.goto("/?page=" + database.id);
+    const alert = mobile.getByRole("alert").filter({
+      hasText: "Database unavailable",
+    });
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText("Synthetic W16 database outage");
+    await mobile.unroute(definitionPattern);
+    await alert.getByRole("button", { name: "Retry database" }).click();
+    await expect(mobile.getByRole("button", {
+      name: "Table",
+      exact: true,
+    })).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 test("admin can create and revoke a SCIM connector from Settings", async ({
   page,
 }) => {
