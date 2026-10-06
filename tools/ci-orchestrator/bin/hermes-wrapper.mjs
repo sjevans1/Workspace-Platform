@@ -26,6 +26,18 @@ function fail(message, code = 2) {
   process.exit(code);
 }
 
+// Optional model pin for autonomous CI runs. Left unset, Hermes uses its own
+// configured model/fallback chain. Set, it forces a specific provider+model so
+// event-driven runs do not silently fall back to a rate-limited free tier.
+function modelSelection() {
+  const flags = [];
+  const model = (process.env.CI_HERMES_MODEL || "").trim();
+  const provider = (process.env.CI_HERMES_PROVIDER || "").trim();
+  if (model) flags.push("--model", model);
+  if (provider) flags.push("--provider", provider);
+  return flags;
+}
+
 async function readEnvelope() {
   const chunks = [];
   let size = 0;
@@ -97,6 +109,7 @@ async function main() {
     "--source", "tool",
     "--in", repository,
     "--run-budget", process.env.CI_HERMES_RUN_BUDGET_SECONDS || "1800",
+    ...modelSelection(),
     "--yolo",
   ];
 

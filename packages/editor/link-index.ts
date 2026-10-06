@@ -20,8 +20,9 @@ export async function syncWorkspaceResourceLinks(
   );
   if(!targets.length)return;
   await q.query(
-    "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
-    " SELECT $1,$2,target.id FROM resources target" +
+    "INSERT INTO resource_links(tenant_id,source_id,target_id,source_updated_at)" +
+    " SELECT $1,$2,target.id,source.updated_at FROM resources target" +
+    " JOIN resources source ON source.tenant_id=$1 AND source.id=$2" +
     " WHERE target.tenant_id=$1 AND target.id=ANY($3::uuid[])" +
     " AND target.kind IN ('page','record')" +
     " ON CONFLICT DO NOTHING",

@@ -260,7 +260,7 @@ systemctl --user enable --now workspace-ci-agent-bridge.service
 systemctl --user enable --now workspace-ci-agent-tunnel.service
 ```
 
-The bridge unit uses `Restart=on-failure`, a persistent `.data/ci-agent-bridge` spool, and one process managed by systemd. `claims/` is the immutable delivery ledger; `pending/`, `running/`, `done/`, and `failed/` are execution states; `retries/` stores attempt count and the next eligible timestamp. On startup, the bridge moves any orphaned `running/` event back to `pending/` and reconstructs a missing state link from its durable claim. This makes an interrupted agent launch recoverable without running two bridge instances.
+The bridge unit uses `Restart=on-failure`, a persistent `.data/ci-agent-bridge` spool, and one process managed by systemd. `claims/` is the immutable delivery ledger; `pending/`, `running/`, `done/`, `failed/`, and `superseded/` are execution states; `retries/` stores attempt count and the next eligible timestamp. Pending events are claimed newest-first so the current head is handled before stale completions, and `supersede()` collapses older queued completions that share a repository, branch, and workflow into `superseded/` so they cannot consume an agent run. On startup, the bridge moves any orphaned `running/` event back to `pending/` and reconstructs a missing state link from its durable claim. This makes an interrupted agent launch recoverable without running two bridge instances.
 
 Required local environment files and non-secret settings:
 
@@ -274,12 +274,16 @@ Required local environment files and non-secret settings:
   WORKSPACE_PLATFORM_REPO=<repo>
   HERMES_BIN=<absolute Hermes executable>
   CI_HERMES_RUN_BUDGET_SECONDS=1800
+  CI_HERMES_PROVIDER=openrouter
+  CI_HERMES_MODEL=z-ai/glm-5.3-flash
   CI_AGENT_BRIDGE_TOKEN=<secret>
 
 ~/.config/workspace-ci-orchestrator/cloudflare.env
   CLOUDFLARE_ACCOUNT_ID=<account id>
   CF_API_TOKEN=<scoped Cloudflare token>
 ```
+
+`CI_HERMES_PROVIDER` and `CI_HERMES_MODEL` are optional settings, not secrets. When both are set, the wrapper appends `--provider` and `--model` to the Hermes invocation so an event-driven run is pinned to one model instead of riding the configured fallback chain, which can silently land on a rate-limited free tier. When unset the flags are omitted and Hermes uses its own configuration. `CI_HERMES_MODEL` must be the provider's full model id.
 
 The Quick Tunnel unit launches `run-quick-tunnel.mjs`. The supervisor waits for HTTPS health, writes the current public URL to `~/.config/workspace-ci-orchestrator/tunnel-url`, updates the Worker secret, and deploys the updated Worker version. A service restart therefore does not leave the Worker pointing at an expired Quick Tunnel hostname.
 
@@ -322,6 +326,7 @@ The tests cover:
 - authenticated downstream dispatch,
 - retry on downstream failure,
 - atomic concurrent bridge dedupe, fsynced claims and startup recovery,
+- newest-first claiming and same-branch supersede of stale completions,
 - agent-failure backoff, non-starvation and quarantine,
 - Hermes wrapper origin validation, secret stripping and exit-code propagation,
 - safe Quick Tunnel URL parsing, pinned Wrangler and supervisor exit behavior.
@@ -349,6 +354,7 @@ The initial live acceptance used stale SHA `000000000000000000000000000000000000
 - **Duplicate/redelivery:** `github_deliveries.queued_at` is the durable ledger. A row with `queued_at` set is a true duplicate and is acknowledged without re-enqueueing; a row without `queued_at` means a prior attempt failed after the D1 write, so the redelivery re-enqueues instead of losing the event. There is no best-effort DELETE.
 - **Agent bridge unavailable:** Queue delivery fails and retries. After `max_retries`, the normalized event moves to `workspace-ci-events-dlq`; it is not silently discarded.
 - **Agent command fails:** `runOne` moves the event from `running/` back to `pending/` with a persisted exponential backoff. Other eligible events continue. After 10 failed launches, the state link moves to `failed/` for operator recovery while its immutable claim remains. An unexpected bridge-process exit leaves the event in `running/`; startup recovery returns it to `pending/` before the next launch. To redrive a quarantined event, stop the bridge, inspect only its operational metadata and root cause, move its `failed/<key>.json` link to `pending/<key>.json`, remove `retries/<key>.json`, then restart the bridge. Never delete `claims/<key>.json`.
+- **Delayed continuation or backlog:** the bridge runs one agent at a time. Pending events are claimed newest-first, and older completions for the same repository/branch/workflow are collapsed into `superseded/` so they cannot consume a run. Inspect `pending/` depth and the `retries/` backoff if continuations lag.
 - **Quick Tunnel restarts:** the tunnel supervisor obtains a new HTTPS hostname, health-checks it, updates `AGENT_DISPATCH_URL`, deploys the Worker, and writes the current URL file.
 - **CI provider changes:** add an adapter that emits the same normalized event contract. Do not change agent policy.
 - **GitHub Actions outage:** an alternate provider may emit the same contract, allowing the agent bridge and roadmap logic to remain unchanged.
