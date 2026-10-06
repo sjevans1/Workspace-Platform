@@ -3557,3 +3557,113 @@ test("W12d browser: user controls mention and reply alerts with persisted prefer
   await expect(mentions).toBeChecked();
   await expect(replies).toBeChecked();
 });
+
+
+// Attempts less than 2.5s apart belong to one dialog effect run. Grouping them
+// keeps the bounded-retry assertion deterministic even if the effect runs more
+// than once during the dialog's life.
+function attemptsInFirstBurst(attemptedAt: number[]): number[] {
+  const burst: number[] = [];
+  for (const t of attemptedAt) {
+    if (burst.length && t - burst[burst.length - 1] > 2500) break;
+    burst.push(t);
+  }
+  return burst;
+}
+
+test("W09b2 deployed browser recovers the append target after one throttled destination list request", async ({page}) => {
+  const attemptedAt: number[] = [];
+  let spaceId = "";
+  await page.route(/\/api\/v1\/resources\?parent_id=[^&]+&limit=200/, async (r) => {
+    const parent = new URL(r.request().url()).searchParams.get("parent_id");
+    if (!spaceId || parent !== spaceId) return r.continue();
+    attemptedAt.push(Date.now());
+    if (attemptedAt.length <= 1)
+      return r.fulfill({status:429,contentType:"application/json",
+        headers:{"retry-after":"1"},body:JSON.stringify({error:"Too many requests"})});
+    return r.continue();
+  });
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = {"X-CSRF-Token":me.csrf};
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const stamp=Date.now();
+  const spaceRequest=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W09b CSV space "+stamp},
+  });
+  expect(spaceRequest.ok(),await spaceRequest.text()).toBeTruthy();
+  const space=await spaceRequest.json();
+  spaceId = space.id;
+  const dbRequest=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"database",parent_id:space.id,
+      title:"W09b Existing Target "+stamp},
+  });
+  expect(dbRequest.ok(),await dbRequest.text()).toBeTruthy();
+  const database=await dbRequest.json();
+  await page.getByRole("button",{name:/Import your work/}).click();
+  const dialog=page.getByRole("dialog",{name:"Import your work"});
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Create in").selectOption(space.id);
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name:"mapped-append.csv",mimeType:"text/csv",
+    buffer:Buffer.from(["Name", "New item"].join(String.fromCharCode(10))),
+  });
+  const destination=dialog.getByLabel("Import destination mode");
+  // The injected 429 must not leave the append target permanently unselectable.
+  await expect(destination.locator(`option[value="${database.id}"]`)).toHaveCount(1);
+  const burst = attemptsInFirstBurst(attemptedAt);
+  expect(burst.length, "the throttled request is retried exactly once").toBe(2);
+  const gap = burst[1] - burst[0];
+  expect(gap, "the retry waits the bounded backoff instead of spinning").toBeGreaterThanOrEqual(1400);
+  expect(gap, "the retry stays inside the bounded policy").toBeLessThanOrEqual(5000);
+});
+
+test("W09b3 deployed browser stops after three throttled destination list attempts and surfaces the error", async ({page}) => {
+  const attemptedAt: number[] = [];
+  let spaceId = "";
+  await page.route(/\/api\/v1\/resources\?parent_id=[^&]+&limit=200/, async (r) => {
+    const parent = new URL(r.request().url()).searchParams.get("parent_id");
+    if (!spaceId || parent !== spaceId) return r.continue();
+    attemptedAt.push(Date.now());
+    if (attemptedAt.length <= 3)
+      return r.fulfill({status:429,contentType:"application/json",
+        headers:{"retry-after":"1"},body:JSON.stringify({error:"Too many requests"})});
+    return r.continue();
+  });
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = {"X-CSRF-Token":me.csrf};
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const stamp=Date.now();
+  const spaceRequest=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"space",parent_id:roots[0].id,
+      title:"W09b CSV space "+stamp},
+  });
+  expect(spaceRequest.ok(),await spaceRequest.text()).toBeTruthy();
+  const space=await spaceRequest.json();
+  spaceId = space.id;
+  const dbRequest=await page.request.post("/api/v1/resources",{
+    headers,data:{kind:"database",parent_id:space.id,
+      title:"W09b Existing Target "+stamp},
+  });
+  expect(dbRequest.ok(),await dbRequest.text()).toBeTruthy();
+  const database=await dbRequest.json();
+  await page.getByRole("button",{name:/Import your work/}).click();
+  const dialog=page.getByRole("dialog",{name:"Import your work"});
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Create in").selectOption(space.id);
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name:"mapped-append.csv",mimeType:"text/csv",
+    buffer:Buffer.from(["Name", "New item"].join(String.fromCharCode(10))),
+  });
+  const destination=dialog.getByLabel("Import destination mode");
+  // Bounded: three attempts, then the error surfaces. Never a fourth attempt.
+  await expect.poll(() => attemptsInFirstBurst(attemptedAt).length, {timeout:30000}).toBe(3);
+  await page.waitForTimeout(3000);
+  expect(attemptsInFirstBurst(attemptedAt).length,
+    "no fourth attempt: the retry loop is bounded").toBe(3);
+  await expect(page.locator('.toast[role="alert"]')).toBeVisible({timeout:15000});
+  expect(await destination.locator(`option[value="${database.id}"]`).count(),
+    "the target really is unavailable, the failure is not hidden").toBe(0);
+});
