@@ -1,14 +1,17 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { prepareCsvImport, prepareCsvIntoExisting, csvSchemaDigest } from "../../../packages/imports/csv.ts";
 import { Database, one } from "../../../packages/database/index.ts";
-import { decrypt, signature } from "../../../packages/events/index.ts";
+import { decrypt, emit, signature } from "../../../packages/events/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
 import { requireAccess } from "../../../packages/permissions/index.ts";
 import type { Actor } from "../../../packages/auth/index.ts";
 import { createResource, createRecord, purgeDeletedResource } from "../../api/src/domain.ts";
 import { createStorage, type Storage } from "../../../packages/storage/index.ts";
+import { createAntivirus, type Antivirus } from "../../../packages/security/antivirus.ts";
+import { exportPortableTree } from "../../api/src/portable-export.ts";
+import { importPortableArchive } from "../../api/src/portable-import.ts";
 import { markdownToBlocks } from "../../../packages/editor/server.ts";
 export function webhookUrl(text: string) {
   const u = new URL(text);
@@ -68,7 +71,11 @@ function deliver(url: string, secret: string, event: any) {
     req.end(body);
   });
 }
-export async function tick(db: Database, suppliedStorage?: Storage) {
+export async function tick(
+  db: Database,
+  suppliedStorage?: Storage,
+  suppliedAntivirus?: Antivirus,
+) {
   const storage = suppliedStorage || createStorage();
   const closeStorage = !suppliedStorage;
   const tenants = await db.system((q) =>
@@ -171,6 +178,21 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
         }
       }
 
+      for (const artifact of (
+        await q.query(
+          "SELECT id,object_key FROM job_artifacts WHERE expires_at<=now()" +
+            " ORDER BY expires_at,id LIMIT 25 FOR UPDATE SKIP LOCKED",
+        )
+      ).rows) {
+        await q.query(
+          "INSERT INTO object_deletions(id,tenant_id,object_key,reason)" +
+            " VALUES($1,$2,$3,'job_artifact_expired')" +
+            " ON CONFLICT(tenant_id,object_key) DO NOTHING",
+          [randomUUID(), tenant, artifact.object_key],
+        );
+        await q.query("DELETE FROM job_artifacts WHERE id=$1", [artifact.id]);
+      }
+
       for (const deletion of (
         await q.query(
           "SELECT * FROM object_deletions WHERE status IN ('pending','retry') AND next_at<=now() ORDER BY next_at,id LIMIT 25 FOR UPDATE SKIP LOCKED",
@@ -202,6 +224,8 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
       );
       if (!j) return;
       await q.query("SAVEPOINT import_job");
+      let pendingOutputKey: string | undefined;
+      let importedObjectKeys: string[] = [];
       try {
         const m = await one(
           q,
@@ -216,17 +240,83 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
           scopes: null,
           expires_at: new Date(Date.now() + 10000),
         };
-        await requireAccess(q, a, j.resource_id, 3);
         const p = j.payload;
         let resource;
-        if (p.format === "markdown")
+        let jobResult: any;
+        if (p.format === "workspace_archive_export") {
+          const source = await requireAccess(q, a, p.source_id);
+          assert(source.id === j.resource_id, 400, "Archive export source changed");
+          const archive = await exportPortableTree(q, a, source.id, storage);
+          const artifactId = randomUUID(),
+            key = `${tenant}/${source.id}/${artifactId}`,
+            digest = createHash("sha256").update(archive).digest("hex");
+          await storage.put(key, archive, "application/zip");
+          pendingOutputKey = key;
+          await q.query(
+            "INSERT INTO job_artifacts(id,tenant_id,job_id,object_key,kind,name,mime,size,sha256,expires_at)" +
+              " VALUES($1,$2,$3,$4,'output',$5,'application/zip',$6,$7,now()+interval '24 hours')",
+            [
+              artifactId,
+              tenant,
+              j.id,
+              key,
+              "workspace-export.zip",
+              archive.length,
+              digest,
+            ],
+          );
+          await emit(q, a, "export.performed", source.id);
+          jobResult = {
+            resource_id: source.id,
+            artifact_id: artifactId,
+            size: archive.length,
+            sha256: digest,
+          };
+        } else if (p.format === "workspace_archive_import") {
+          const artifact = await one(
+            q,
+            "SELECT * FROM job_artifacts WHERE job_id=$1 AND kind='input'" +
+              " AND expires_at>now() FOR UPDATE",
+            [j.id],
+          );
+          assert(artifact, 400, "Staged archive input is unavailable");
+          const archive = await storage.get(artifact.object_key);
+          assert(
+            archive.length === Number(artifact.size) &&
+              createHash("sha256").update(archive).digest("hex") === artifact.sha256 &&
+              artifact.sha256 === p.archive_sha256,
+            409,
+            "Staged archive checksum mismatch",
+          );
+          const imported = await importPortableArchive(
+            q,
+            a,
+            p.parent_id,
+            archive,
+            storage,
+            suppliedAntivirus || createAntivirus(),
+          );
+          importedObjectKeys = imported.stored_object_keys;
+          const { stored_object_keys: _internalKeys, ...publicImportResult } =
+            imported;
+          await q.query(
+            "INSERT INTO object_deletions(id,tenant_id,object_key,reason)" +
+              " VALUES($1,$2,$3,'job_input_consumed')" +
+              " ON CONFLICT(tenant_id,object_key) DO NOTHING",
+            [randomUUID(), tenant, artifact.object_key],
+          );
+          await q.query("DELETE FROM job_artifacts WHERE id=$1", [artifact.id]);
+          resource = { id: imported.resource_id };
+          jobResult = publicImportResult;
+        } else if (p.format === "markdown") {
           resource = await createResource(q, a, {
             parent_id: p.parent_id,
             kind: "page",
             title: p.name,
             blocks: await markdownToBlocks(p.content),
           });
-        else {
+          jobResult = { resource_id: resource.id };
+        } else {
           // Strict re-parse and whole-file conversion under fresh worker
           // membership/parent permission. Any invalid cell fails BEFORE
           // creating the new database. The enclosing savepoint remains the
@@ -268,15 +358,22 @@ export async function tick(db: Database, suppliedStorage?: Storage) {
               [resource.id, json(prepared.properties)],
             );
             for (const values of prepared.rows)
-              await createRecord(q, a, resource.id, values);
+              await createRecord(q,a,resource.id,values);
           }
+          jobResult = { resource_id: resource.id };
         }
         await q.query(
           "UPDATE jobs SET status='completed',result=$2 WHERE id=$1",
-          [j.id, json({ resource_id: resource.id })],
+          [j.id, json(jobResult)],
         );
+        pendingOutputKey = undefined;
+        importedObjectKeys = [];
       } catch (e) {
         await q.query("ROLLBACK TO SAVEPOINT import_job");
+        if (pendingOutputKey)
+          await storage.delete(pendingOutputKey).catch(() => {});
+        for (const key of importedObjectKeys)
+          await storage.delete(key).catch(() => {});
         await q.query("UPDATE jobs SET status='failed',result=$2 WHERE id=$1", [
           j.id,
           json({ error: (e as Error).message.slice(0, 300) }),
