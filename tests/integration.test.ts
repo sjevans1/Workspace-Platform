@@ -7925,3 +7925,76 @@ test("W17 async portable archive round-trips fresh IDs links relations files and
         " ORDER BY created_at DESC LIMIT 1"));
   assert.equal(completedDeletion.status, "completed");
 });
+
+
+test("W17 failed malware import rolls back database writes and leaves only cataloged stage bytes", async () => {
+  const source = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W17 infected import source " + randomUUID().slice(0, 8),
+  });
+  const boundary = `----w17-infected-${randomUUID()}`,
+    content = "W17 scanner rejection payload",
+    multipart = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="scanner.txt"\r\nContent-Type: text/plain\r\n\r\n${content}\r\n--${boundary}--\r\n`;
+  const uploaded = await req(
+    "POST",
+    `/resources/${source.id}/files`,
+    multipart,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+
+  const exported = await req(
+    "GET", `/resources/${source.id}/export/archive`, undefined, owner);
+  assert.equal(exported.statusCode, 200, exported.body);
+  const beforeChildren = await ok(
+    "GET", `/resources?parent_id=${space.id}&limit=200`);
+  const storageBeforeStage = await storedFiles(dir);
+
+  const staged = await req(
+    "POST",
+    `/imports/archive?parent_id=${space.id}`,
+    exported.rawPayload,
+    owner,
+    { "content-type": "application/zip" },
+  );
+  assert.equal(staged.statusCode, 200, staged.body);
+  const job = staged.json();
+  const artifact = await db.tenant(owner.tenant, (q) =>
+    one(q,
+      "SELECT object_key FROM job_artifacts WHERE job_id=$1 AND kind='input'",
+      [job.id]));
+  assert.ok(artifact?.object_key);
+  const storageAfterStage = await storedFiles(dir);
+  assert.equal(storageAfterStage.length, storageBeforeStage.length + 1,
+    "Staging adds exactly one encrypted archive object");
+
+  antivirusResult = { status: "infected", signature: "W17-Test-Signature" };
+  try {
+    await tick(db, undefined, fakeAntivirus);
+  } finally {
+    antivirusResult = { status: "clean" };
+  }
+  const failed = await ok("GET", `/jobs/${job.id}`);
+  assert.equal(failed.status, "failed");
+  assert.match(failed.result.error, /malware scanner/i);
+
+  const afterChildren = await ok(
+    "GET", `/resources?parent_id=${space.id}&limit=200`);
+  assert.deepEqual(
+    afterChildren.map((item: any) => item.id).sort(),
+    beforeChildren.map((item: any) => item.id).sort(),
+    "Failed archive import must roll back its resource subtree",
+  );
+  const storageAfterFailure = await storedFiles(dir);
+  assert.deepEqual(storageAfterFailure, storageAfterStage,
+    "Failed import must not leave imported attachment objects");
+  const retained = await db.tenant(owner.tenant, (q) =>
+    one(q,
+      "SELECT object_key,expires_at FROM job_artifacts" +
+        " WHERE job_id=$1 AND kind='input'",
+      [job.id]));
+  assert.equal(retained.object_key, artifact.object_key,
+    "Failed staged input remains cataloged for bounded expiry/retry evidence");
+});
