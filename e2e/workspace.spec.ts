@@ -281,9 +281,11 @@ test("browser workflow: setup, live editing in two sessions, table/board, discus
   expect(await exported.text()).toContain("Both editors can contribute.");
   await page.getByRole("button", { name: "Search anything" }).click();
   const search = page.getByRole("dialog", { name: "Search your workspace" });
-  await search
-    .getByPlaceholder("Find pages, projects, or files…")
-    .fill("Team tasks");
+  await search.getByLabel("Search workspace").fill("Team tasks");
+  await search.getByLabel("Search result type").selectOption("database");
+  await expect(
+    search.getByRole("option").filter({ hasText: "Team tasks" }),
+  ).toBeVisible();
   await search.getByRole("option").filter({ hasText: "Team tasks" }).click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(
     "Team tasks",
