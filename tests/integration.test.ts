@@ -7829,11 +7829,14 @@ test("W17 async portable archive round-trips fresh IDs links relations files and
   assert.match(String(download.headers["content-type"]), /application\/zip/);
   const archive = download.rawPayload as Buffer;
   assert.ok(archive.length > 0);
-  assert.doesNotMatch(
-    archive.toString("latin1"),
-    new RegExp(owner.id),
-    "Portable archive bytes must not carry Person-property user UUIDs",
-  );
+  const collectedArchive = inspectPortableArchive(archive, { collect: true });
+  for (const [entryPath, entryBytes] of collectedArchive.entries)
+    if (entryPath.endsWith(".json"))
+      assert.doesNotMatch(
+        entryBytes.toString("utf8"),
+        new RegExp(owner.id),
+        "Portable archive JSON must not carry Person-property user UUIDs",
+      );
 
   const queuedImport = await req(
     "POST",
