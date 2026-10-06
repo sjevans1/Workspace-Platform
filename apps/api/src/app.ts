@@ -150,9 +150,11 @@ async function backlinkPage(
   limit: number,
   after?: Pick<BacklinkPageCursor, "after_us" | "after"> | null,
 ) {
-  // Bound every request even if a conservative migration/backfill produced
-  // many stale candidates. SQL filters current ACL before candidate rows are
-  // materialized; canonical content remains the final disclosure authority.
+  // Bound the target-index scan first. The hierarchy ACL function is then
+  // evaluated for at most this fixed candidate window, avoiding an N x
+  // recursive permission walk across an arbitrarily hot target. Hidden
+  // candidates never materialize titles/document bodies into application
+  // memory; canonical content remains the final disclosure authority.
   const scanLimit = Math.min(500, Math.max(100, limit * 10));
   const allowedKinds = a.scopes
     ? [
@@ -162,42 +164,66 @@ async function backlinkPage(
     : ["page", "record"];
   if (!allowedKinds.length)
     return { items: [], hasMore: false, scanned: 0, after: null };
-  const values: any[] = [
-    a.tenant_id, targetId, a.user_id, a.role, allowedKinds,
-  ];
+
+  const rawValues: any[] = [a.tenant_id, targetId, allowedKinds];
   let continuationSql = "";
   if (after) {
-    values.push(after.after_us, after.after);
+    rawValues.push(after.after_us, after.after);
     continuationSql =
       " AND ((extract(epoch from source.updated_at)*1000000)::bigint,source.id)<($" +
-      (values.length - 1) + "::bigint,$" + values.length + "::uuid)";
+      (rawValues.length - 1) + "::bigint,$" + rawValues.length + "::uuid)";
   }
-  values.push(scanLimit + 1);
-  const candidates = (await q.query(
-    "SELECT source.id,source.title,source.kind,source.updated_at," +
-    " ((extract(epoch from source.updated_at)*1000000)::bigint)::text updated_us,d.blocks" +
+  rawValues.push(scanLimit + 1);
+  const raw = (await q.query(
+    "SELECT source.id," +
+    " ((extract(epoch from source.updated_at)*1000000)::bigint)::text updated_us" +
     " FROM resource_links link" +
     " JOIN resources source ON source.tenant_id=link.tenant_id" +
     " AND source.id=link.source_id" +
-    " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
-    " AND d.resource_id=source.id" +
     " WHERE link.tenant_id=$1 AND link.target_id=$2" +
     " AND source.deleted_at IS NULL" +
-    " AND source.kind=ANY($5::text[])" +
-    " AND workspace_can_read_resource(source.id,$3::uuid,$4::text)" +
+    " AND source.kind=ANY($3::text[])" +
     continuationSql +
-    " ORDER BY source.updated_at DESC,source.id DESC LIMIT $" + values.length,
-    values,
+    " ORDER BY source.updated_at DESC,source.id DESC LIMIT $" + rawValues.length,
+    rawValues,
   )).rows;
+  const bounded = raw.slice(0, scanLimit);
+  if (!bounded.length)
+    return { items: [], hasMore: false, scanned: 0, after: null };
+
+  const readableRows = (await q.query(
+    "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
+    " FROM resources source" +
+    " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
+    " AND d.resource_id=source.id" +
+    " WHERE source.id=ANY($1::uuid[])" +
+    " AND source.tenant_id=$2" +
+    " AND source.deleted_at IS NULL" +
+    " AND source.kind=ANY($5::text[])" +
+    " AND workspace_can_read_resource(source.id,$3::uuid,$4::text)",
+    [
+      bounded.map((candidate: any) => candidate.id),
+      a.tenant_id,
+      a.user_id,
+      a.role,
+      allowedKinds,
+    ],
+  )).rows;
+  const readable = new Map<string, any>(
+    readableRows.map((source: any) => [source.id, source]),
+  );
+
   const items: any[] = [];
   let processed = 0;
   let last: any = null;
-  const bounded = candidates.slice(0, scanLimit);
-  for (const source of bounded) {
+  for (const candidate of bounded) {
     processed++;
-    last = source;
+    last = candidate;
+    const source = readable.get(candidate.id);
+    if (!source) continue;
     if (!linkedWorkspaceResources(source.blocks).has(targetId)) continue;
-    if (a.scopes && !a.scopes.includes(pageScope(source.kind))) continue;
+    // Recheck through the application evaluator after canonical parsing so a
+    // permission change between SQL statements still fails closed.
     if (!(await access(q, a, source.id))) continue;
     items.push({
       id: source.id,
@@ -207,7 +233,7 @@ async function backlinkPage(
     });
     if (items.length === limit) break;
   }
-  const hasMore = processed < candidates.length;
+  const hasMore = processed < raw.length;
   return {
     items,
     hasMore,
