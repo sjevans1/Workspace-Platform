@@ -1,5 +1,5 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 const email = "browser@example.test",
   password = "browser-password-123";
@@ -586,13 +586,18 @@ test("W17 browser exports and re-imports a portable workspace archive", async ({
   expect(download.suggestedFilename()).toMatch(/archive\.zip$/);
   const archivePath = await download.path();
   expect(archivePath).toBeTruthy();
+  const archiveBuffer = await readFile(archivePath!);
 
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await page.getByRole("button", { name: "Import your work", exact: true })
     .click();
   const dialog = page.getByRole("dialog", { name: "Import your work" });
   const input = dialog.getByLabel("Markdown, CSV, or Workspace archive");
-  await input.setInputFiles(archivePath!);
+  await input.setInputFiles({
+    name: download.suggestedFilename(),
+    mimeType: "application/zip",
+    buffer: archiveBuffer,
+  });
   await expect(dialog.getByText(
     "Workspace archives preserve their original page, database, and space titles.",
   )).toBeVisible();

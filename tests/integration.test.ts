@@ -210,6 +210,30 @@ async function invite(role: string) {
   const a = session(r);
   return { ...a, ...(await ok("GET", "/me", undefined, a)).user };
 }
+async function freshMemberActor(label: string) {
+  const id = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [
+      id,
+      `member-${id}@example.test`,
+      label,
+    ]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
+      [owner.tenant, id],
+    );
+  });
+  const token = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, id),
+  );
+  return {
+    id,
+    tenant: owner.tenant,
+    cookie: "workspace_session=" + token,
+    csrf: csrf(token),
+  };
+}
+
 async function connect(a = owner, p = page) {
   const ticket = await ok("POST", `/pages/${p.id}/collab`, {}, a),
     doc = new Y.Doc();
@@ -3117,7 +3141,7 @@ test("W11c native replies stay on the same resource and revoked mentions vanish"
   );
   await permissionPatch("/resources/" + target.id + "/permissions", {
     inherit: true,
-    grants: [{ principal_id: member.id, level: 0 }],
+    grants: [{ principal_id: redactionMember.id, level: 0 }],
   });
   const after = await ok("GET", "/notifications", undefined, member);
   assert.ok(
@@ -7731,6 +7755,7 @@ test("W17 portable archive export is tenant-safe, checksummed and bounded", asyn
 
 
 test("W17 async portable archive round-trips fresh IDs links relations files and ACL inheritance", async () => {
+  const roundTripMember = await freshMemberActor("W17 Round Trip Member");
   const source = await ok("POST", "/resources", {
     kind: "space",
     parent_id: root.id,
@@ -7810,7 +7835,7 @@ test("W17 async portable archive round-trips fresh IDs links relations files and
     grants: [],
   });
   assert.equal(
-    (await req("GET", `/resources/${linkingPage.id}`, undefined, member))
+    (await req("GET", `/resources/${linkingPage.id}`, undefined, roundTripMember))
       .statusCode,
     404,
   );
@@ -7904,7 +7929,7 @@ test("W17 async portable archive round-trips fresh IDs links relations files and
   assert.equal(importedBytes.rawPayload.toString(), attachmentText);
 
   assert.equal(
-    (await req("GET", `/resources/${clonedLinkingPage.id}`, undefined, member))
+    (await req("GET", `/resources/${clonedLinkingPage.id}`, undefined, roundTripMember))
       .statusCode,
     200,
     "Imported resources inherit destination ACLs instead of source ACL rows",
@@ -8001,6 +8026,7 @@ test("W17 failed malware import rolls back database writes and leaves only catal
 
 
 test("W17 export redacts unreadable external relation schema metadata", async () => {
+  const redactionMember = await freshMemberActor("W17 Redaction Member");
   const hiddenTarget = await ok("POST", "/resources", {
     kind: "database",
     parent_id: space.id,
@@ -8027,12 +8053,12 @@ test("W17 export redacts unreadable external relation schema metadata", async ()
     grants: [{ principal_id: member.id, level: 0 }],
   });
   assert.equal(
-    (await req("GET", `/resources/${hiddenTarget.id}`, undefined, member))
+    (await req("GET", `/resources/${hiddenTarget.id}`, undefined, redactionMember))
       .statusCode,
     404,
   );
   assert.equal(
-    (await req("GET", `/resources/${visibleSource.id}`, undefined, member))
+    (await req("GET", `/resources/${visibleSource.id}`, undefined, redactionMember))
       .statusCode,
     200,
   );
@@ -8041,7 +8067,7 @@ test("W17 export redacts unreadable external relation schema metadata", async ()
     "GET",
     `/resources/${visibleSource.id}/export/archive`,
     undefined,
-    member,
+    redactionMember,
   );
   assert.equal(exported.statusCode, 200, exported.body);
   const inspected = inspectPortableArchive(
