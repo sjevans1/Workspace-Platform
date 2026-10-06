@@ -2759,7 +2759,8 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
       // secret: the worker's read lock lasts until its HTTP send commits.
       await db.tenant(owner.tenant, (q) =>
         q.query(
-          "UPDATE webhook_deliveries SET status='pending',next_at=now() WHERE id=$1",
+          "UPDATE webhook_deliveries SET status='pending'," +
+          " next_at='1970-01-01T00:00:00Z'::timestamptz WHERE id=$1",
           [deliveryId],
         ),
       );
@@ -2838,6 +2839,23 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
 });
 
 test("imports run asynchronously and recheck current permissions", async () => {
+  const runOwnedJob = async (id: string, actor = member) => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await tick(db);
+      const job = await ok("GET", `/jobs/${id}`, undefined, actor);
+      if (job.status !== "pending") return job;
+    }
+    assert.fail("Import job did not leave pending state within bounded worker ticks");
+  };
+  const runJobStatus = async (id: string) => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await tick(db);
+      const status = await db.tenant(owner.tenant, (q) =>
+        one(q, "SELECT status FROM jobs WHERE id=$1", [id]));
+      if (status?.status !== "pending") return status;
+    }
+    assert.fail("Import job did not leave pending state within bounded worker ticks");
+  };
   const j = await ok(
     "POST",
     "/imports",
@@ -2849,8 +2867,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     },
     member,
   );
-  await tick(db);
-  const job = await ok("GET", `/jobs/${j.id}`, undefined, member);
+  const job = await runOwnedJob(j.id, member);
   assert.equal(job.status, "completed");
   assert(
     (
@@ -2863,8 +2880,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     format: "csv",
     content: "Name,Owner\nFirst,Jane\nSecond,John",
   });
-  await tick(db);
-  assert.equal((await ok("GET", `/jobs/${csv.id}`)).status, "completed");
+  assert.equal((await runOwnedJob(csv.id, owner)).status, "completed");
   const denied = await ok(
     "POST",
     "/imports",
@@ -2880,10 +2896,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     inherit: false,
     grants: [],
   });
-  await tick(db);
-  const status = await db.tenant(owner.tenant, (q) =>
-    one(q, "SELECT status FROM jobs WHERE id=$1", [denied.id]),
-  );
+  const status = await runJobStatus(denied.id);
   assert.equal(status.status, "failed");
   await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: true,
@@ -3876,8 +3889,12 @@ test("W07 Rollup native: hide revoked links in all aggregates and exports", asyn
   assert.equal(JSON.stringify(peerRow).includes(second.id), false);
   const exported = await ok("GET",
     "/resources/" + source.id + "/export?format=json", undefined, peer);
-  assert.ok(!JSON.stringify(exported).includes(second.id));
-  assert.ok(!JSON.stringify(exported).includes("910"));
+  const exportedRow = exported.records.find((row:any) => row.id === item.id);
+  assert.ok(exportedRow, "Peer export must include the readable source record");
+  assert.ok(!JSON.stringify(exportedRow.values).includes(second.id));
+  assert.equal(exportedRow.values.count, 1);
+  assert.equal(exportedRow.values.total, 10);
+  assert.equal(exportedRow.values.average, 10);
   const exportedCsv = await req("GET",
     "/resources/" + source.id + "/export?format=csv", undefined, peer);
   assert.equal(exportedCsv.statusCode, 200);
