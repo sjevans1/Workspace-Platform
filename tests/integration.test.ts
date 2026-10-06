@@ -1214,6 +1214,10 @@ test("W14 search is ranked, paginated and permission-live without metadata leaka
     visiblePages.push(item);
   }
   await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "UPDATE resources SET updated_at='2026-10-06T11:59:59.123456Z'::timestamptz WHERE id=$1",
+      [privatePage.id],
+    );
     for (let i = 0; i < visiblePages.length; i++)
       await q.query(
         "UPDATE resources SET updated_at=$2::timestamptz WHERE id=$1",
