@@ -20,7 +20,18 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
-import { api, ApiError, setCsrf, notify, run, changed, go, icon, date } from "../lib/api";
+import {
+  api,
+  ApiError,
+  uploadWorkspaceArchive,
+  setCsrf,
+  notify,
+  run,
+  changed,
+  go,
+  icon,
+  date,
+} from "../lib/api";
 import { Modal, Empty, Spinner, Field } from "./common";
 import Resource from "./Resource";
 import NotificationInbox from "./NotificationInbox";
@@ -584,13 +595,11 @@ function Dashboard({
             <button
               className="text-button"
               onClick={() =>
-                spaces.length
-                  ? create({
-                      parent: spaces[0].id,
-                      kind: "page",
-                      importing: true,
-                    })
-                  : notify("Create a space before importing pages.")
+                create({
+                  parent: spaces[0]?.id || root,
+                  kind: "page",
+                  importing: true,
+                })
               }
             >
               Import your work <ArrowUpRight size={15} />
@@ -1005,42 +1014,57 @@ function CreateDialog({
     setBusy(true);
     await run(async () => {
       if (importing) {
-        if (!file) throw Error("Choose a Markdown or CSV file");
-        const isCsv = file.name.toLowerCase().endsWith(".csv");
+        if (!file) throw Error("Choose a Markdown, CSV, or workspace archive");
+        const lower = file.name.toLowerCase(),
+          isCsv = lower.endsWith(".csv"),
+          isArchive = lower.endsWith(".zip");
+        if (!isArchive && destination === root)
+          throw Error("Choose or create a space before importing Markdown or CSV");
+        if (isArchive && file.size > 64 * 1024 * 1024)
+          throw Error("Workspace archive exceeds the 64 MiB import limit");
         if (isCsv && !preview)
           throw Error("Preview the CSV and review its column mapping before import");
         if (isCsv && targetDatabase && (!appendConfirmed || !preview.target ||
           preview.target.id !== targetDatabase))
           throw Error("Confirm the append-only target import after preview");
-        const content = isCsv ? previewContent : await file.text();
-        const request = {
-          parent_id: destination,
-          name: name || file.name,
-          format: isCsv ? "csv" : "markdown",
-          content,
-          ...(isCsv ? { mapping } : {}),
-          ...(isCsv && targetDatabase ? {
-            target_database_id: targetDatabase,
-            expected_schema_digest: preview.target.schema_digest,
-            existing_mode: "append",
-          } : {}),
-        };
-        let idempotency_key: string | undefined;
-        if (isCsv) {
-          const signature = JSON.stringify(request);
-          if (retryImport.current?.signature !== signature) {
-            retryImport.current = { signature,
-              key: crypto.randomUUID() };
+
+        let j: any;
+        if (isArchive) {
+          j = await uploadWorkspaceArchive(
+            `/imports/archive?parent_id=${encodeURIComponent(destination)}`,
+            file,
+          );
+        } else {
+          const content = isCsv ? previewContent : await file.text();
+          const request = {
+            parent_id: destination,
+            name: name || file.name,
+            format: isCsv ? "csv" : "markdown",
+            content,
+            ...(isCsv ? { mapping } : {}),
+            ...(isCsv && targetDatabase ? {
+              target_database_id: targetDatabase,
+              expected_schema_digest: preview.target.schema_digest,
+              existing_mode: "append",
+            } : {}),
+          };
+          let idempotency_key: string | undefined;
+          if (isCsv) {
+            const signature = JSON.stringify(request);
+            if (retryImport.current?.signature !== signature) {
+              retryImport.current = { signature,
+                key: crypto.randomUUID() };
+            }
+            idempotency_key = retryImport.current.key;
           }
-          idempotency_key = retryImport.current.key;
+          j = await api("/imports", "POST", {
+            ...request, ...(idempotency_key ? { idempotency_key } : {}),
+          });
         }
-        const j = await api("/imports", "POST", {
-          ...request, ...(idempotency_key ? { idempotency_key } : {}),
-        });
         notify(
           "Import queued. This window will open the result when it is ready.",
         );
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < 90; i++) {
           await new Promise((r) => setTimeout(r, 1000));
           const job = await api(`/jobs/${j.id}`);
           if (job.status === "failed") throw Error(job.result.error);
@@ -1071,15 +1095,23 @@ function CreateDialog({
       close={close}
     >
       <form onSubmit={submit} className="form">
-        <Field label="Name">
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Give it a clear, useful title"
-            maxLength={500}
-          />
-        </Field>
+        {!(importing && file?.name.toLowerCase().endsWith(".zip")) && (
+          <Field label="Name">
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Give it a clear, useful title"
+              maxLength={500}
+            />
+          </Field>
+        )}
+        {importing && file?.name.toLowerCase().endsWith(".zip") && (
+          <p className="modal-copy">
+            Workspace archives preserve their original page, database, and space titles.
+            Choose where the imported root should be placed.
+          </p>
+        )}
         {!importing && (
           <Field label="Type">
             <select
@@ -1116,9 +1148,11 @@ function CreateDialog({
             )}
             {parents
               .filter((n) =>
-                type === "space"
-                  ? n.kind === "workspace"
-                  : n.kind === "space" || n.kind === "page",
+                importing && file?.name.toLowerCase().endsWith(".zip")
+                  ? n.kind === "workspace" || n.kind === "space" || n.kind === "page"
+                  : type === "space"
+                    ? n.kind === "workspace"
+                    : n.kind === "space" || n.kind === "page",
               )
               .map((n) => (
                 <option value={n.id} key={n.id}>
@@ -1129,15 +1163,23 @@ function CreateDialog({
         </Field>
         {importing && (
           <>
-            <Field label="Markdown or CSV file">
+            <Field label="Markdown, CSV, or Workspace archive">
               <input
                 type="file"
-                accept=".md,.markdown,.csv"
+                accept=".md,.markdown,.csv,.zip,application/zip"
                 onChange={(e) => {
-                  setFile(e.target.files?.[0]);
+                  const next = e.target.files?.[0];
+                  setFile(next);
+                  if (next?.name.toLowerCase().endsWith(".zip"))
+                    setDestination(root);
+                  else if (destination === root)
+                    setDestination(
+                      parents.find((n) => n.kind === "space")?.id || root,
+                    );
                   setPreview(undefined);
                   setMapping([]);
                   setPreviewContent("");
+                  setTargetDatabase("");
                   setAppendConfirmed(false);
                 }}
               />
