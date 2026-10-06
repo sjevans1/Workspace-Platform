@@ -142,6 +142,10 @@ import {
   validateRollupDefinitions,
 } from "./rollups.ts";
 import { exportPortableTree } from "./portable-export.ts";
+import {
+  inspectPortableArchive,
+  portableArchiveLimits,
+} from "../../../packages/portable-archive/index.ts";
 type Request = FastifyRequest & {
   actor: Actor;
   sessionToken: string;
@@ -525,6 +529,15 @@ export async function buildApp(
     },
   });
   await app.register(multipart, { limits: { fileSize: 26214400, files: 1 } });
+  for (const archiveType of [
+    "application/zip",
+    "application/vnd.openjm.workspace-archive+zip",
+  ])
+    app.addContentTypeParser(
+      archiveType,
+      { parseAs: "buffer", bodyLimit: portableArchiveLimits.maxArchiveBytes },
+      (_request, payload, done) => done(null, payload),
+    );
   app.addContentTypeParser(
     "application/x-www-form-urlencoded",
     { parseAs: "string", bodyLimit: 20000 },
@@ -4205,9 +4218,118 @@ function dataRoutes(
     return { id: original.id, status: original.status };
   });
   route(
+    "POST",
+    "/resources/:id/export/archive/jobs",
+    "Queue a portable workspace archive export",
+    async (q, a, r) => {
+      const n = await requireAccess(q, a, id(r));
+      scope(a, pageScope(n.kind));
+      const jid = randomUUID();
+      await q.query(
+        "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload)" +
+          " VALUES($1,$2,$3,$4,$5)",
+        [
+          jid,
+          a.tenant_id,
+          a.user_id,
+          n.id,
+          json({ format: "workspace_archive_export", source_id: n.id }),
+        ],
+      );
+      return { id: jid, status: "pending" };
+    },
+  );
+  route(
+    "POST",
+    "/imports/archive",
+    "Stage and queue a portable workspace archive import",
+    async (q, a, r) => {
+      assert(!a.scopes, 403, "Human session required for archive import");
+      const parentId = uuid.parse(query(r).parent_id);
+      await requireAccess(q, a, parentId, 3);
+      assert(Buffer.isBuffer(r.body), 400, "Archive body required");
+      const archive = Buffer.from(r.body as Buffer);
+      const inspected = inspectPortableArchive(archive);
+      const jid = randomUUID(),
+        artifactId = randomUUID(),
+        key = `${a.tenant_id}/${parentId}/${artifactId}`,
+        digest = createHash("sha256").update(archive).digest("hex");
+      try {
+        await storage.put(key, archive, "application/zip");
+        await q.query(
+          "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload)" +
+            " VALUES($1,$2,$3,$4,$5)",
+          [
+            jid,
+            a.tenant_id,
+            a.user_id,
+            parentId,
+            json({
+              format: "workspace_archive_import",
+              parent_id: parentId,
+              archive_sha256: digest,
+              archive_format: inspected.manifest.format,
+              archive_version: inspected.manifest.version,
+            }),
+          ],
+        );
+        await q.query(
+          "INSERT INTO job_artifacts(id,tenant_id,job_id,object_key,kind,name,mime,size,sha256,expires_at)" +
+            " VALUES($1,$2,$3,$4,'input',$5,'application/zip',$6,$7,now()+interval '24 hours')",
+          [
+            artifactId,
+            a.tenant_id,
+            jid,
+            key,
+            "workspace-import.zip",
+            archive.length,
+            digest,
+          ],
+        );
+      } catch (error) {
+        await storage.delete(key).catch(() => {});
+        throw error;
+      }
+      return { id: jid, status: "pending" };
+    },
+  );
+  route(
+    "GET",
+    "/jobs/:id/archive",
+    "Download a completed user-owned archive export",
+    async (q, a, r, reply) => {
+      const job = await one(
+        q,
+        "SELECT id,user_id,resource_id,status FROM jobs WHERE id=$1",
+        [id(r)],
+      );
+      assert(job && job.user_id === a.user_id, 404, "Job not found");
+      await requireAccess(q, a, job.resource_id);
+      assert(job.status === "completed", 409, "Archive job is not complete");
+      const artifact = await one(
+        q,
+        "SELECT object_key,name,mime,size FROM job_artifacts" +
+          " WHERE job_id=$1 AND kind='output' AND expires_at>now()",
+        [job.id],
+      );
+      assert(artifact, 404, "Archive artifact not found");
+      const bytes = await storage.get(artifact.object_key);
+      assert(bytes.length === Number(artifact.size), 409,
+        "Archive artifact size mismatch");
+      reply
+        .type(artifact.mime)
+        .header("X-Content-Type-Options", "nosniff")
+        .header(
+          "Content-Disposition",
+          `attachment; filename*=UTF-8''${encodeURIComponent(artifact.name)}`,
+        );
+      return reply.send(bytes);
+    },
+  );
+  route(
     "GET",
     "/jobs/:id",
-    "Read user-owned import status",
+    "Read user-owned job status",
     async (q, a, r) => {
       const j = await one(
         q,
