@@ -1288,6 +1288,36 @@ test("W14 search is ranked, paginated and permission-live without metadata leaka
   assert.doesNotMatch(JSON.stringify(afterRevoke), new RegExp(visiblePages[0].id));
 });
 
+test("W14 indexed search remains bounded at multi-thousand-resource scale", async () => {
+  const prefix = "f14e0000-0000-4000-8000-";
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO resources(id,tenant_id,parent_id,kind,title,search_text,position)" +
+      " SELECT ($3||lpad(i::text,12,'0'))::uuid,$1,$2,'page'," +
+      " 'W14 scale page '||i," +
+      " CASE WHEN i=1999 THEN 'w14-scale-needle-keep-exact' ELSE 'ordinary searchable body' END,i" +
+      " FROM generate_series(1,2500) i ON CONFLICT DO NOTHING",
+      [owner.tenant, space.id, prefix],
+    );
+  });
+  try {
+    const started = performance.now();
+    const result = await ok("GET",
+      "/search?q=w14-scale-needle-keep-exact&kind=page&limit=20");
+    const elapsed = performance.now() - started;
+    assert.equal(result.items.length, 1);
+    assert.match(result.items[0].snippet, /w14-scale-needle-keep-exact/);
+    assert.equal(result.has_more, false);
+    if (!pg.emulated)
+      assert.ok(elapsed < 1500,
+        `Indexed W14 search exceeded 1500ms budget: ${elapsed.toFixed(1)}ms`);
+  } finally {
+    await db.tenant(owner.tenant, (q) => q.query(
+      "DELETE FROM resources WHERE id::text LIKE 'f14e0000-0000-4000-8000-%'",
+    ));
+  }
+});
+
 test("page backlinks use live canonical links and never reveal restricted sources", async () => {
   // Preserve full production Fastify rate limits, with an independent
   // disposable instance so this test never exhausts another test's budget.
