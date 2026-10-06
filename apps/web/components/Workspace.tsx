@@ -147,6 +147,8 @@ export default function Workspace() {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
         e.preventDefault();
         setSearch((v) => !v);
+      } else if (e.key === "Escape" && innerWidth < 800) {
+        setSidebar(false);
       }
     };
     window.addEventListener("workspace-open", open);
@@ -339,6 +341,11 @@ export default function Workspace() {
           </div>
         </div>
       </aside>
+      <button
+        className="sidebar-scrim"
+        aria-label="Close navigation"
+        onClick={() => setSidebar(false)}
+      />
       <main>
         <header className="topbar">
           <button

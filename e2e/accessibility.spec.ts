@@ -10,7 +10,21 @@ async function login(page: Page) {
   if (verifiedCookies.length) await page.context().addCookies(verifiedCookies);
   // Live collaboration and background resources may outlive DOM readiness.
   // Firefox navigation should await interactive HTML, not every subresource.
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  // A fresh Firefox engine can also stall its first navigation entirely
+  // while the deployed app stays healthy, so bound each attempt and retry
+  // once instead of burning the whole test timeout on a single goto.
+  let navigationError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await page.goto("/", { waitUntil: "domcontentloaded", timeout: 30000 });
+      navigationError = undefined;
+      break;
+    } catch (error) {
+      navigationError = error;
+      await page.waitForTimeout(1000);
+    }
+  }
+  if (navigationError) throw navigationError;
   await expect(page.locator("h1")).toBeVisible();
   if (
     await page
