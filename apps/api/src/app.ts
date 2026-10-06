@@ -51,6 +51,7 @@ import {
   visible,
   ancestry,
   directChildCanReadSql,
+  batchReadableResourceIds,
 } from "../../../packages/permissions/index.ts";
 import {
   defaultBranding,
@@ -66,6 +67,16 @@ import {
   project,
 } from "../../../packages/editor/server.ts";
 import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
+import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
+import {
+  beginLinkReconcileCursor,
+  decodeBacklinkPageCursor,
+  decodeLinkReconcileCursor,
+  encodeBacklinkPageCursor,
+  encodeLinkReconcileCursor,
+  newBacklinkPageCursor,
+  type BacklinkPageCursor,
+} from "../../../packages/editor/backlink-cursor.ts";
 import {
   createStorage,
   inspectFile,
@@ -132,6 +143,107 @@ const pageScope = (k: string, w = false) =>
     : ["workspace", "space"].includes(k)
       ? "workspace"
       : "pages") + (w ? ".write" : ".read");
+
+async function backlinkPage(
+  q: Query,
+  a: Actor,
+  targetId: string,
+  limit: number,
+  after?: Pick<BacklinkPageCursor, "after_us" | "after"> | null,
+) {
+  // Bound the target-index scan first. Full hierarchy ACL is then evaluated
+  // once, set-wise, for at most this fixed candidate window. Hidden candidates
+  // never materialize titles/document bodies into application memory;
+  // canonical content remains the final disclosure authority.
+  const scanLimit = Math.min(10000, Math.max(500, limit * 250));
+  const allowedKinds = a.scopes
+    ? [
+      ...(a.scopes.includes("pages.read") ? ["page"] : []),
+      ...(a.scopes.includes("databases.read") ? ["record"] : []),
+    ]
+    : ["page", "record"];
+  if (!allowedKinds.length)
+    return { items: [], hasMore: false, scanned: 0, after: null };
+
+  const rawValues: any[] = [a.tenant_id, targetId, allowedKinds];
+  let continuationSql = "";
+  if (after) {
+    rawValues.push(after.after_us, after.after);
+    continuationSql =
+      " AND ((extract(epoch from link.source_updated_at)*1000000)::bigint,link.source_id)<($" +
+      (rawValues.length - 1) + "::bigint,$" + rawValues.length + "::uuid)";
+  }
+  rawValues.push(scanLimit + 1);
+  const raw = (await q.query(
+    "SELECT source.id," +
+    " ((extract(epoch from link.source_updated_at)*1000000)::bigint)::text updated_us" +
+    " FROM resource_links link" +
+    " JOIN resources source ON source.tenant_id=link.tenant_id" +
+    " AND source.id=link.source_id" +
+    " WHERE link.tenant_id=$1 AND link.target_id=$2" +
+    " AND source.deleted_at IS NULL" +
+    " AND source.kind=ANY($3::text[])" +
+    continuationSql +
+    " ORDER BY link.source_updated_at DESC,link.source_id DESC LIMIT $" + rawValues.length,
+    rawValues,
+  )).rows;
+  const bounded = raw.slice(0, scanLimit);
+  if (!bounded.length)
+    return { items: [], hasMore: false, scanned: 0, after: null };
+
+  const readableIds = await batchReadableResourceIds(
+    q,
+    a,
+    bounded.map((candidate: any) => candidate.id),
+  );
+  const readableRows = readableIds.size
+    ? (await q.query(
+      "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
+      " FROM resources source" +
+      " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
+      " AND d.resource_id=source.id" +
+      " WHERE source.id=ANY($1::uuid[])" +
+      " AND source.tenant_id=$2" +
+      " AND source.deleted_at IS NULL" +
+      " AND source.kind=ANY($3::text[])",
+      [[...readableIds], a.tenant_id, allowedKinds],
+    )).rows
+    : [];
+  const readable = new Map<string, any>(
+    readableRows.map((source: any) => [source.id, source]),
+  );
+
+  const items: any[] = [];
+  let processed = 0;
+  let last: any = null;
+  for (const candidate of bounded) {
+    processed++;
+    last = candidate;
+    const source = readable.get(candidate.id);
+    if (!source) continue;
+    if (!linkedWorkspaceResources(source.blocks).has(targetId)) continue;
+    // Recheck through the application evaluator after canonical parsing so a
+    // permission change between SQL statements still fails closed.
+    if (!(await access(q, a, source.id))) continue;
+    items.push({
+      id: source.id,
+      title: source.title,
+      kind: source.kind,
+      updated_at: source.updated_at,
+    });
+    if (items.length === limit) break;
+  }
+  const hasMore = processed < raw.length;
+  return {
+    items,
+    hasMore,
+    scanned: processed,
+    after: hasMore && last ? {
+      after_us: String(last.updated_us),
+      after: last.id as string,
+    } : null,
+  };
+}
 const cookies = () => ({
   httpOnly: true,
   secure: process.env.COOKIE_SECURE !== "false",
@@ -1094,63 +1206,77 @@ export async function buildApp(
   route(
     "GET",
     "/resources/:id/backlinks",
-    "List readable pages with internal links to this document",
+    "List readable backlinks with opaque bounded pagination",
     async (q, a, r) => {
       const target = await requireAccess(q, a, id(r));
       scope(a, pageScope(target.kind));
       assert(["page", "record"].includes(target.kind), 404, "Page not found");
-      // W13b: target lookup and ACL filtering happen in PostgreSQL before
-      // pagination. Canonical block re-parse remains defense-in-depth and
-      // keeps conservative migration/backfill false positives response-inert.
-      const result:any[]=[];
-      let cursor:{updated_at:any;id:string}|null=null;
-      while(result.length<40){
-        const values:any[]=[a.tenant_id,target.id,a.user_id,a.role];
-        let after="";
-        if(cursor){
-          values.push(cursor.updated_at,cursor.id);
-          after=" AND (source.updated_at,source.id)<($" +
-            (values.length-1) + "::timestamptz,$" + values.length + "::uuid)";
-        }
-        values.push(100);
-        const candidates=(await q.query(
-          "SELECT source.id,source.title,source.kind,source.updated_at,d.blocks" +
-          " FROM resource_links link" +
-          " JOIN resources source ON source.tenant_id=link.tenant_id" +
-          " AND source.id=link.source_id" +
-          " JOIN page_documents d ON d.tenant_id=source.tenant_id" +
-          " AND d.resource_id=source.id" +
-          " WHERE link.tenant_id=$1 AND link.target_id=$2" +
-          " AND source.deleted_at IS NULL" +
-          " AND source.kind IN ('page','record')" +
-          " AND workspace_can_read_resource(source.id,$3::uuid,$4::text)" +
-          after +
-          " ORDER BY source.updated_at DESC,source.id DESC LIMIT $" + values.length,
-          values,
-        )).rows;
-        if(!candidates.length)break;
-        for(const source of candidates){
-          // The migration backfill is deliberately conservative. A stale or
-          // false-positive index edge is never authority: canonical blocks
-          // must still contain the exact Workspace link before disclosure.
-          if(!linkedWorkspaceResources(source.blocks).has(target.id))continue;
-          if(a.scopes && !a.scopes.includes(pageScope(source.kind)))continue;
-          // Independent application-side recheck protects against any future
-          // SQL predicate drift or ACL change inside this transaction.
-          if(!(await access(q,a,source.id)))continue;
-          result.push({
-            id:source.id,title:source.title,
-            kind:source.kind,updated_at:source.updated_at,
-          });
-          if(result.length===40)break;
-        }
-        cursor={
-          updated_at:candidates.at(-1).updated_at,
-          id:candidates.at(-1).id,
-        };
-        if(candidates.length<100)break;
-      }
-      return result;
+      const p = query(r);
+      const limit = p.limit === undefined ? 20 : Number(p.limit);
+      assert(Number.isInteger(limit) && limit >= 1 && limit <= 40,
+        400, "Invalid backlink page limit");
+      const state = p.cursor
+        ? decodeBacklinkPageCursor(p.cursor, {
+          tenant: a.tenant_id,
+          principal: a.user_id,
+          target: target.id,
+          limit,
+        })
+        : null;
+      const page = await backlinkPage(q, a, target.id, limit, state);
+      const next = page.hasMore && page.after
+        ? encodeBacklinkPageCursor(newBacklinkPageCursor(
+          a.tenant_id,
+          a.user_id,
+          target.id,
+          limit,
+          page.after.after_us,
+          page.after.after,
+        ))
+        : null;
+      return {
+        items: page.items,
+        next_cursor: next,
+        has_more: page.hasMore,
+      };
+    },
+  );
+  route(
+    "POST",
+    "/resource-links/reconcile",
+    "Rebuild tenant link-index batches from canonical documents",
+    async (q, a, r) => {
+      admin(a);
+      const v = body(z.object({
+        cursor: z.string().min(1).max(2048).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }).strict(), r);
+      const limit = v.limit ?? 100;
+      const state = v.cursor
+        ? decodeLinkReconcileCursor(v.cursor, a.tenant_id, a.user_id)
+        : beginLinkReconcileCursor(a.tenant_id, a.user_id);
+      const rows = (await q.query(
+        "SELECT d.resource_id,d.blocks FROM page_documents d" +
+        " JOIN resources r ON r.tenant_id=d.tenant_id AND r.id=d.resource_id" +
+        " WHERE d.tenant_id=$1 AND d.resource_id>$2::uuid" +
+        " AND r.kind IN ('page','record')" +
+        " ORDER BY d.resource_id LIMIT $3",
+        [a.tenant_id, state.after, limit + 1],
+      )).rows;
+      const batch = rows.slice(0, limit);
+      for (const row of batch)
+        await syncWorkspaceResourceLinks(
+          q, a.tenant_id, row.resource_id, row.blocks,
+        );
+      const hasMore = rows.length > limit;
+      const last = batch.at(-1)?.resource_id || state.after;
+      return {
+        processed: batch.length,
+        next_cursor: hasMore
+          ? encodeLinkReconcileCursor({ ...state, after: last })
+          : null,
+        has_more: hasMore,
+      };
     },
   );
   route(

@@ -61,6 +61,89 @@ export async function visible(
 }
 
 /**
+ * W13: evaluate full hierarchy read access for a bounded set of arbitrary
+ * resources in one recursive SQL operation. This is equivalent to evaluate()
+ * for read/no-read decisions, including personal-over-wildcard precedence,
+ * inherit=false resets, guest root grants, ancestor deny absorption, deleted
+ * ancestors, and live membership verification.
+ *
+ * Callers must still enforce their own result/canonical-content contract.
+ */
+export async function batchReadableResourceIds(
+  q: Query,
+  a: Pick<Actor, "tenant_id" | "user_id" | "role">,
+  ids: string[],
+) {
+  const unique = [...new Set(ids)];
+  if (!unique.length) return new Set<string>();
+  const rows = (await q.query(
+    `WITH RECURSIVE chain AS (
+       SELECT input.id source_id,r.id,r.parent_id,r.deleted_at,
+         r.inherit_permissions,ARRAY[r.id] path,0 depth
+       FROM unnest($1::uuid[]) input(id)
+       JOIN resources r ON r.id=input.id
+       UNION ALL
+       SELECT c.source_id,r.id,r.parent_id,r.deleted_at,
+         r.inherit_permissions,c.path||r.id,c.depth+1
+       FROM chain c
+       JOIN resources r ON c.parent_id=r.id
+       WHERE c.depth<64 AND NOT r.id=ANY(c.path)
+     ), acl_state AS (
+       SELECT c.*,
+         personal.principal_id IS NOT NULL has_personal,
+         personal.level personal_level,
+         wildcard.principal_id IS NOT NULL has_wildcard,
+         wildcard.level wildcard_level,
+         max(c.depth) OVER(PARTITION BY c.source_id) root_depth
+       FROM chain c
+       LEFT JOIN acl personal
+         ON personal.tenant_id=$4::uuid
+        AND personal.resource_id=c.id
+        AND personal.principal_id=$2::text
+       LEFT JOIN acl wildcard
+         ON wildcard.tenant_id=$4::uuid
+        AND wildcard.resource_id=c.id
+        AND wildcard.principal_id='*'
+     )
+     SELECT source_id
+     FROM acl_state
+     GROUP BY source_id
+     HAVING bool_and(deleted_at IS NULL)
+       AND EXISTS (
+         SELECT 1 FROM memberships m
+         WHERE m.tenant_id=$4::uuid AND m.user_id=$2::uuid
+           AND m.role=$3::text AND m.active
+       )
+       AND CASE
+         WHEN $3::text IN ('owner','admin') THEN true
+         WHEN $3::text='member' THEN bool_and(
+           CASE
+             WHEN has_personal THEN personal_level>0
+             WHEN has_wildcard THEN wildcard_level>0
+             ELSE inherit_permissions
+           END
+         )
+         WHEN $3::text='guest' THEN bool_and(
+           CASE
+             WHEN depth=root_depth THEN
+               CASE
+                 WHEN has_personal THEN personal_level>0
+                 WHEN has_wildcard THEN wildcard_level>0
+                 ELSE false
+               END
+             WHEN has_personal THEN personal_level>0
+             WHEN has_wildcard THEN wildcard_level>0
+             ELSE inherit_permissions
+           END
+         )
+         ELSE false
+       END`,
+    [unique, a.user_id, a.role, a.tenant_id],
+  )).rows;
+  return new Set<string>(rows.map((row: any) => row.source_id));
+}
+
+/**
  * W08: a caller who has already passed requireAccess() on a known parent
  * can filter its DIRECT children with two indexed ACL probes per resource.
  * This reproduces evaluate()'s final child step, avoiding 10k individual

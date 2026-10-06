@@ -115,6 +115,18 @@ jobs:
             ! command -v npm
             ! command -v npx
           '
+      - name: Verify shipped source-map-js carries the CVE-2026-93749 fix
+        run: |
+          docker run --rm --entrypoint node openjm-workspace:local -e '
+            const v = require("/app/node_modules/source-map-js/package.json").version;
+            const [major, minor, patch] = v.split(".").map(Number);
+            const fixed = major > 1 || (major === 1 && (minor > 2 || (minor === 2 && patch >= 2)));
+            if (!fixed) {
+              console.error(`FAIL: shipped source-map-js ${v} is below the 1.2.2 fix`);
+              process.exit(1);
+            }
+            console.log(`PASS: shipped source-map-js is ${v}`);
+          '
       - name: Generate container SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:

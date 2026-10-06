@@ -1092,9 +1092,28 @@ test("OpenAPI publishes machine-readable integration contracts", async () => {
   );
   const backlinksSpec = spec.paths["/api/v1/resources/{id}/backlinks"].get;
   assert.equal(backlinksSpec.responses["200"].content["application/json"]
-    .schema.type, "array");
-  assert.equal(backlinksSpec.responses["200"].content["application/json"]
-    .schema.maxItems, 40);
+    .schema.type, "object");
+  assert.deepEqual(
+    backlinksSpec.responses["200"].content["application/json"]
+      .schema.required,
+    ["items", "next_cursor", "has_more"],
+  );
+  assert.equal(
+    backlinksSpec.parameters.find((p:any)=>p.name==="limit")
+      ?.schema.maximum,
+    40,
+  );
+  assert.equal(
+    backlinksSpec.responses["200"].content["application/json"]
+      .schema.properties.items.maxItems,
+    40,
+  );
+  const linkReconcileSpec = spec.paths["/api/v1/resource-links/reconcile"].post;
+  assert.deepEqual(
+    linkReconcileSpec.responses["200"].content["application/json"]
+      .schema.required,
+    ["processed", "next_cursor", "has_more"],
+  );
   const cursorSpec = spec.paths["/api/v1/events/cursor"].get;
   assert.deepEqual(
     cursorSpec.responses["200"].content["application/json"].schema.required,
@@ -1250,7 +1269,7 @@ test("page backlinks use live canonical links and never reveal restricted source
   ));
   let ownerBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`);
   assert.deepEqual(
-    ownerBacklinks.map((x: any) => x.id).sort(),
+    ownerBacklinks.items.map((x: any) => x.id).sort(),
     [source.id, privateSource.id].sort(),
   );
   await linkOk("DELETE",`/resources/${target.id}`);
@@ -1266,7 +1285,7 @@ test("page backlinks use live canonical links and never reveal restricted source
     "Soft-delete retains graph candidates; stale index edges stay inert and GET remains read-only");
   await linkOk("POST",`/resources/${target.id}/restore`);
   ownerBacklinks=await linkOk("GET",`/resources/${target.id}/backlinks`);
-  assert.deepEqual(ownerBacklinks.map((x:any)=>x.id).sort(),
+  assert.deepEqual(ownerBacklinks.items.map((x:any)=>x.id).sort(),
     [source.id,privateSource.id].sort(),
     "Restoring target restores backlink visibility without source rewrites");
   const policy = await linkOk("GET",
@@ -1276,8 +1295,8 @@ test("page backlinks use live canonical links and never reveal restricted source
   });
   const memberBacklinks = await linkOk("GET", `/resources/${target.id}/backlinks`,
     undefined, member);
-  assert.deepEqual(memberBacklinks.map((x: any) => x.id), [source.id]);
-  assert.doesNotMatch(JSON.stringify(memberBacklinks), /Secret referencing source/);
+  assert.deepEqual(memberBacklinks.items.map((x: any) => x.id), [source.id]);
+  assert.doesNotMatch(JSON.stringify(memberBacklinks.items), /Secret referencing source/);
   assert.equal((await linkReq("GET",
     `/resources/${target.id}/backlinks`, undefined, guest)).statusCode, 404);
   assert.equal((await linkReq("GET",
@@ -1293,7 +1312,7 @@ test("page backlinks use live canonical links and never reveal restricted source
   });
   const after = await linkOk("GET", `/resources/${target.id}/backlinks`,
     undefined, member);
-  assert.deepEqual(after, []);
+  assert.deepEqual(after.items, []);
   assert.equal((await db.tenant(owner.tenant,(q)=>q.query(
     "SELECT 1 FROM resource_links WHERE source_id=$1 AND target_id=$2",
     [source.id,target.id],
@@ -1314,11 +1333,468 @@ test("page backlinks use live canonical links and never reveal restricted source
   ))).rowCount,1,"Version restore restores the canonical graph edge");
   const restored=await linkOk("GET",`/resources/${target.id}/backlinks`,
     undefined,member);
-  assert.deepEqual(restored.map((x:any)=>x.id),[source.id]);
+  assert.deepEqual(restored.items.map((x:any)=>x.id),[source.id]);
   } finally {
     await linksApp.close();
   }
 });
+test("W13c backlink cursor is opaque, ACL-live and explicitly repairable", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c cursor target",
+  });
+  const sourceA = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c first source",
+  });
+  const sourceB = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c second source",
+  });
+  const staleSource = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c stale source",
+  });
+  const linkedBlocks = [{
+    type: "paragraph",
+    content: [{
+      type: "link",
+      href: "/?page=" + target.id,
+      content: [{ type: "text", text: "Target", styles: {} }],
+    }],
+  }];
+  for (const source of [sourceA, sourceB])
+    await ok("PATCH", `/pages/${source.id}/content`, {
+      blocks: linkedBlocks, expected_revision: 1,
+    });
+  await ok("PATCH", `/resources/${sourceA.id}`, {
+    title: "W13c renamed first source",
+  });
+  await ok("DELETE", `/resources/${sourceA.id}`);
+  let visible = await ok("GET", `/resources/${target.id}/backlinks`);
+  assert.ok(!visible.items.some((x:any)=>x.id===sourceA.id),
+    "A trashed source must immediately leave backlink results");
+  await ok("POST", `/resources/${sourceA.id}/restore`);
+  visible = await ok("GET", `/resources/${target.id}/backlinks`);
+  assert.ok(visible.items.some((x:any)=>x.id===sourceA.id),
+    "Restoring a source recovers its retained canonical backlink");
+  // Keep both sources inside the same JavaScript millisecond while preserving
+  // PostgreSQL microsecond ordering. A cursor that rounded through Date would
+  // skip the second source; the opaque cursor must retain the exact DB key.
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "UPDATE resources SET updated_at='2026-10-05T12:00:00.123900Z'::timestamptz WHERE id=$1",
+      [sourceA.id],
+    );
+    await q.query(
+      "UPDATE resources SET updated_at='2026-10-05T12:00:00.123800Z'::timestamptz WHERE id=$1",
+      [sourceB.id],
+    );
+  });
+
+  const first = await ok("GET",
+    `/resources/${target.id}/backlinks?limit=1`,
+    undefined, member);
+  assert.deepEqual(first.items.map((x:any)=>x.id), [sourceA.id]);
+  assert.equal(first.items[0].title, "W13c renamed first source",
+    "Backlinks resolve the source's current title without re-indexing IDs");
+  assert.equal(first.has_more, true);
+  assert.equal(typeof first.next_cursor, "string");
+  assert.ok(!first.next_cursor.includes(sourceA.id));
+  assert.ok(!first.next_cursor.includes(sourceB.id));
+
+  const altered = first.next_cursor.slice(0, -1) +
+    (first.next_cursor.endsWith("A") ? "B" : "A");
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(altered)}`,
+    undefined, member)).statusCode, 400,
+    "Tampered backlink cursors must fail closed");
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, owner)).statusCode, 400,
+    "A cursor is bound to the issuing principal");
+  assert.equal((await req("GET",
+    `/resources/${target.id}/backlinks?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, member)).statusCode, 400,
+    "A cursor cannot be replayed under a different page-size contract");
+
+  const preciseContinuation = await ok("GET",
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, member);
+  assert.deepEqual(preciseContinuation.items.map((x:any)=>x.id), [sourceB.id],
+    "Microsecond-distinct backlinks in one JS millisecond must not be skipped");
+  assert.equal(preciseContinuation.has_more, false);
+  assert.equal(preciseContinuation.next_cursor, null);
+
+  await permissionPatch(`/resources/${sourceB.id}/permissions`, {
+    inherit: false, grants: [],
+  });
+  const continued = await ok("GET",
+    `/resources/${target.id}/backlinks?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`,
+    undefined, member);
+  assert.deepEqual(continued.items, [],
+    "Revoked source must disappear on the next page without graph rebuild");
+  assert.equal(continued.has_more, false);
+  assert.equal(continued.next_cursor, null);
+
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "DELETE FROM resource_links WHERE source_id=$1 AND target_id=$2",
+      [sourceA.id, target.id],
+    );
+    await q.query(
+      "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+      [owner.tenant, staleSource.id, target.id],
+    );
+  });
+  const beforeRepair = await ok("GET", `/resources/${target.id}/backlinks`);
+  assert.deepEqual(beforeRepair.items.map((x:any)=>x.id), [sourceB.id],
+    "Read path stays side-effect free: missing canonical edge is not synthesized and stale edge is inert");
+
+  const firstRepairPage = await ok("POST", "/resource-links/reconcile", {
+    limit: 1,
+  });
+  assert.equal(firstRepairPage.has_more, true);
+  assert.equal(typeof firstRepairPage.next_cursor, "string");
+  assert.equal((await req("POST", "/resource-links/reconcile", {
+    limit: 1, cursor: firstRepairPage.next_cursor,
+  }, other)).statusCode, 400,
+  "Rebuild continuation is tenant/principal bound");
+
+  let reconcileCursor: string | null = null;
+  let pages = 0;
+  do {
+    const repaired = await ok("POST", "/resource-links/reconcile", {
+      limit: 100,
+      ...(reconcileCursor ? { cursor: reconcileCursor } : {}),
+    });
+    pages++;
+    assert.ok(repaired.processed >= 0 && repaired.processed <= 100);
+    reconcileCursor = repaired.next_cursor;
+    if (!repaired.has_more) {
+      assert.equal(reconcileCursor, null);
+      break;
+    }
+    assert.equal(typeof reconcileCursor, "string");
+    assert.ok(pages < 50, "Resource-link repair must make bounded forward progress");
+  } while (reconcileCursor);
+
+  const repairedEdges = (await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+    [target.id],
+  ))).rows.map((x:any)=>x.source_id).sort();
+  assert.deepEqual(repairedEdges, [sourceA.id, sourceB.id].sort(),
+    "Explicit repair restores canonical edges and removes stale candidates");
+
+  const snapshot = JSON.stringify(repairedEdges);
+  reconcileCursor = null;
+  pages = 0;
+  do {
+    const repeated = await ok("POST", "/resource-links/reconcile", {
+      limit: 100,
+      ...(reconcileCursor ? { cursor: reconcileCursor } : {}),
+    });
+    pages++;
+    reconcileCursor = repeated.next_cursor;
+    if (!repeated.has_more) break;
+    assert.ok(pages < 50, "Repeated repair must remain resumable");
+  } while (reconcileCursor);
+  const afterRepeat = (await db.tenant(owner.tenant, (q) => q.query(
+    "SELECT source_id FROM resource_links WHERE target_id=$1 ORDER BY source_id",
+    [target.id],
+  ))).rows.map((x:any)=>x.source_id).sort();
+  assert.equal(JSON.stringify(afterRepeat), snapshot,
+    "Resource-link reconciliation is idempotent");
+
+  const foreignRepair = await ok("POST", "/resource-links/reconcile",
+    { limit: 1 }, other);
+  assert.equal(foreignRepair.processed, 0,
+    "A different tenant cannot enumerate or repair this tenant's documents");
+});
+
+test("W13c scoped cursor metadata excludes source kinds outside token scope", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c scoped target",
+  });
+  const pageSource = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c scoped page source",
+  });
+  const recordSource = randomUUID();
+  const blocks = [{
+    type: "paragraph",
+    content: [{
+      type: "link",
+      href: "/?page=" + target.id,
+      content: [{ type: "text", text: "Scoped target", styles: {} }],
+    }],
+  }];
+  await ok("PATCH", `/pages/${pageSource.id}/content`, {
+    blocks, expected_revision: 1,
+  });
+  const serviceId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,'W13 Scoped Reader',true)",
+      [serviceId, serviceId + "@service.internal"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'guest')",
+      [owner.tenant, serviceId],
+    );
+    await q.query(
+      "INSERT INTO resources(id,tenant_id,parent_id,kind,title,updated_at)" +
+      " VALUES($1,$2,$3,'record','W13c hidden-by-scope record',now()-interval '1 second')",
+      [recordSource, owner.tenant, space.id],
+    );
+    await q.query(
+      "INSERT INTO page_documents(tenant_id,resource_id,blocks,plain_text,y_state)" +
+      " VALUES($1,$2,$3,'',decode('00','hex'))",
+      [owner.tenant, recordSource, JSON.stringify(blocks)],
+    );
+    await q.query(
+      "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3)",
+      [owner.tenant, recordSource, target.id],
+    );
+    for (const resourceId of [root.id, target.id, pageSource.id, recordSource])
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " VALUES($1,$2,$3,1) ON CONFLICT(tenant_id,resource_id,principal_id)" +
+        " DO UPDATE SET level=EXCLUDED.level",
+        [owner.tenant, resourceId, serviceId],
+      );
+    await q.query("UPDATE resources SET updated_at=now() WHERE id=$1",
+      [pageSource.id]);
+  });
+  const serviceToken = await db.tenant(owner.tenant, (q) =>
+    createSession(q, owner.tenant, serviceId, ["pages.read"], "W13 scoped reader"));
+  const response = await req("GET",
+    `/resources/${target.id}/backlinks?limit=1`,
+    undefined, null, { authorization: "Bearer " + serviceToken });
+  assert.equal(response.statusCode, 200, response.body);
+  const result = response.json();
+  assert.deepEqual(result.items.map((x:any)=>x.id), [pageSource.id]);
+  assert.equal(result.has_more, false,
+    "Scope-inaccessible record candidates must not influence continuation metadata");
+  assert.equal(result.next_cursor, null);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(recordSource),
+    "Scoped result/cursor metadata must not reveal excluded record IDs");
+  assert.doesNotMatch(JSON.stringify(result), /hidden-by-scope record/,
+    "Scoped result must not reveal excluded record titles");
+});
+
+test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async () => {
+  const target = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c 10k backlink target",
+  });
+  const probeTarget = await ok("POST", "/resources", {
+    kind: "page", parent_id: space.id, title: "W13c index probe target",
+  });
+  const size = 10000, hiddenCount = 5000, staleCount = 300;
+  const ids = Array.from({ length: size }, () => randomUUID());
+  const staleIds = ids.slice(hiddenCount, hiddenCount + staleCount);
+  const restoreProbe = ids[hiddenCount + staleCount];
+  const blocks = JSON.stringify([{
+    type: "paragraph",
+    content: [{
+      type: "link",
+      href: "/?page=" + target.id,
+      content: [{ type: "text", text: "Target", styles: {} }],
+    }],
+  }]);
+  const staleBlocks = JSON.stringify([{
+    type: "paragraph",
+    content: "Conservative migration candidate /?page=" + target.id,
+  }]);
+  const fixtureStarted = Date.now();
+  try {
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position,updated_at)" +
+        " SELECT x.id,$2::uuid,$3::uuid,'page'," +
+        " 'W13c source '||x.n::text,x.n::float8," +
+        " now()-(x.n::text||' milliseconds')::interval" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+        [ids, owner.tenant, space.id],
+      );
+      await q.query(
+        "INSERT INTO page_documents(tenant_id,resource_id,blocks,plain_text,y_state)" +
+        " SELECT $2::uuid,x.id,$3::jsonb,'',decode('00','hex')" +
+        " FROM unnest($1::uuid[]) AS x(id)",
+        [ids, owner.tenant, blocks],
+      );
+      await q.query(
+        "UPDATE page_documents SET blocks=$2::jsonb" +
+        " WHERE resource_id=ANY($1::uuid[])",
+        [staleIds, staleBlocks],
+      );
+      await q.query(
+        "INSERT INTO acl(tenant_id,resource_id,principal_id,level)" +
+        " SELECT $2::uuid,x.id,$3::text,0" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)" +
+        " WHERE x.n<=$4",
+        [ids, owner.tenant, member.id, hiddenCount],
+      );
+    });
+    const fixtureMs = Date.now() - fixtureStarted;
+
+    const backfillSql =
+      "INSERT INTO resource_links(tenant_id,source_id,target_id,source_updated_at)" +
+      " SELECT DISTINCT d.tenant_id,d.resource_id,(match.ids)[1]::uuid,source.updated_at" +
+      " FROM page_documents d" +
+      " JOIN resources source ON source.tenant_id=d.tenant_id" +
+      " AND source.id=d.resource_id" +
+      " CROSS JOIN LATERAL regexp_matches(" +
+      " d.blocks::text," +
+      " '[/]?[?]page=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})','g'" +
+      " ) AS match(ids)" +
+      " JOIN resources linked_target ON linked_target.tenant_id=d.tenant_id" +
+      " AND linked_target.id=(match.ids)[1]::uuid" +
+      " AND linked_target.kind IN ('page','record')" +
+      " WHERE d.resource_id<>(match.ids)[1]::uuid" +
+      " ON CONFLICT DO NOTHING";
+    let backfillLocks: any[] = [], concurrentReadMs = 0;
+    if (!pg.emulated) {
+      const planned = await db.tenant(owner.tenant, (q) =>
+        q.query("EXPLAIN (FORMAT JSON) " + backfillSql));
+      console.info("W13_BACKFILL_PLAN " +
+        JSON.stringify(planned.rows[0]["QUERY PLAN"]));
+    }
+    const backfillStarted = Date.now();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(backfillSql);
+      if (!pg.emulated) {
+        const pid = (await q.query("SELECT pg_backend_pid() pid")).rows[0].pid;
+        const readStarted = Date.now();
+        const evidence = await db.tenant(owner.tenant, async (probe) => {
+          const read = await probe.query(
+            "SELECT count(*)::int n FROM resource_links" +
+            " WHERE tenant_id=$1 AND target_id=$2",
+            [owner.tenant, target.id],
+          );
+          const locks = await probe.query(
+            "SELECT mode,granted FROM pg_locks" +
+            " WHERE pid=$1 AND relation='resource_links'::regclass",
+            [pid],
+          );
+          return { read: read.rows[0].n, locks: locks.rows };
+        });
+        concurrentReadMs = Date.now() - readStarted;
+        backfillLocks = evidence.locks;
+        assert.ok(concurrentReadMs < 5000,
+          "Migration backfill must not block concurrent backlink reads");
+        assert.ok(backfillLocks.some((lock:any) =>
+          lock.granted && lock.mode === "RowExclusiveLock"),
+          "Backfill evidence must capture the expected insert lock");
+        assert.ok(!backfillLocks.some((lock:any) =>
+          lock.granted && lock.mode === "AccessExclusiveLock"),
+          "Backfill must not require an AccessExclusive lock on resource_links");
+      }
+    });
+    const backfillMs = Date.now() - backfillStarted;
+    const edgeCount = await db.tenant(owner.tenant, (q) => one(q,
+      "SELECT count(*)::int n FROM resource_links WHERE target_id=$1",
+      [target.id]));
+    assert.equal(edgeCount.n, size,
+      "Set-based W13 migration/backfill must materialize canonical and conservative candidates");
+    const staleEdgeCount = await db.tenant(owner.tenant, (q) => one(q,
+      "SELECT count(*)::int n FROM resource_links" +
+      " WHERE target_id=$1 AND source_id=ANY($2::uuid[])",
+      [target.id, staleIds]));
+    assert.equal(staleEdgeCount.n, staleCount,
+      "Conservative backfill must include false-positive candidates for read-time canonical filtering");
+    assert.ok(backfillMs < 60000,
+      "10k W13 backfill exceeded provisional 60s CI budget: " + backfillMs + "ms");
+
+    await ok("DELETE", `/resources/${restoreProbe}`);
+    const deletedPage = await ok("GET",
+      `/resources/${target.id}/backlinks?limit=40`, undefined, member);
+    assert.ok(!deletedPage.items.some((row:any)=>row.id===restoreProbe),
+      "Deleted hot-target sources must disappear without graph cleanup");
+    const retainedProbe = await db.tenant(owner.tenant, (q) => one(q,
+      "SELECT count(*)::int n FROM resource_links" +
+      " WHERE source_id=$1 AND target_id=$2",
+      [restoreProbe, target.id]));
+    assert.equal(retainedProbe.n, 1,
+      "Soft delete retains the candidate edge so restore stays cheap");
+    await ok("POST", `/resources/${restoreProbe}/restore`);
+    const restoredPage = await ok("GET",
+      `/resources/${target.id}/backlinks?limit=40`, undefined, member);
+    assert.ok(restoredPage.items.some((row:any)=>row.id===restoreProbe),
+      "Restored hot-target source must recover on the next read");
+
+    const hidden = new Set(ids.slice(0, hiddenCount));
+    const stale = new Set(staleIds);
+    const latencies: number[] = [];
+    const gathered: string[] = [];
+    let cursor: string | null = null;
+    const pageStarted = Date.now();
+    for (let segment = 0; segment < 5; segment++) {
+      const started = Date.now();
+      const result = await ok("GET",
+        `/resources/${target.id}/backlinks?limit=40` +
+        (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+        undefined, member);
+      latencies.push(Date.now() - started);
+      assert.equal(result.items.length, 40,
+        "A hot target must return a full permission-filtered page");
+      assert.ok(result.items.every((row:any)=>!hidden.has(row.id)),
+        "Denied source IDs/titles may not enter backlink pages");
+      assert.ok(result.items.every((row:any)=>!stale.has(row.id)),
+        "Conservative false-positive candidates must never become disclosed backlinks");
+      gathered.push(...result.items.map((row:any)=>row.id));
+      cursor = result.next_cursor;
+      assert.equal(result.has_more, true);
+      assert.equal(typeof cursor, "string");
+    }
+    assert.equal(gathered.length, 200);
+    assert.equal(new Set(gathered).size, 200,
+      "Stable backlink cursor pages must not duplicate unchanged sources");
+    const pageMs = Date.now() - pageStarted;
+    latencies.sort((a,b)=>a-b);
+    const percentile = (p:number) =>
+      latencies[Math.min(latencies.length - 1,
+        Math.ceil(p * latencies.length) - 1)];
+    console.info("W13_10K_BACKLINK_BENCH " + JSON.stringify({
+      source_pages: size,
+      hidden_sources: hiddenCount,
+      stale_false_positive_candidates: staleCount,
+      visible_canonical_sources: size - hiddenCount - staleCount,
+      fixture_ms: fixtureMs,
+      migration_backfill_ms: backfillMs,
+      migration_concurrent_read_ms: concurrentReadMs,
+      migration_lock_modes: backfillLocks.map((lock:any)=>lock.mode).sort(),
+      five_page_ms: pageMs,
+      page_p50_ms: percentile(0.5),
+      page_p95_ms: percentile(0.95),
+      returned: gathered.length,
+    }));
+    assert.ok(pageMs < 30000,
+      "10k W13 paginated ACL workload exceeded provisional 30s CI budget");
+
+    // Use a highly selective target to prove the target/source ordering index
+    // is available to the exact lookup predicate used by the API.
+    await db.tenant(owner.tenant, (q) => q.query(
+      "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
+      " VALUES($1,$2,$3)",
+      [owner.tenant, ids[hiddenCount], probeTarget.id],
+    ));
+    if (!pg.emulated) {
+      const explained = await db.tenant(owner.tenant, (q) => q.query(
+        "EXPLAIN (FORMAT JSON) SELECT source_id FROM resource_links" +
+        " WHERE tenant_id=$1 AND target_id=$2" +
+        " ORDER BY source_id LIMIT 100",
+        [owner.tenant, probeTarget.id],
+      ));
+      const plan = JSON.stringify(explained.rows[0]["QUERY PLAN"]);
+      assert.match(plan, /resource_links_target/,
+        "PostgreSQL must be able to use the W13 target lookup index");
+      console.info("W13_LINK_INDEX_PLAN " + plan);
+    }
+  } finally {
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query("DELETE FROM resources WHERE id=ANY($1::uuid[])", [ids]);
+      await q.query("DELETE FROM resources WHERE id=ANY($1::uuid[])",
+        [[target.id, probeTarget.id]]);
+    });
+  }
+});
+
 test("typed records, optimistic concurrency, saved filters and full bodies", async () => {
   database = await ok("POST", "/resources", {
     kind: "database",
@@ -2283,7 +2759,8 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
       // secret: the worker's read lock lasts until its HTTP send commits.
       await db.tenant(owner.tenant, (q) =>
         q.query(
-          "UPDATE webhook_deliveries SET status='pending',next_at=now() WHERE id=$1",
+          "UPDATE webhook_deliveries SET status='pending'," +
+          " next_at='1970-01-01T00:00:00Z'::timestamptz WHERE id=$1",
           [deliveryId],
         ),
       );
@@ -2362,6 +2839,23 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
 });
 
 test("imports run asynchronously and recheck current permissions", async () => {
+  const runOwnedJob = async (id: string, actor = member) => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await tick(db);
+      const job = await ok("GET", `/jobs/${id}`, undefined, actor);
+      if (job.status !== "pending") return job;
+    }
+    assert.fail("Import job did not leave pending state within bounded worker ticks");
+  };
+  const runJobStatus = async (id: string) => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await tick(db);
+      const status = await db.tenant(owner.tenant, (q) =>
+        one(q, "SELECT status FROM jobs WHERE id=$1", [id]));
+      if (status?.status !== "pending") return status;
+    }
+    assert.fail("Import job did not leave pending state within bounded worker ticks");
+  };
   const j = await ok(
     "POST",
     "/imports",
@@ -2373,8 +2867,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     },
     member,
   );
-  await tick(db);
-  const job = await ok("GET", `/jobs/${j.id}`, undefined, member);
+  const job = await runOwnedJob(j.id, member);
   assert.equal(job.status, "completed");
   assert(
     (
@@ -2387,8 +2880,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     format: "csv",
     content: "Name,Owner\nFirst,Jane\nSecond,John",
   });
-  await tick(db);
-  assert.equal((await ok("GET", `/jobs/${csv.id}`)).status, "completed");
+  assert.equal((await runOwnedJob(csv.id, owner)).status, "completed");
   const denied = await ok(
     "POST",
     "/imports",
@@ -2404,10 +2896,7 @@ test("imports run asynchronously and recheck current permissions", async () => {
     inherit: false,
     grants: [],
   });
-  await tick(db);
-  const status = await db.tenant(owner.tenant, (q) =>
-    one(q, "SELECT status FROM jobs WHERE id=$1", [denied.id]),
-  );
+  const status = await runJobStatus(denied.id);
   assert.equal(status.status, "failed");
   await permissionPatch(`/resources/${space.id}/permissions`, {
     inherit: true,
@@ -3400,8 +3889,12 @@ test("W07 Rollup native: hide revoked links in all aggregates and exports", asyn
   assert.equal(JSON.stringify(peerRow).includes(second.id), false);
   const exported = await ok("GET",
     "/resources/" + source.id + "/export?format=json", undefined, peer);
-  assert.ok(!JSON.stringify(exported).includes(second.id));
-  assert.ok(!JSON.stringify(exported).includes("910"));
+  const exportedRow = exported.records.find((row:any) => row.id === item.id);
+  assert.ok(exportedRow, "Peer export must include the readable source record");
+  assert.ok(!JSON.stringify(exportedRow.values).includes(second.id));
+  assert.equal(exportedRow.values.count, 1);
+  assert.equal(exportedRow.values.total, 10);
+  assert.equal(exportedRow.values.average, 10);
   const exportedCsv = await req("GET",
     "/resources/" + source.id + "/export?format=csv", undefined, peer);
   assert.equal(exportedCsv.statusCode, 200);

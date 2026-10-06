@@ -416,30 +416,70 @@ export default function Resource({
 function Backlinks({ id }: { id: string }) {
   const [links,setLinks]=useState<any[]>([]);
   const [loading,setLoading]=useState(true);
+  const [loadingMore,setLoadingMore]=useState(false);
   const [error,setError]=useState(false);
+  const [nextCursor,setNextCursor]=useState<string|null>(null);
+  const [hasMore,setHasMore]=useState(false);
   const request=useRef(0);
   const refresh=useCallback(async()=>{
     const generation=++request.current;
     // Recheck authority on every focus/manual refresh. Previous titles must
     // never remain visible while a new ACL decision is in flight.
     setLinks([]);
+    setNextCursor(null);
+    setHasMore(false);
+    setLoadingMore(false);
     setError(false);
     setLoading(true);
     try {
-      const current=await api(`/resources/${id}/backlinks`);
+      const current=await api(`/resources/${id}/backlinks?limit=20`);
       if(generation===request.current){
-        setLinks(current);
+        setLinks(current.items);
+        setNextCursor(current.next_cursor);
+        setHasMore(current.has_more);
         setError(false);
       }
     } catch {
       if(generation===request.current){
         setLinks([]);
+        setNextCursor(null);
+        setHasMore(false);
         setError(true);
       }
     } finally {
       if(generation===request.current)setLoading(false);
     }
   },[id]);
+  const loadMore=useCallback(async()=>{
+    if(!nextCursor||loadingMore)return;
+    const generation=request.current;
+    setLoadingMore(true);
+    try {
+      const current=await api(
+        `/resources/${id}/backlinks?limit=20&cursor=${encodeURIComponent(nextCursor)}`,
+      );
+      if(generation===request.current){
+        setLinks(previous=>{
+          const seen=new Set(previous.map(link=>link.id));
+          return [...previous,...current.items.filter((link:any)=>!seen.has(link.id))];
+        });
+        setNextCursor(current.next_cursor);
+        setHasMore(current.has_more);
+        setError(false);
+      }
+    } catch {
+      if(generation===request.current){
+        // A continuation error may be an access change; never preserve stale
+        // private titles after a failed authorization-sensitive request.
+        setLinks([]);
+        setNextCursor(null);
+        setHasMore(false);
+        setError(true);
+      }
+    } finally {
+      if(generation===request.current)setLoadingMore(false);
+    }
+  },[id,nextCursor,loadingMore]);
   useEffect(()=>{
     void refresh();
     const onFocus=()=>void refresh();
@@ -462,14 +502,27 @@ function Backlinks({ id }: { id: string }) {
       ) : error ? (
         <p role="alert">Unable to load backlinks. Try refreshing.</p>
       ) : links.length ? (
-        <div className="backlink-items">
-          {links.map((source: any) => (
-            <button type="button" key={source.id} onClick={() => go(source.id)}>
-              <span>{source.title}</span>
-              <ArrowUpRight size={15} />
+        <>
+          <div className="backlink-items">
+            {links.map((source: any) => (
+              <button type="button" key={source.id} onClick={() => go(source.id)}>
+                <span>{source.title}</span>
+                <ArrowUpRight size={15} />
+              </button>
+            ))}
+          </div>
+          {hasMore&&nextCursor&&(
+            <button type="button" className="text-button"
+              onClick={()=>void loadMore()} disabled={loadingMore}>
+              {loadingMore?"Loading more…":"Load more links"}
             </button>
-          ))}
-        </div>
+          )}
+        </>
+      ) : hasMore&&nextCursor ? (
+        <button type="button" className="text-button"
+          onClick={()=>void loadMore()} disabled={loadingMore}>
+          {loadingMore?"Checking more links…":"Check more links"}
+        </button>
       ) : <p className="muted">No accessible pages link here yet.</p>}
     </section>
   );
