@@ -22,3 +22,15 @@ CREATE POLICY tenant_isolation ON job_artifacts
   USING(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
   WITH CHECK(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 GRANT SELECT,INSERT,UPDATE,DELETE ON job_artifacts TO workspace_app;
+
+ALTER TABLE object_deletions
+  DROP CONSTRAINT object_deletions_reason_check;
+ALTER TABLE object_deletions
+  ADD CONSTRAINT object_deletions_reason_check
+  CHECK(reason IN (
+    'resource_purge',
+    'file_retention',
+    'upload_rollback',
+    'job_artifact_expired',
+    'job_input_consumed'
+  ));
