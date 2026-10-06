@@ -26,6 +26,8 @@ async function runWrapper({ envelope, exitCode = 0, repository = repoRoot, extra
         WORKSPACE_PLATFORM_REPO: repository,
         CI_AGENT_BRIDGE_TOKEN: "must-not-reach-agent",
         AGENT_DISPATCH_TOKEN: "must-not-reach-agent",
+        CI_HERMES_MODEL: "",
+        CI_HERMES_PROVIDER: "",
         ...extraEnv,
       },
       stdio: ["pipe", "pipe", "pipe"],
