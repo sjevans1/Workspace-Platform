@@ -112,6 +112,12 @@ export async function exportPortableTree(
     );
     if (presented.length > maxRecords)
       throw new HttpError(413, "Export exceeds the record limit");
+    const portablePropertyIds = new Set(
+      row.properties
+        .filter((property: any) =>
+          !["person", "formula", "rollup"].includes(property.type))
+        .map((property: any) => property.id),
+    );
     for (const rec of presented)
       databaseRecords.push({
         id: rec.id,
@@ -119,7 +125,10 @@ export async function exportPortableTree(
         title: rec.title,
         icon: rec.icon,
         position: rec.position,
-        values: rec.values,
+        values: Object.fromEntries(
+          Object.entries(rec.values)
+            .filter(([propertyId]) => portablePropertyIds.has(propertyId)),
+        ),
         revision: rec.revision,
       });
   }
