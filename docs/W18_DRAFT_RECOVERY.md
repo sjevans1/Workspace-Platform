@@ -47,10 +47,17 @@ documented local retention/security.
   round-trip recovery, no-duplicate convergence, malformed/empty draft
   rejection, size cap, eviction bound and foreign-user handling.
 - `npm run typecheck` clean; `tests/editor-core-matrix.test.ts` 16/16.
+- `e2e/workspace.spec.ts` "W18 browser: interrupted edit recovers unsent
+  content from the device draft": a real mid-edit disconnect (the test
+  closes the live collaboration WebSocket from the browser network layer and
+  keeps cutting reconnection attempts), the typed sentence proven absent
+  from server content, the draft captured into device-local storage on
+  pagehide, and after reload the content recovered exactly once with the
+  "Recovered unsaved edits from this device" notice, the saved state
+  returning and the draft cleared from the device.
 
 ## Still open for W18 acceptance
 
-- Browser/e2e journey: real disconnect mid-edit, reload, recovered content.
 - Reconnection/conflict UX against a concurrent remote editor.
 - Session-expiry and tenant-switch journeys in a real session.
 - Documented retention window policy decision (currently: clear on ack or
