@@ -136,6 +136,28 @@ test("agent instruction keeps failure work narrow and exact-head aware", () => {
   assert.match(instruction, /After a push, stop/);
 });
 
+test("agent instruction gates merges behind explicit authorization, for any conclusion", () => {
+  for (const conclusion of ["success", "failure"]) {
+    const instruction = buildAgentInstruction(event(`${conclusion}-merge-gate`, conclusion));
+    assert.match(instruction, /Never merge a pull request merely because CI is green/);
+    assert.match(instruction, /explicitly authorized that specific pull request/);
+    assert.match(instruction, /pre-authorized a defined roadmap acceptance boundary/);
+    assert.match(instruction, /exact head is still current/);
+    assert.match(instruction, /do not reinterpret that as authorization to merge/);
+    assert.match(instruction, /requires user approval/);
+    assert.match(instruction, /remains autonomous/);
+  }
+});
+
+test("agent instruction still permits autonomous branch work and recovery", () => {
+  const instruction = buildAgentInstruction(event("autonomy-scope"));
+  assert.match(instruction, /create and update branches, open pull requests/);
+  assert.match(instruction, /make bounded corrections/);
+  assert.match(instruction, /inside an already-authorized work package/);
+  assert.match(instruction, /restarting the supervised bridge/);
+  assert.match(instruction, /superseding stale CI events/);
+});
+
 test("HTTP bridge authenticates, validates and durably accepts events", async (t) => {
   const { root, spool } = await tempSpool();
   t.after(() => rm(root, { recursive: true, force: true }));

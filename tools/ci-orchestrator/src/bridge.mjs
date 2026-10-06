@@ -29,6 +29,12 @@ export function buildAgentInstruction(event) {
     "Avoid broad log reads, duplicate tests, and unrelated work.",
     "Keep Workspace standalone; do not introduce an OpenJM Enterprise AI dependency.",
     "After a push, stop and let the next CI completion event resume the loop.",
+    "Autonomous branch work, controlled merges: you may autonomously create and update branches, open pull requests, diagnose CI failures, make bounded corrections, rerun targeted verification, update documentation, and progress roadmap work inside an already-authorized work package.",
+    "Never merge a pull request merely because CI is green. A merge is permitted only when the user has explicitly authorized that specific pull request to merge once named acceptance conditions are satisfied, or has explicitly pre-authorized a defined roadmap acceptance boundary covering it.",
+    "Before any merge, verify the pull request exact head is still current, that the required CI and acceptance gates are satisfied, that no unresolved security or review finding remains, that prerequisite roadmap items are satisfied, and that the change is still within the authorized scope.",
+    "If CI is flaky or the acceptance evidence is ambiguous, do not reinterpret that as authorization to merge. You may diagnose and fix the instability autonomously, but the merge gate stays intact.",
+    "After merging an authorized pull request you may continue to the next already-authorized roadmap action. Crossing into an acceptance boundary that has not been pre-authorized requires user approval.",
+    "Infrastructure recovery that does not alter product or repository state, such as retrying delivery, restarting the supervised bridge, recovering the durable spool, or superseding stale CI events, remains autonomous.",
   ].join(" ");
 }
 

@@ -167,7 +167,7 @@ For `conclusion=success`:
 1. verify that `head_sha` is still the relevant PR/current roadmap head;
 2. verify all required jobs/checks, not merely this one workflow event;
 3. capture acceptance evidence if this is an acceptance boundary;
-4. merge/advance only when policy permits;
+4. merge only under the merge authorization policy below;
 5. otherwise take no action.
 
 For any non-success terminal conclusion:
@@ -178,6 +178,37 @@ For any non-success terminal conclusion:
 4. fetch logs only for the failing job when needed;
 5. make the smallest correction;
 6. push once and stop; the next CI completion event wakes the loop again.
+
+### Merge authorization policy
+
+Autonomous branch work, controlled merges. This policy is embedded in the agent instruction produced by `buildAgentInstruction()` so it travels with every event.
+
+Autonomous, without further approval:
+
+- creating and updating branches;
+- opening pull requests;
+- diagnosing CI failures and making bounded corrections;
+- rerunning targeted verification;
+- updating documentation;
+- progressing roadmap work inside an already-authorized work package;
+- infrastructure recovery that does not alter product or repository state: retrying delivery, restarting the supervised bridge, recovering the durable spool, superseding stale CI events.
+
+Not autonomous: merging. A merge is permitted only when one of these holds:
+
+1. the user has explicitly authorized that specific pull request to merge once named acceptance conditions are satisfied; or
+2. the user has explicitly pre-authorized a defined roadmap acceptance boundary, such as "complete and merge all pull requests required to close W14 once each exact-head acceptance gate is satisfied".
+
+Before merging, the agent must verify:
+
+- the pull request exact head is still current;
+- required CI and acceptance gates are satisfied;
+- no unresolved security or review finding remains;
+- prerequisite roadmap items are satisfied;
+- the change remains within the authorized scope.
+
+If CI is flaky, or the acceptance evidence is ambiguous, that is **not** authorization to merge. The agent may diagnose and fix the instability autonomously, but the merge gate stays intact. A green result obtained only by re-running a flaky gate is not acceptance evidence.
+
+After merging an authorized pull request the agent may continue to the next already-authorized roadmap action. Crossing into an acceptance boundary that has not been pre-authorized requires user approval.
 
 This intentionally produces a **push -> CI -> event -> focused action -> push** cycle rather than a continuously polling agent.
 
