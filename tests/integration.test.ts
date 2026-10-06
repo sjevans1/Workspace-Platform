@@ -1298,7 +1298,7 @@ test("W15 templates and subtree duplication remap links and relations without co
 
   const clonedChildren = await ok(
     "GET", `/resources?parent_id=${clone.id}&limit=50`);
-  const byTitle = new Map(
+  const byTitle = new Map<string, any>(
     clonedChildren.map((item: any) => [item.title, item]));
   const clonedTargetPage = byTitle.get("Linked target");
   const clonedLinkingPage = byTitle.get("Linking page");
