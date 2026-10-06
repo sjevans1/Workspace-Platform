@@ -7,6 +7,14 @@ import { withCollaboration } from "@blocknote/core/yjs";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { api, notify } from "../lib/api";
+import {
+  clearDraft,
+  draftUpdate,
+  loadDraft,
+  MAX_DRAFT_BYTES,
+  saveDraft,
+  type StoredDraft,
+} from "../lib/drafts";
 import { workspacePageHref } from "../../../packages/editor/links";
 import { workspaceEditorSchema } from "../../../packages/editor/schema";
 function Body({
@@ -55,9 +63,14 @@ function Body({
     setSearching(true);
     try {
       const result = await api("/search?q=" + encodeURIComponent(query));
-      setSuggestions(result.items.filter((entry: any) =>
-        ["page", "record"].includes(entry.kind) && entry.id !== id,
-      ).slice(0, 20));
+      setSuggestions(
+        result.items
+          .filter(
+            (entry: any) =>
+              ["page", "record"].includes(entry.kind) && entry.id !== id,
+          )
+          .slice(0, 20),
+      );
     } catch (error) {
       notify(error instanceof Error ? error.message : "Page search failed");
       setSuggestions([]);
@@ -66,24 +79,39 @@ function Body({
     }
   }
   function changeBlock(
-    kind: "paragraph" | "heading" | "bulletListItem" | "numberedListItem" | "checkListItem",
+    kind:
+      | "paragraph"
+      | "heading"
+      | "bulletListItem"
+      | "numberedListItem"
+      | "checkListItem",
     level: 1 | 2 | 3 = 2,
   ) {
     if (readOnly) return;
     const current = editor.getTextCursorPosition().block;
-    editor.updateBlock(current, kind === "heading"
-      ? { type: "heading", props: { level } }
-      : { type: kind });
+    editor.updateBlock(
+      current,
+      kind === "heading"
+        ? { type: "heading", props: { level } }
+        : { type: kind },
+    );
     editor.focus();
   }
   function insertRichBlock(type: "callout" | "divider") {
     if (readOnly) return;
     const active = editor.getTextCursorPosition().block;
     if (type === "callout") {
-      const inserted = editor.insertBlocks([{
-        type: "callout", props: { variant: "info" },
-        content: "Add a note for your team.",
-      }], active, "after");
+      const inserted = editor.insertBlocks(
+        [
+          {
+            type: "callout",
+            props: { variant: "info" },
+            content: "Add a note for your team.",
+          },
+        ],
+        active,
+        "after",
+      );
       // insertBlocks does not automatically move the cursor. Leave it at
       // the new inline-capable block so the next inserted divider appears
       // *after* the callout rather than unexpectedly before it.
@@ -99,51 +127,67 @@ function Body({
   const structuralTarget = useRef<string | null>(null);
   const pointedBlock = useRef<string | null>(null);
   const commentTarget = useRef<string | null>(null);
-  const pendingStructural = useRef(new Map<string, (ok: boolean, reason?: string) => void>());
+  const pendingStructural = useRef(
+    new Map<string, (ok: boolean, reason?: string) => void>(),
+  );
   useEffect(() => {
     const onStateless = ({ payload }: { payload: string }) => {
       let message: { type?: string; requestId?: string; reason?: string };
-      try { message = JSON.parse(payload); } catch { return; }
-      if (message.type !== "structural.granted" &&
-          message.type !== "structural.denied") return;
+      try {
+        message = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      if (
+        message.type !== "structural.granted" &&
+        message.type !== "structural.denied"
+      )
+        return;
       const pending = pendingStructural.current.get(message.requestId || "");
       if (!pending) return;
       pendingStructural.current.delete(message.requestId || "");
       pending(message.type === "structural.granted", message.reason);
     };
     provider.on("stateless", onStateless);
-    const pending=pendingStructural.current;
+    const pending = pendingStructural.current;
     return () => {
       provider.off("stateless", onStateless);
-      for(const finish of pending.values())finish(false,"disconnected");
+      for (const finish of pending.values()) finish(false, "disconnected");
       pending.clear();
     };
   }, [provider]);
   async function reserveStructural(blockId: string): Promise<boolean> {
-    const vector=Y.encodeStateVector(doc);
+    const vector = Y.encodeStateVector(doc);
     if (vector.length > 3072) {
       notify("This document needs resynchronization before moving blocks.");
       return false;
     }
-    const requestId=crypto.randomUUID();
+    const requestId = crypto.randomUUID();
     return new Promise<boolean>((resolve) => {
-      const timer=setTimeout(()=>{
+      const timer = setTimeout(() => {
         pendingStructural.current.delete(requestId);
         notify("Could not verify a safe structural edit. Try again.");
         resolve(false);
-      },4000);
-      pendingStructural.current.set(requestId,(ok,reason)=>{
+      }, 4000);
+      pendingStructural.current.set(requestId, (ok, reason) => {
         clearTimeout(timer);
-        if(!ok)notify(reason === "concurrent-edit"
-          ? "Another editor is changing this block. Retry after it settles."
-          : "The page changed. Select the block again before editing.");
+        if (!ok)
+          notify(
+            reason === "concurrent-edit"
+              ? "Another editor is changing this block. Retry after it settles."
+              : "The page changed. Select the block again before editing.",
+          );
         resolve(ok);
       });
       try {
-        provider.sendStateless(JSON.stringify({
-          type:"structural.acquire",requestId,blockId,
-          vector:btoa(String.fromCharCode(...vector)),
-        }));
+        provider.sendStateless(
+          JSON.stringify({
+            type: "structural.acquire",
+            requestId,
+            blockId,
+            vector: btoa(String.fromCharCode(...vector)),
+          }),
+        );
       } catch {
         clearTimeout(timer);
         pendingStructural.current.delete(requestId);
@@ -157,8 +201,8 @@ function Body({
       pointedBlock.current || editor.getTextCursorPosition().block.id;
   }
   function commentOnBlock() {
-    const target = commentTarget.current ||
-      editor.getTextCursorPosition().block.id;
+    const target =
+      commentTarget.current || editor.getTextCursorPosition().block.id;
     commentTarget.current = null;
     if (!editor.getBlock(target)) {
       notify("This block changed in another session. Select it again.");
@@ -219,120 +263,268 @@ function Body({
   return (
     <>
       {!readOnly && (
-        <div className="page-link-tools editor-format-tools"
-          role="toolbar" aria-label="Formatting">
-          <button type="button" className="button small-button"
-            aria-label="Bold selection" title="Toggle bold"
+        <div
+          className="page-link-tools editor-format-tools"
+          role="toolbar"
+          aria-label="Formatting"
+        >
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Bold selection"
+            title="Toggle bold"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggleMark("bold")}>Bold</button>
-          <button type="button" className="button small-button"
-            aria-label="Italic selection" title="Toggle italic"
+            onClick={() => toggleMark("bold")}
+          >
+            Bold
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Italic selection"
+            title="Toggle italic"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggleMark("italic")}>Italic</button>
-          <button type="button" className="button small-button"
-            aria-label="Underline selection" title="Toggle underline"
+            onClick={() => toggleMark("italic")}
+          >
+            Italic
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Underline selection"
+            title="Toggle underline"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggleMark("underline")}>Underline</button>
-          <button type="button" className="button small-button"
-            aria-label="Heading 1" title="Convert active block to heading level 1"
+            onClick={() => toggleMark("underline")}
+          >
+            Underline
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Heading 1"
+            title="Convert active block to heading level 1"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => changeBlock("heading", 1)}>H1</button>
-          <button type="button" className="button small-button"
-            aria-label="Heading 2" title="Convert active block to heading"
+            onClick={() => changeBlock("heading", 1)}
+          >
+            H1
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Heading 2"
+            title="Convert active block to heading"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => changeBlock("heading")}>H2</button>
-          <button type="button" className="button small-button"
-            aria-label="Heading 3" title="Convert active block to heading level 3"
+            onClick={() => changeBlock("heading")}
+          >
+            H2
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Heading 3"
+            title="Convert active block to heading level 3"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => changeBlock("heading", 3)}>H3</button>
-          <button type="button" className="button small-button"
-            aria-label="Bulleted list" title="Convert active block to bullets"
+            onClick={() => changeBlock("heading", 3)}
+          >
+            H3
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Bulleted list"
+            title="Convert active block to bullets"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => changeBlock("bulletListItem")}>Bullets</button>
-          <button type="button" className="button small-button"
-            aria-label="Numbered list" title="Convert active block to numbered list"
+            onClick={() => changeBlock("bulletListItem")}
+          >
+            Bullets
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Numbered list"
+            title="Convert active block to numbered list"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => changeBlock("numberedListItem")}>Numbers</button>
-          <button type="button" className="button small-button"
-            aria-label="Checklist" title="Convert active block to checklist"
+            onClick={() => changeBlock("numberedListItem")}
+          >
+            Numbers
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Checklist"
+            title="Convert active block to checklist"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => changeBlock("checkListItem")}>Checklist</button>
-          <button type="button" className="button small-button"
-            aria-label="Paragraph" title="Convert active block to paragraph"
+            onClick={() => changeBlock("checkListItem")}
+          >
+            Checklist
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Paragraph"
+            title="Convert active block to paragraph"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => changeBlock("paragraph")}>Text</button>
-          <button type="button" className="button small-button"
-            aria-label="Insert callout" title="Insert an editable callout"
+            onClick={() => changeBlock("paragraph")}
+          >
+            Text
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Insert callout"
+            title="Insert an editable callout"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertRichBlock("callout")}>Callout</button>
-          <button type="button" className="button small-button"
-            aria-label="Insert divider" title="Insert a section divider"
+            onClick={() => insertRichBlock("callout")}
+          >
+            Callout
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Insert divider"
+            title="Insert a section divider"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertRichBlock("divider")}>Divider</button>
-          <button type="button" className="button small-button"
-            aria-label="Move current block up" title="Move selected block up"
-            onMouseDown={(e) => { e.preventDefault(); rememberStructuralTarget(); }}
-            onClick={() => structuralAction("up")}>Move up</button>
-          <button type="button" className="button small-button"
-            aria-label="Move current block down" title="Move selected block down"
-            onMouseDown={(e) => { e.preventDefault(); rememberStructuralTarget(); }}
-            onClick={() => structuralAction("down")}>Move down</button>
-          <button type="button" className="button small-button"
-            aria-label="Delete current block" title="Delete selected block (Undo restores)"
-            onMouseDown={(e) => { e.preventDefault(); rememberStructuralTarget(); }}
-            onClick={() => structuralAction("delete")}>Delete block</button>
-          <button type="button" className="button small-button"
-            aria-label="Undo last edit" title="Undo recent local change"
+            onClick={() => insertRichBlock("divider")}
+          >
+            Divider
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Move current block up"
+            title="Move selected block up"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              rememberStructuralTarget();
+            }}
+            onClick={() => structuralAction("up")}
+          >
+            Move up
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Move current block down"
+            title="Move selected block down"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              rememberStructuralTarget();
+            }}
+            onClick={() => structuralAction("down")}
+          >
+            Move down
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Delete current block"
+            title="Delete selected block (Undo restores)"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              rememberStructuralTarget();
+            }}
+            onClick={() => structuralAction("delete")}
+          >
+            Delete block
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Undo last edit"
+            title="Undo recent local change"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => historyAction("undo")}>Undo</button>
-          <button type="button" className="button small-button"
-            aria-label="Redo last edit" title="Redo recent local change"
+            onClick={() => historyAction("undo")}
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Redo last edit"
+            title="Redo recent local change"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => historyAction("redo")}>Redo</button>
+            onClick={() => historyAction("redo")}
+          >
+            Redo
+          </button>
         </div>
       )}
       {commentable && (
-        <div className="page-link-tools" role="group" aria-label="Block discussion">
-          <button type="button" className="button small-button"
+        <div
+          className="page-link-tools"
+          role="group"
+          aria-label="Block discussion"
+        >
+          <button
+            type="button"
+            className="button small-button"
             aria-label="Comment on selected block"
             onMouseDown={(event) => {
               event.preventDefault();
               rememberCommentTarget();
             }}
-            onClick={commentOnBlock}>
+            onClick={commentOnBlock}
+          >
             Comment on block
           </button>
         </div>
       )}
       {!readOnly && (
         <div className="page-link-tools">
-          <button type="button" className="button small-button"
-            aria-expanded={picker} aria-controls="page-link-picker"
-            onClick={() => { setPicker((v) => !v); setSuggestions([]); }}>
+          <button
+            type="button"
+            className="button small-button"
+            aria-expanded={picker}
+            aria-controls="page-link-picker"
+            onClick={() => {
+              setPicker((v) => !v);
+              setSuggestions([]);
+            }}
+          >
             Link to page
           </button>
           {picker && (
-            <form id="page-link-picker" className="page-link-picker" onSubmit={findPages}>
+            <form
+              id="page-link-picker"
+              className="page-link-picker"
+              onSubmit={findPages}
+            >
               <label htmlFor="page-link-search">Find a page to link</label>
               <div className="page-link-search-row">
-                <input id="page-link-search" aria-label="Find a page to link"
-                  value={needle} onChange={(e) => setNeedle(e.target.value)}
-                  placeholder="Search accessible pages" required />
+                <input
+                  id="page-link-search"
+                  aria-label="Find a page to link"
+                  value={needle}
+                  onChange={(e) => setNeedle(e.target.value)}
+                  placeholder="Search accessible pages"
+                  required
+                />
                 <button className="button" disabled={searching}>
                   {searching ? "Searching…" : "Find"}
                 </button>
-                <button type="button" className="button"
-                  onClick={() => setPicker(false)}>Cancel</button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => setPicker(false)}
+                >
+                  Cancel
+                </button>
               </div>
               <div className="page-link-results" aria-live="polite">
                 {suggestions.map((item: any) => (
-                  <button key={item.id} type="button" className="page-link-choice"
-                    onClick={() => insertPageLink(item)}>
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="page-link-choice"
+                    onClick={() => insertPageLink(item)}
+                  >
                     {item.title}
                   </button>
                 ))}
                 {!searching && needle.trim() && !suggestions.length && (
-                  <span className="muted">Search for a page you can access.</span>
+                  <span className="muted">
+                    Search for a page you can access.
+                  </span>
                 )}
               </div>
             </form>
@@ -357,7 +549,11 @@ function Body({
   );
 }
 export default function Editor({
-  id, user, theme, commentable = false, onCommentBlock,
+  id,
+  user,
+  theme,
+  commentable = false,
+  onCommentBlock,
 }: {
   id: string;
   user: any;
@@ -368,22 +564,73 @@ export default function Editor({
   const [connection, setConnection] = useState<any>(),
     [status, setStatus] = useState("Connecting…"),
     [people, setPeople] = useState<string[]>([]),
-    [generation, setGeneration] = useState(0);
+    [generation, setGeneration] = useState(0),
+    [draft, setDraft] = useState<StoredDraft>();
   useEffect(() => {
     let disposed = false,
       p: HocuspocusProvider | undefined;
     const doc = new Y.Doc();
+    // W18: local edits that the collaboration server has not acknowledged
+    // yet are accumulated here and mirrored into device-local storage so
+    // an interrupted session (offline, reload, crash) can recover them.
+    // They are applied back on the next successful sync; Yjs deduplicates
+    // updates the server already persisted, so recovery never duplicates
+    // content. Nothing claims server durability before the persisted ack.
+    let pending: Uint8Array[] = [];
+    let pendingBytes = 0;
+    let overflow = false;
+    let draftStored = false;
     let persisted: Y.Snapshot | undefined,
       connected = false;
-    const update = () =>
+    const captureDraft = () => {
+      if (overflow || pending.length === 0) return;
+      try {
+        const merged = Y.mergeUpdates(pending);
+        if (saveDraft(id, user.id, merged)) draftStored = true;
+      } catch {
+        // mergeUpdates or storage failure: recovery stays best effort.
+      }
+    };
+    const update = () => {
+      const saved =
+        connected && persisted && Y.equalSnapshots(persisted, Y.snapshot(doc));
+      if (saved) {
+        // The server acknowledged every pending edit; local recovery
+        // material is no longer needed.
+        pending = [];
+        pendingBytes = 0;
+        overflow = false;
+        if (draftStored) {
+          draftStored = false;
+          clearDraft(id);
+          setDraft(undefined);
+        }
+      }
       setStatus(
         connected
-          ? persisted && Y.equalSnapshots(persisted, Y.snapshot(doc))
+          ? saved
             ? "Saved"
             : "Saving…"
           : "Offline · changes are not saved",
       );
-    doc.on("update", update);
+    };
+    doc.on("update", (change: Uint8Array) => {
+      if (!overflow) {
+        pending.push(change);
+        pendingBytes += change.length;
+        if (pendingBytes > MAX_DRAFT_BYTES) {
+          overflow = true;
+          pending = [];
+          pendingBytes = 0;
+          notify(
+            "Too many unsaved changes to keep a device draft. Stay connected to save.",
+          );
+        }
+      }
+      update();
+    });
+    const onPageHide = () => captureDraft();
+    window.addEventListener("pagehide", onPageHide);
     api(`/pages/${id}/collab`, "POST", {})
       .then((ticket) => {
         if (disposed) return;
@@ -401,10 +648,28 @@ export default function Editor({
           document: doc,
           onStatus: ({ status: s }) => {
             connected = s === "connected";
+            if (!connected) captureDraft();
             update();
           },
           onSynced: () => {
             if (disposed) return;
+            // W18 recovery: apply a device draft left by an interrupted
+            // session. Same user and still writable: reapply silently after
+            // sync. Otherwise keep it on the device and let the user decide;
+            // a read-only or foreign draft is never auto-applied.
+            const stored = loadDraft(id);
+            if (stored && stored.userId === user.id && !readOnly) {
+              try {
+                Y.applyUpdate(doc, draftUpdate(stored));
+                draftStored = true;
+                setDraft(stored);
+                notify("Recovered unsaved edits from this device");
+              } catch {
+                // Corrupt draft bytes: leave the live document untouched.
+              }
+            } else if (stored) {
+              setDraft(stored);
+            }
             setConnection({ provider: p, doc, readOnly });
             p?.sendStateless("status");
           },
@@ -425,12 +690,15 @@ export default function Editor({
               );
             }
             if (v.type === "reset") {
+              captureDraft();
               setConnection(undefined);
               setGeneration((x) => x + 1);
             }
           },
-          onAuthenticationFailed: () =>
-            setStatus("Access changed · refresh to continue"),
+          onAuthenticationFailed: () => {
+            captureDraft();
+            setStatus("Access changed · refresh to continue");
+          },
           onAwarenessChange: ({ states }) =>
             setPeople([
               ...new Set(states.map((s: any) => s.user?.name).filter(Boolean)),
@@ -443,6 +711,8 @@ export default function Editor({
       });
     return () => {
       disposed = true;
+      captureDraft();
+      window.removeEventListener("pagehide", onPageHide);
       setConnection(undefined);
       p?.destroy();
       doc.destroy();
@@ -466,10 +736,29 @@ export default function Editor({
           {status === "Saved" ? "✓ " : ""}
           {status}
         </span>
+        {draft && (
+          <button
+            type="button"
+            className="button small-button"
+            aria-label="Discard unsaved draft kept on this device"
+            onClick={() => {
+              clearDraft(id);
+              setDraft(undefined);
+            }}
+          >
+            Discard saved draft
+          </button>
+        )}
       </div>
       {connection ? (
-        <Body {...connection} user={user} id={id} theme={theme}
-          commentable={commentable} onCommentBlock={onCommentBlock} />
+        <Body
+          {...connection}
+          user={user}
+          id={id}
+          theme={theme}
+          commentable={commentable}
+          onCommentBlock={onCommentBlock}
+        />
       ) : (
         <div className="loading">Opening document…</div>
       )}

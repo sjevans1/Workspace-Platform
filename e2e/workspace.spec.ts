@@ -3941,3 +3941,127 @@ test("W09b3 deployed browser stops after three throttled destination list attemp
   expect(await destination.locator(`option[value="${database.id}"]`).count(),
     "the target really is unavailable, the failure is not hidden").toBe(0);
 });
+// W18 draft recovery: a real mid-edit disconnect. The test closes the live
+// collaboration WebSocket from the browser network layer (through a
+// page-scoped WebSocket wrapper), so the provider sees a genuine transport
+// close and reconnect attempts are also cut. The edit therefore never reaches
+// the server, and only the device-local draft can recover it after reload.
+test("W18 browser: interrupted edit recovers unsent content from the device draft", async ({
+  page,
+}) => {
+  test.setTimeout(240000);
+  await page.addInitScript(() => {
+    const w = window as any;
+    const Native = w.WebSocket;
+    w.__sockets = [];
+    const Wrapped = function (...args: any[]) {
+      const socket = new Native(...args);
+      w.__sockets.push(socket);
+      if (w.__blockSockets)
+        queueMicrotask(() => {
+          try {
+            socket.close();
+          } catch {}
+        });
+      return socket;
+    };
+    Wrapped.prototype = Native.prototype;
+    for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"])
+      (Wrapped as any)[k] = (Native as any)[k];
+    w.WebSocket = Wrapped;
+    w.__cutSockets = () => {
+      w.__blockSockets = true;
+      for (const s of w.__sockets) {
+        try {
+          s.close();
+        } catch {}
+      }
+    };
+  });
+  await login(page);
+  async function makePage(title: string) {
+    await page.getByRole("button", { name: "New page", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Create something new" });
+    await dialog.getByLabel("Name", { exact: true }).fill(title);
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(
+      title,
+    );
+    const id = new URL(page.url()).searchParams.get("page");
+    expect(id).toBeTruthy();
+    return id!;
+  }
+  const pageId = await makePage("W18 recovery " + Date.now());
+  const editor = page.locator(".bn-editor");
+  await expect(editor).toBeVisible();
+  const status = page.locator(".editor-state [role=status]");
+  await expect(status).toContainText("Saved", { timeout: 30000 });
+  // Genuine transport close: onStatus sees "disconnected" and reconnection
+  // attempts are also refused, so the disconnect stays real.
+  await page.evaluate(() => (window as any).__cutSockets());
+  await expect(status).toContainText("Offline · changes are not saved", {
+    timeout: 30000,
+  });
+  const token = "Unsent mid-edit recovery sentence " + randomUUID().slice(0, 8);
+  await editor.click();
+  await page.keyboard.type(token);
+  // The edit was produced while the transport was down: prove the server
+  // never received it, so the only possible recovery path is the draft.
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(
+          "/api/v1/pages/" + pageId + "/content",
+        );
+        if (!response.ok()) return false;
+        return !JSON.stringify(await response.json()).includes(token);
+      },
+      { timeout: 20000 },
+    )
+    .toBe(true);
+  // pagehide fires during the reload below, mirroring the interrupted
+  // session; assert the capture lands in device-local storage first.
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  await expect
+    .poll(
+      async () =>
+        await page.evaluate(() => {
+          let found = 0;
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith("workspace-draft-")) found++;
+          }
+          return found;
+        }),
+      { timeout: 20000 },
+    )
+    .toBe(1);
+  await page.reload();
+  const recovery = page
+    .locator('.toast[role="alert"]')
+    .or(
+      page
+        .getByRole("alert")
+        .filter({ hasText: "Recovered unsaved edits from this device" }),
+    );
+  await expect(recovery.first()).toBeVisible({ timeout: 30000 });
+  await expect(editor).toContainText(token, { timeout: 30000 });
+  // Recovery reapplies the Yjs update once: no duplicated content.
+  expect(await editor.locator(`text=${token}`).count()).toBe(1);
+  await expect(status).toContainText("Saved", { timeout: 30000 });
+  // The persisted ack clears the draft; nothing lingers on the device.
+  await expect
+    .poll(
+      async () =>
+        await page.evaluate(() => {
+          let found = 0;
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith("workspace-draft-")) found++;
+          }
+          return found;
+        }),
+      { timeout: 30000 },
+    )
+    .toBe(0);
+});
