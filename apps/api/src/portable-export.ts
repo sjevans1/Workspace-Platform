@@ -3,6 +3,7 @@ import type { Actor } from "../../../packages/auth/index.ts";
 import { requireAccess } from "../../../packages/permissions/index.ts";
 import { HttpError, view } from "../../../packages/contracts/index.ts";
 import { records } from "./domain.ts";
+import { presentedSchema } from "./rollups.ts";
 import {
   buildPortableArchive,
   portableArchiveLimits,
@@ -97,8 +98,21 @@ export async function exportPortableTree(
     )
   ).rows;
 
-  const databaseRecords: any[] = [];
+  const databaseRecords: any[] = [],
+    portableSchemas = new Map<string, any[]>();
   for (const row of databases) {
+    // Apply the same schema-level ACL redaction as the normal API. A relation
+    // or rollup whose target is not readable must not leak that target UUID or
+    // field metadata into a portable archive.
+    const actorSchema = await presentedSchema(q, a, row.properties),
+      portableSchema = actorSchema
+        .filter((property: any) => property.target_unavailable !== true)
+        .map((property: any) => {
+          const { target_unavailable: _redacted, ...portable } = property;
+          return portable;
+        });
+    portableSchemas.set(row.resource_id, portableSchema);
+
     // records() re-verifies access on the database and returns only the
     // actor-visible presented values; never export raw stored record
     // values, because formula/relation redaction is permission-aware.
@@ -113,7 +127,7 @@ export async function exportPortableTree(
     if (presented.length > maxRecords)
       throw new HttpError(413, "Export exceeds the record limit");
     const portablePropertyIds = new Set(
-      row.properties
+      portableSchema
         .filter((property: any) =>
           !["person", "formula", "rollup"].includes(property.type))
         .map((property: any) => property.id),
@@ -163,7 +177,7 @@ export async function exportPortableTree(
       data: JSON.stringify(
         {
           resource_id: d.resource_id,
-          properties: d.properties,
+          properties: portableSchemas.get(d.resource_id) || [],
           views: views
             .filter((v: any) => v.database_id === d.resource_id)
             .map((v: any) => ({ id: v.id, name: v.name, config: v.config })),
