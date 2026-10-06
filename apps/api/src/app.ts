@@ -1756,19 +1756,19 @@ export async function buildApp(
         " SELECT r.id,r.id resource_id,r.title,r.kind,r.updated_at," +
         " CASE WHEN r.search_text='' THEN '' ELSE left(r.search_text,240) END snippet," +
         " round((CASE WHEN lower(r.title)=lower($1) THEN 3.0" +
-        " WHEN r.title ILIKE $2 ESCAPE '\\\\' THEN 2.0 ELSE 0.0 END +" +
+        " WHEN r.title ILIKE $2 ESCAPE '\\' THEN 2.0 ELSE 0.0 END +" +
         " ts_rank_cd(to_tsvector('simple',r.title||' '||r.search_text)," +
         " websearch_to_tsquery('simple',$1)))::numeric,6)::double precision rank" +
         " FROM resources r WHERE cardinality($3::text[])>0" +
         " AND r.kind=ANY($3::text[]) AND r.deleted_at IS NULL" +
         " AND workspace_can_read_resource(r.id,$4::uuid,$5::text)" +
         " AND (to_tsvector('simple',r.title||' '||r.search_text)" +
-        " @@websearch_to_tsquery('simple',$1) OR r.title ILIKE $2 ESCAPE '\\\\')" +
+        " @@websearch_to_tsquery('simple',$1) OR r.title ILIKE $2 ESCAPE '\\')" +
         " UNION ALL" +
         " SELECT f.id,f.resource_id,f.name,'file',f.created_at,'' snippet," +
         " (CASE WHEN lower(f.name)=lower($1) THEN 3.0 ELSE 2.0 END)::double precision rank" +
         " FROM files f WHERE $6::boolean AND f.deleted_at IS NULL" +
-        " AND f.name ILIKE $2 ESCAPE '\\\\'" +
+        " AND f.name ILIKE $2 ESCAPE '\\'" +
         " AND workspace_can_read_resource(f.resource_id,$4::uuid,$5::text)" +
         ")" +
         " SELECT id,resource_id,title,kind,snippet,updated_at,rank," +
