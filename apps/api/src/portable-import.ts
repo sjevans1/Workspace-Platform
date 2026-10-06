@@ -23,8 +23,11 @@ import type { Antivirus } from "../../../packages/security/antivirus.ts";
 import { createRecord, createResource } from "./domain.ts";
 import {
   indexedRecordText,
+  validateRelationSchema,
   validateRelationWrites,
 } from "./relations.ts";
+import { validateFormulaDefinitions } from "../../../packages/formulas/index.ts";
+import { validateRollupDefinitions } from "./rollups.ts";
 import {
   blocksToState,
   validateBlocks,
@@ -362,6 +365,9 @@ export async function importPortableArchive(
         (property.rollup_relation_id &&
           relationIds.has(property.rollup_relation_id)));
     const parsed = properties.parse(withoutBrokenRollups);
+    validateFormulaDefinitions(parsed);
+    await validateRelationSchema(q, a, targetDatabaseId, parsed);
+    await validateRollupDefinitions(q, a, parsed);
     importedProperties.set(sourceDatabaseId, parsed);
     await q.query("UPDATE databases SET properties=$2 WHERE resource_id=$1",
       [targetDatabaseId, json(parsed)]);
