@@ -464,6 +464,7 @@ test("W16 touch phone and tablet complete navigation database calendar and recov
   expect(recordResponse.ok(), await recordResponse.text()).toBeTruthy();
 
   const context = await browser.newContext({
+    baseURL: new URL(page.url()).origin,
     viewport: { width: 390, height: 844 },
     hasTouch: true,
   });
