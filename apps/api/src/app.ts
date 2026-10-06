@@ -4222,6 +4222,7 @@ function dataRoutes(
     "/resources/:id/export/archive/jobs",
     "Queue a portable workspace archive export",
     async (q, a, r) => {
+      assert(!a.scopes, 403, "Human session required for archive export");
       const n = await requireAccess(q, a, id(r));
       scope(a, pageScope(n.kind));
       const jid = randomUUID();
