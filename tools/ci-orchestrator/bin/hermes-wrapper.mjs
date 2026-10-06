@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -113,6 +113,35 @@ function pathWithin(root, candidate) {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+async function acquireWorktreeLease(root) {
+  await mkdir(root, { recursive: true });
+  const path = join(root, ".wrapper.lock");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const handle = await open(path, "wx", 0o600);
+      await handle.writeFile(String(process.pid) + "\n");
+      await handle.sync();
+      await handle.close();
+      return async () => {
+        await rm(path, { force: true });
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const owner = Number((await readFile(path, "utf8").catch(() => "")).trim());
+      if (Number.isInteger(owner) && owner > 0) {
+        try {
+          process.kill(owner, 0);
+          throw new Error(`another Hermes wrapper is active with pid ${owner}`);
+        } catch (probe) {
+          if (probe?.code !== "ESRCH") throw probe;
+        }
+      }
+      await rm(path, { force: true });
+    }
+  }
+  throw new Error("could not acquire Hermes worktree lease");
+}
+
 async function removeWorktree(repository, path) {
   const removed = spawnSync(
     "git",
@@ -156,28 +185,37 @@ async function recoverScratchWorktrees(repository, root) {
 
 async function createScratchWorktree(repository, deliveryId) {
   const root = worktreeRoot();
-  await recoverScratchWorktrees(repository, root);
-  const safeId = String(deliveryId).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
-  const path = join(root, `${safeId || "event"}-${randomUUID()}`);
-  const added = spawnSync(
-    "git",
-    ["-C", repository, "worktree", "add", "--detach", path, "HEAD"],
-    { encoding: "utf8" },
-  );
-  if (added.status !== 0)
-    throw new Error(`could not create agent worktree: ${added.stderr.trim()}`);
-  return path;
+  const release = await acquireWorktreeLease(root);
+  try {
+    await recoverScratchWorktrees(repository, root);
+    const safeId = String(deliveryId).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
+    const path = join(root, `${safeId || "event"}-${randomUUID()}`);
+    const added = spawnSync(
+      "git",
+      ["-C", repository, "worktree", "add", "--detach", path, "HEAD"],
+      { encoding: "utf8" },
+    );
+    if (added.status !== 0)
+      throw new Error(`could not create agent worktree: ${added.stderr.trim()}`);
+    return { path, release };
+  } catch (error) {
+    await release();
+    throw error;
+  }
 }
 
 async function main() {
   const envelope = await readEnvelope();
   const repository = verifiedRepository();
   let worktree;
+  let releaseWorktreeLease;
   try {
-    worktree = await createScratchWorktree(
+    const scratch = await createScratchWorktree(
       repository,
       envelope.ci_event.delivery_id,
     );
+    worktree = scratch.path;
+    releaseWorktreeLease = scratch.release;
   } catch (error) {
     fail(error.message);
   }
@@ -218,15 +256,17 @@ async function main() {
     return 1;
   });
 
+  let cleanupFailed = false;
   try {
     await removeWorktree(repository, worktree);
   } catch (error) {
+    cleanupFailed = true;
     process.stderr.write(`Hermes wrapper: cleanup failed: ${error.message}\n`);
-    process.exitCode = 1;
-    return;
+  } finally {
+    await releaseWorktreeLease();
   }
 
-  process.exitCode = code;
+  process.exitCode = cleanupFailed ? 1 : code;
 }
 
 await main();
