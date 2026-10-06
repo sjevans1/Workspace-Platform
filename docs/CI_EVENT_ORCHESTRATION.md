@@ -274,12 +274,16 @@ Required local environment files and non-secret settings:
   WORKSPACE_PLATFORM_REPO=<repo>
   HERMES_BIN=<absolute Hermes executable>
   CI_HERMES_RUN_BUDGET_SECONDS=1800
+  CI_HERMES_PROVIDER=openrouter
+  CI_HERMES_MODEL=z-ai/glm-5.3-flash
   CI_AGENT_BRIDGE_TOKEN=<secret>
 
 ~/.config/workspace-ci-orchestrator/cloudflare.env
   CLOUDFLARE_ACCOUNT_ID=<account id>
   CF_API_TOKEN=<scoped Cloudflare token>
 ```
+
+`CI_HERMES_PROVIDER` and `CI_HERMES_MODEL` are optional settings, not secrets. When both are set, the wrapper appends `--provider` and `--model` to the Hermes invocation so an event-driven run is pinned to one model instead of riding the configured fallback chain, which can silently land on a rate-limited free tier. When unset the flags are omitted and Hermes uses its own configuration. `CI_HERMES_MODEL` must be the provider's full model id.
 
 The Quick Tunnel unit launches `run-quick-tunnel.mjs`. The supervisor waits for HTTPS health, writes the current public URL to `~/.config/workspace-ci-orchestrator/tunnel-url`, updates the Worker secret, and deploys the updated Worker version. A service restart therefore does not leave the Worker pointing at an expired Quick Tunnel hostname.
 

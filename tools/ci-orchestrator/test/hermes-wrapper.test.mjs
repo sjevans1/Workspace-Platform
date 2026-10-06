@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const wrapper = join(repoRoot, "tools/ci-orchestrator/bin/hermes-wrapper.mjs");
 
-async function runWrapper({ envelope, exitCode = 0, repository = repoRoot }) {
+async function runWrapper({ envelope, exitCode = 0, repository = repoRoot, extraEnv = {} }) {
   const root = await mkdtemp(join(tmpdir(), "workspace-hermes-wrapper-"));
   const capture = join(root, "capture.json");
   const fakeHermes = join(root, "fake-hermes.mjs");
@@ -26,6 +26,7 @@ async function runWrapper({ envelope, exitCode = 0, repository = repoRoot }) {
         WORKSPACE_PLATFORM_REPO: repository,
         CI_AGENT_BRIDGE_TOKEN: "must-not-reach-agent",
         AGENT_DISPATCH_TOKEN: "must-not-reach-agent",
+        ...extraEnv,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -115,4 +116,38 @@ test("Hermes wrapper rejects deceptive GitHub origin URLs", async (t) => {
   assert.notEqual(result.code, 0);
   assert.equal(result.captured, null);
   assert.match(result.stderr, /repository origin is not/);
+});
+
+test("Hermes wrapper pins model/provider only when explicitly configured", async () => {
+  const envelope = JSON.stringify({
+    version: 1,
+    instruction: "Report only.",
+    ci_event: {
+      version: 1,
+      kind: "ci.workflow.completed",
+      delivery_id: "wrapper-model-test",
+      repository: "sjevans1/Workspace-Platform",
+      workflow: { run_id: 1, head_sha: "d".repeat(40), conclusion: "success" },
+    },
+  });
+
+  const pinned = await runWrapper({
+    envelope,
+    extraEnv: { CI_HERMES_MODEL: "z-ai/glm-5.3-flash", CI_HERMES_PROVIDER: "openrouter" },
+  });
+  assert.equal(pinned.code, 0, pinned.stderr);
+  const at = pinned.captured.args.indexOf("--model");
+  assert.notEqual(at, -1);
+  assert.deepEqual(pinned.captured.args.slice(at, at + 4), [
+    "--model", "z-ai/glm-5.3-flash", "--provider", "openrouter",
+  ]);
+  assert.equal(pinned.captured.args.at(-1), "--yolo");
+
+  const unpinned = await runWrapper({
+    envelope,
+    extraEnv: { CI_HERMES_MODEL: "", CI_HERMES_PROVIDER: "" },
+  });
+  assert.equal(unpinned.code, 0, unpinned.stderr);
+  assert.equal(unpinned.captured.args.includes("--model"), false);
+  assert.equal(unpinned.captured.args.includes("--provider"), false);
 });
