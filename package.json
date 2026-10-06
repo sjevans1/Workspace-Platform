@@ -24,7 +24,8 @@
     "format": "prettier --write apps packages scripts tests e2e *.json *.ts *.yaml",
     "accept:s3": "node --import tsx scripts/accept-production-s3.ts",
     "provision:tenant": "node --import tsx scripts/provision-tenant.ts",
-    "migrate:storage-encryption": "node --import tsx scripts/migrate-storage-encryption.ts"
+    "migrate:storage-encryption": "node --import tsx scripts/migrate-storage-encryption.ts",
+    "test:ci-orchestrator": "node --test tools/ci-orchestrator/test/*.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1142.0",

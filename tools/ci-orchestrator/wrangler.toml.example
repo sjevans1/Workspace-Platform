@@ -1,0 +1,24 @@
+name = "workspace-ci-orchestrator"
+main = "src/worker.mjs"
+compatibility_date = "2026-10-01"
+
+[vars]
+ALLOWED_REPOSITORY = "sjevans1/Workspace-Platform"
+ALLOWED_WORKFLOWS = "Workspace verification,.github/workflows/ci.yml"
+
+[[d1_databases]]
+binding = "DELIVERIES"
+database_name = "workspace-ci-orchestrator"
+database_id = "<replace-with-d1-database-id>"
+migrations_dir = "migrations"
+
+[[queues.producers]]
+binding = "CI_EVENTS"
+queue = "workspace-ci-events"
+
+[[queues.consumers]]
+queue = "workspace-ci-events"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 3
+dead_letter_queue = "workspace-ci-events-dlq"
