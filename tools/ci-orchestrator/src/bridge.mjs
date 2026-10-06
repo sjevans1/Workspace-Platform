@@ -275,10 +275,19 @@ export function createSpool(root, options = {}) {
   return { init, recover, put, claimNext, complete, retry, supersede };
 }
 
-export function executableRunner(command, args = []) {
+export function executableRunner(command, args = [], options = {}) {
   if (!command) throw new Error("CI_AGENT_COMMAND is required");
   if (!Array.isArray(args) || args.some((value) => typeof value !== "string"))
     throw new Error("CI_AGENT_ARGS_JSON must be a JSON array of strings");
+
+  // Independent hard wall-clock budget enforced by the bridge itself. The
+  // agent's own --run-budget flag is advisory only: a hung or silent child
+  // must be terminated externally so it cannot monopolize the single-runner
+  // queue indefinitely.
+  const budgetSeconds = options.runBudgetSeconds ?? Number(process.env.CI_AGENT_RUN_BUDGET_SECONDS || 1800);
+  if (!Number.isFinite(budgetSeconds) || budgetSeconds <= 0)
+    throw new Error("CI_AGENT_RUN_BUDGET_SECONDS must be a positive number of seconds");
+  const budgetMs = budgetSeconds * 1000;
 
   return async (event) => {
     const envelope = JSON.stringify({
@@ -291,17 +300,45 @@ export function executableRunner(command, args = []) {
         shell: false,
         stdio: ["pipe", "inherit", "inherit"],
         env: { ...process.env, CI_EVENT_ID: String(event.delivery_id) },
+        // Own process group: budget enforcement must reach the whole child
+        // tree, not just the direct child.
+        detached: true,
       });
-      child.once("error", reject);
+      let settled = false;
+      let budgetExpired = false;
+      const budgetTimer = setTimeout(() => {
+        budgetExpired = true;
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          if (error?.code !== "ESRCH") child.kill("SIGKILL");
+        }
+      }, budgetMs);
+      const settle = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(budgetTimer);
+        fn(value);
+      };
+      child.once("error", (error) => settle(reject, error));
       child.stdin.on("error", (error) => {
         // A successful command may exit before consuming the entire envelope.
         // Its exit status remains authoritative; this prevents an uncaught
         // EPIPE from terminating the bridge process.
-        if (error?.code !== "EPIPE") reject(error);
+        if (error?.code !== "EPIPE") settle(reject, error);
       });
       child.once("exit", (code, signal) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Agent command exited code=${code} signal=${signal || ""}`));
+        if (budgetExpired) {
+          const error = new Error(
+            `Agent run budget of ${budgetSeconds}s exceeded for delivery ${event.delivery_id}; child process group terminated`,
+          );
+          error.code = "budget_exceeded";
+          error.budgetExceeded = true;
+          settle(reject, error);
+          return;
+        }
+        if (code === 0) settle(resolve);
+        else settle(reject, new Error(`Agent command exited code=${code} signal=${signal || ""}`));
       });
       child.stdin.end(envelope + "\n");
     });
