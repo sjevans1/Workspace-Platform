@@ -26,9 +26,9 @@ function event(id = "delivery-1", conclusion = "failure") {
   };
 }
 
-async function tempSpool() {
+async function tempSpool(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "workspace-ci-bridge-"));
-  return { root, spool: createSpool(root) };
+  return { root, spool: createSpool(root, options) };
 }
 
 test("bridge spool deduplicates delivery ids durably", async (t) => {
@@ -38,6 +38,16 @@ test("bridge spool deduplicates delivery ids durably", async (t) => {
   const second = await spool.put(event());
   assert.equal(second.accepted, false);
   assert.equal(second.duplicate, true);
+});
+
+test("bridge spool atomically admits one concurrent delivery claim", async (t) => {
+  const { root, spool } = await tempSpool();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const results = await Promise.all(
+    Array.from({ length: 20 }, () => spool.put(event("concurrent-delivery"))),
+  );
+  assert.equal(results.filter((result) => result.accepted).length, 1);
+  assert.equal(results.filter((result) => result.duplicate).length, 19);
 });
 
 test("successful runner moves event from pending to done", async (t) => {
@@ -56,7 +66,7 @@ test("successful runner moves event from pending to done", async (t) => {
 });
 
 test("failed runner returns event to pending for a later attempt", async (t) => {
-  const { root, spool } = await tempSpool();
+  const { root, spool } = await tempSpool({ retryBaseMs: 0 });
   t.after(() => rm(root, { recursive: true, force: true }));
   await spool.put(event("retry-event"));
   await assert.rejects(
@@ -68,6 +78,35 @@ test("failed runner returns event to pending for a later attempt", async (t) => 
   let calls = 0;
   await runOne(spool, async () => calls++);
   assert.equal(calls, 1);
+});
+
+test("backed-off failure does not starve a later event", async (t) => {
+  const { root, spool } = await tempSpool({ retryBaseMs: 60_000 });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await spool.put(event("poison-event"));
+  await assert.rejects(runOne(spool, async () => {
+    throw new Error("persistent failure");
+  }));
+  await spool.put(event("healthy-after-poison"));
+  let processed;
+  assert.equal(await runOne(spool, async (value) => { processed = value; }), true);
+  assert.equal(processed.delivery_id, "healthy-after-poison");
+});
+
+test("repeated failure moves an event to local quarantine", async (t) => {
+  const { root, spool } = await tempSpool({ retryBaseMs: 0, maxAttempts: 2 });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await spool.put(event("quarantined-event"));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(runOne(spool, async () => {
+      throw new Error("persistent failure");
+    }));
+  }
+  const failed = await import("node:fs/promises").then((fs) =>
+    fs.readdir(join(root, "failed")),
+  );
+  assert.equal(failed.length, 1);
+  assert.equal(await runOne(spool, async () => {}), false);
 });
 
 test("startup recovery returns orphaned running events to pending", async (t) => {

@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const wrapper = join(repoRoot, "tools/ci-orchestrator/bin/hermes-wrapper.mjs");
 
-async function runWrapper({ envelope, exitCode = 0 }) {
+async function runWrapper({ envelope, exitCode = 0, repository = repoRoot }) {
   const root = await mkdtemp(join(tmpdir(), "workspace-hermes-wrapper-"));
   const capture = join(root, "capture.json");
   const fakeHermes = join(root, "fake-hermes.mjs");
@@ -23,7 +23,7 @@ async function runWrapper({ envelope, exitCode = 0 }) {
         HERMES_BIN: fakeHermes,
         HERMES_FAKE_CAPTURE: capture,
         HERMES_FAKE_EXIT: String(exitCode),
-        WORKSPACE_PLATFORM_REPO: repoRoot,
+        WORKSPACE_PLATFORM_REPO: repository,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -83,4 +83,31 @@ test("Hermes wrapper rejects trailing or malformed envelope data", async () => {
   assert.notEqual(result.code, 0);
   assert.equal(result.captured, null);
   assert.match(result.stderr, /valid single JSON envelope/);
+});
+
+test("Hermes wrapper rejects deceptive GitHub origin URLs", async (t) => {
+  const fakeRepo = await mkdtemp(join(tmpdir(), "workspace-deceptive-origin-"));
+  t.after(() => rm(fakeRepo, { recursive: true, force: true }));
+  assert.equal(spawnSync("git", ["init", "-q", fakeRepo]).status, 0);
+  assert.equal(spawnSync("git", [
+    "-C", fakeRepo, "remote", "add", "origin",
+    "https://evilgithub.com/sjevans1/Workspace-Platform.git",
+  ]).status, 0);
+  const result = await runWrapper({
+    repository: fakeRepo,
+    envelope: JSON.stringify({
+      version: 1,
+      instruction: "Report only.",
+      ci_event: {
+        version: 1,
+        kind: "ci.workflow.completed",
+        delivery_id: "deceptive-origin",
+        repository: "sjevans1/Workspace-Platform",
+        workflow: { run_id: 1, head_sha: "c".repeat(40), conclusion: "success" },
+      },
+    }),
+  });
+  assert.notEqual(result.code, 0);
+  assert.equal(result.captured, null);
+  assert.match(result.stderr, /repository origin is not/);
 });

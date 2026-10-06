@@ -4,8 +4,15 @@ import { chmod, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
+export const WRANGLER_PACKAGE = "wrangler@4.147.0";
+
 export function parseQuickTunnelUrl(line) {
   return line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/i)?.[0] || null;
+}
+
+export function supervisedExitCode({ requested, code }) {
+  if (requested) return code ?? 0;
+  return code && code !== 0 ? code : 1;
 }
 
 function required(name) {
@@ -56,11 +63,11 @@ async function publishDispatchUrl(url) {
   if (!process.env.CLOUDFLARE_API_TOKEN)
     throw new Error("CLOUDFLARE_API_TOKEN or CF_API_TOKEN is required");
   await runCommand(npx, [
-    "--yes", "wrangler@latest", "secret", "put", "AGENT_DISPATCH_URL",
+    "--yes", WRANGLER_PACKAGE, "secret", "put", "AGENT_DISPATCH_URL",
     "--config", config,
   ], `${url}/events`);
   await runCommand(npx, [
-    "--yes", "wrangler@latest", "deploy", "--config", config,
+    "--yes", WRANGLER_PACKAGE, "deploy", "--config", config,
   ]);
   const urlFile = required("CI_AGENT_TUNNEL_URL_FILE");
   await writeFile(urlFile, `${url}\n`, { mode: 0o600 });
@@ -81,6 +88,7 @@ async function main() {
 
   let publishing = false;
   let failed = false;
+  let requestedStop = false;
   const consume = (stream) => {
     const lines = createInterface({ input: stream });
     lines.on("line", (line) => {
@@ -98,14 +106,20 @@ async function main() {
   consume(tunnel.stdout);
   consume(tunnel.stderr);
 
-  const forward = (signal) => tunnel.kill(signal);
+  const forward = (signal) => {
+    requestedStop = true;
+    tunnel.kill(signal);
+  };
   process.once("SIGTERM", () => forward("SIGTERM"));
   process.once("SIGINT", () => forward("SIGINT"));
   const code = await new Promise((resolve, reject) => {
     tunnel.once("error", reject);
     tunnel.once("exit", (exitCode) => resolve(exitCode ?? 1));
   });
-  process.exitCode = failed ? 1 : code;
+  process.exitCode = failed ? 1 : supervisedExitCode({
+    requested: requestedStop,
+    code,
+  });
 }
 
 if (fileURLToPath(import.meta.url) === process.argv[1])

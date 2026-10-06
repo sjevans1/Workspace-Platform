@@ -182,12 +182,13 @@ The bridge:
 
 - listens on `127.0.0.1:8788` by default;
 - requires `Authorization: Bearer $CI_AGENT_BRIDGE_TOKEN`;
-- durably spools accepted events before returning HTTP 202;
-- deduplicates the GitHub delivery ID again at the bridge boundary;
+- durably writes and fsyncs an immutable claim before returning HTTP 202;
+- deduplicates the GitHub delivery ID again at the bridge boundary with one atomic claim file;
 - launches one configured executable without a shell;
 - writes a JSON envelope to the child process on stdin;
 - moves successful events to `done/`;
-- returns failed launches to `pending/` so they can run again;
+- returns failed launches to `pending/` with persisted bounded exponential backoff;
+- quarantines an event in `failed/` after 10 failed agent launches so it cannot starve later events;
 - tells the agent to stop after a push and await the next CI completion event.
 
 Required bridge environment:
@@ -252,7 +253,7 @@ systemctl --user enable --now workspace-ci-agent-bridge.service
 systemctl --user enable --now workspace-ci-agent-tunnel.service
 ```
 
-The bridge unit uses `Restart=on-failure`, a persistent `.data/ci-agent-bridge` spool, and one process managed by systemd. On startup, the bridge moves any orphaned `running/` event back to `pending/` before processing. This makes an interrupted agent launch recoverable without running two bridge instances.
+The bridge unit uses `Restart=on-failure`, a persistent `.data/ci-agent-bridge` spool, and one process managed by systemd. `claims/` is the immutable delivery ledger; `pending/`, `running/`, `done/`, and `failed/` are execution states; `retries/` stores attempt count and the next eligible timestamp. On startup, the bridge moves any orphaned `running/` event back to `pending/` and reconstructs a missing state link from its durable claim. This makes an interrupted agent launch recoverable without running two bridge instances.
 
 Required local environment files and non-secret settings:
 
@@ -312,9 +313,10 @@ The tests cover:
 - success/failure normalization,
 - authenticated downstream dispatch,
 - retry on downstream failure,
-- durable bridge dedupe and startup recovery,
-- Hermes wrapper validation and exit-code propagation,
-- safe Quick Tunnel URL parsing.
+- atomic concurrent bridge dedupe, fsynced claims and startup recovery,
+- agent-failure backoff, non-starvation and quarantine,
+- Hermes wrapper origin validation and exit-code propagation,
+- safe Quick Tunnel URL parsing, pinned Wrangler and supervisor exit behavior.
 
 The root GitHub Actions backend job runs this test suite independently from product tests.
 
@@ -326,7 +328,7 @@ Use a harmless branch or an event SHA that is deliberately stale. Never weaken a
 2. Confirm the exact-head run completes in GitHub Actions.
 3. Inspect the repository webhook delivery and require HTTP 2xx.
 4. Query D1 by the `X-GitHub-Delivery` ID.
-5. Confirm one matching file moves through `.data/ci-agent-bridge/pending` or `running` to `done`.
+5. Confirm one matching claim exists in `.data/ci-agent-bridge/claims` and its state link moves through `pending/` or `running/` to `done/`.
 6. Confirm the bridge journal shows one Hermes session for that delivery.
 7. Redeliver the same GitHub delivery or replay the same synthetic delivery ID and confirm D1 returns `duplicate: true` and no second spool file appears.
 8. Confirm `git status --short` is unchanged when the test event is stale or requires no correction.
@@ -338,7 +340,7 @@ The initial live acceptance used stale SHA `000000000000000000000000000000000000
 - **Receiver unavailable:** GitHub records a failed webhook delivery. Restore the Worker and redeliver from repository webhook deliveries.
 - **Duplicate/redelivery:** D1 delivery ID makes normal replay idempotent.
 - **Agent bridge unavailable:** Queue delivery fails and retries. After `max_retries`, the normalized event moves to `workspace-ci-events-dlq`; it is not silently discarded.
-- **Agent command fails:** `runOne` moves the event from `running/` back to `pending/`. An unexpected bridge-process exit leaves the event in `running/`; startup recovery returns it to `pending/` before the next launch. The spool key prevents concurrent duplicate execution.
+- **Agent command fails:** `runOne` moves the event from `running/` back to `pending/` with a persisted exponential backoff. Other eligible events continue. After 10 failed launches, the state link moves to `failed/` for operator recovery while its immutable claim remains. An unexpected bridge-process exit leaves the event in `running/`; startup recovery returns it to `pending/` before the next launch. To redrive a quarantined event, stop the bridge, inspect only its operational metadata and root cause, move its `failed/<key>.json` link to `pending/<key>.json`, remove `retries/<key>.json`, then restart the bridge. Never delete `claims/<key>.json`.
 - **Quick Tunnel restarts:** the tunnel supervisor obtains a new HTTPS hostname, health-checks it, updates `AGENT_DISPATCH_URL`, deploys the Worker, and writes the current URL file.
 - **CI provider changes:** add an adapter that emits the same normalized event contract. Do not change agent policy.
 - **GitHub Actions outage:** an alternate provider may emit the same contract, allowing the agent bridge and roadmap logic to remain unchanged.
@@ -375,14 +377,14 @@ Pause new GitHub events and queue delivery without deleting state:
 ```bash
 gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -f active=false
 source ~/.config/workspace-ci-orchestrator/cloudflare.env
-CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx wrangler queues pause-delivery workspace-ci-events
+CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx --yes wrangler@4.147.0 queues pause-delivery workspace-ci-events
 ```
 
 Resume in the opposite order:
 
 ```bash
 source ~/.config/workspace-ci-orchestrator/cloudflare.env
-CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx wrangler queues resume-delivery workspace-ci-events
+CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx --yes wrangler@4.147.0 queues resume-delivery workspace-ci-events
 gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -f active=true
 ```
 

@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -32,70 +32,132 @@ export function buildAgentInstruction(event) {
   ].join(" ");
 }
 
-export function createSpool(root) {
+export function createSpool(root, options = {}) {
+  const claims = join(root, "claims");
   const pending = join(root, "pending");
   const running = join(root, "running");
   const done = join(root, "done");
+  const failed = join(root, "failed");
+  const retries = join(root, "retries");
+  const retryBaseMs = options.retryBaseMs ?? 5_000;
+  const retryMaxMs = options.retryMaxMs ?? 300_000;
+  const maxAttempts = options.maxAttempts ?? 10;
+  const now = options.now || Date.now;
+
+  async function syncPath(path) {
+    const handle = await open(path, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async function exists(path) {
+    try {
+      await readFile(path);
+      return true;
+    } catch (error) {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    }
+  }
 
   async function init() {
     await Promise.all([
+      mkdir(claims, { recursive: true }),
       mkdir(pending, { recursive: true }),
       mkdir(running, { recursive: true }),
       mkdir(done, { recursive: true }),
+      mkdir(failed, { recursive: true }),
+      mkdir(retries, { recursive: true }),
     ]);
+    await syncPath(root);
   }
 
   async function recover() {
     await init();
-    const files = (await readdir(running))
+    const active = (await readdir(running))
       .filter((name) => name.endsWith(".json"))
       .sort();
-    for (const name of files) {
+    for (const name of active) {
       const from = join(running, name);
-      const to = join(pending, name);
+      const state = await retryState(name);
+      const targetDir = Number(state.attempts || 0) >= maxAttempts ? failed : pending;
+      const to = join(targetDir, name);
       try {
         await link(from, to);
+        await syncPath(targetDir);
       } catch (error) {
         if (error?.code !== "EEXIST") throw error;
       }
       await rm(from, { force: true });
+      await syncPath(running);
+    }
+
+    for (const stateDir of [pending, running, done, failed]) {
+      const legacy = (await readdir(stateDir))
+        .filter((name) => name.endsWith(".json"))
+        .sort();
+      for (const name of legacy) {
+        try {
+          await link(join(stateDir, name), join(claims, name));
+          await syncPath(claims);
+        } catch (error) {
+          if (error?.code !== "EEXIST") throw error;
+        }
+      }
+    }
+
+    const claimed = (await readdir(claims))
+      .filter((name) => name.endsWith(".json"))
+      .sort();
+    for (const name of claimed) {
+      const locations = [pending, running, done, failed].map((dir) => join(dir, name));
+      if ((await Promise.all(locations.map(exists))).some(Boolean)) continue;
+      await link(join(claims, name), join(pending, name));
+      await syncPath(pending);
     }
   }
 
   async function put(event) {
     await init();
     const key = eventKey(event.delivery_id);
-    const complete = join(done, key + ".json");
-    const active = join(running, key + ".json");
-    const queued = join(pending, key + ".json");
-    for (const path of [complete, active, queued]) {
-      try {
-        await readFile(path);
-        return { accepted: false, duplicate: true, key };
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
-      }
-    }
-    const temp = join(
-      pending,
-      `.${key}.${process.pid}.${crypto.randomUUID()}.tmp`,
-    );
-    await writeFile(temp, JSON.stringify(event) + "\n", {
-      flag: "wx",
-      mode: 0o600,
-    });
+    const name = key + ".json";
+    const claim = join(claims, name);
     try {
-      // link(2) fails with EEXIST instead of replacing another concurrent
-      // delivery claim; the final name therefore acts as an atomic spool key.
-      await link(temp, queued);
+      await writeFile(claim, JSON.stringify(event) + "\n", {
+        flag: "wx",
+        mode: 0o600,
+      });
     } catch (error) {
       if (error?.code === "EEXIST")
         return { accepted: false, duplicate: true, key };
       throw error;
-    } finally {
-      await rm(temp, { force: true });
     }
+
+    await syncPath(claim);
+    await syncPath(claims);
+    await link(claim, join(pending, name));
+    await syncPath(pending);
     return { accepted: true, duplicate: false, key };
+  }
+
+  async function retryState(name) {
+    try {
+      return JSON.parse(await readFile(join(retries, name), "utf8"));
+    } catch (error) {
+      if (error?.code === "ENOENT") return { attempts: 0, next_attempt_at: 0 };
+      throw error;
+    }
+  }
+
+  async function writeRetryState(name, state) {
+    const temp = join(retries, `.${name}.${process.pid}.${crypto.randomUUID()}.tmp`);
+    await writeFile(temp, JSON.stringify(state) + "\n", { flag: "wx", mode: 0o600 });
+    await syncPath(temp);
+    await rename(temp, join(retries, name));
+    await syncPath(retries);
   }
 
   async function claimNext() {
@@ -104,10 +166,13 @@ export function createSpool(root) {
       .filter((name) => name.endsWith(".json"))
       .sort();
     for (const name of files) {
+      const state = await retryState(name);
+      if (Number(state.next_attempt_at || 0) > now()) continue;
       const from = join(pending, name);
       const to = join(running, name);
       try {
         await rename(from, to);
+        await Promise.all([syncPath(pending), syncPath(running)]);
         return {
           name,
           event: JSON.parse(await readFile(to, "utf8")),
@@ -122,10 +187,28 @@ export function createSpool(root) {
 
   async function complete(job) {
     await rename(join(running, job.name), join(done, job.name));
+    await Promise.all([syncPath(running), syncPath(done)]);
+    await rm(join(retries, job.name), { force: true });
+    await syncPath(retries);
   }
 
   async function retry(job) {
+    const previous = await retryState(job.name);
+    const attempts = Number(previous.attempts || 0) + 1;
+    const delay = Math.min(retryBaseMs * (2 ** Math.max(0, attempts - 1)), retryMaxMs);
+    await writeRetryState(job.name, {
+      attempts,
+      last_failed_at: new Date(now()).toISOString(),
+      next_attempt_at: now() + delay,
+    });
+    if (attempts >= maxAttempts) {
+      await rename(join(running, job.name), join(failed, job.name));
+      await Promise.all([syncPath(running), syncPath(failed)]);
+      return { attempts, quarantined: true };
+    }
     await rename(join(running, job.name), join(pending, job.name));
+    await Promise.all([syncPath(running), syncPath(pending)]);
+    return { attempts, quarantined: false };
   }
 
   return { init, recover, put, claimNext, complete, retry };
@@ -171,7 +254,13 @@ export async function runOne(spool, runner) {
     await runner(job.event);
     await spool.complete(job);
   } catch (error) {
-    await spool.retry(job);
+    const outcome = await spool.retry(job);
+    if (error && typeof error === "object") {
+      error.bridgeRetry = {
+        ...outcome,
+        delivery_id: job.event.delivery_id,
+      };
+    }
     throw error;
   }
   return true;
@@ -255,7 +344,13 @@ export async function startFromEnv(env = process.env) {
     try {
       while (await runOne(spool, runner)) {}
     } catch (error) {
-      console.error("Agent bridge runner failed; event returned to spool", error);
+      const status = error?.bridgeRetry;
+      console.error(
+        status?.quarantined
+          ? "Agent bridge runner failed; event quarantined"
+          : "Agent bridge runner failed; event returned to spool",
+        status || { error: error?.message || String(error) },
+      );
     } finally {
       if (!stopped) setTimeout(work, 1000).unref();
     }

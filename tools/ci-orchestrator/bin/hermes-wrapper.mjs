@@ -52,9 +52,11 @@ function verifiedRepository() {
     encoding: "utf8",
   });
   const origin = remote.stdout.trim();
+  const canonicalHttps = /^https:\/\/github\.com\/sjevans1\/Workspace-Platform(?:\.git)?$/;
+  const canonicalSsh = /^git@github\.com:sjevans1\/Workspace-Platform(?:\.git)?$/;
   if (
     remote.status !== 0 ||
-    !/github\.com[:/]sjevans1\/Workspace-Platform(?:\.git)?$/.test(origin)
+    (!canonicalHttps.test(origin) && !canonicalSsh.test(origin))
   ) {
     fail("repository origin is not sjevans1/Workspace-Platform");
   }
