@@ -74,9 +74,9 @@ async function runWrapper({ envelope, exitCode = 0, repository, extraEnv = {} })
     beforeBranch,
     afterBranch,
     remainingWorktrees,
+    worktreeRoot,
   };
-  if (!repository) await rm(root, { recursive: true, force: true });
-  else await rm(worktreeRoot, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true });
   return response;
 }
 
@@ -95,7 +95,7 @@ test("Hermes wrapper passes one validated envelope without shell interpolation",
 
   assert.equal(result.code, 0, result.stderr);
   assert.notEqual(result.captured.cwd, result.deployment);
-  assert.equal(result.captured.cwd.startsWith(join(tmpdir(), "workspace-ci-agent-worktrees")), false);
+  assert.equal(result.captured.cwd.startsWith(result.worktreeRoot), true);
   assert.equal(result.beforeBranch, "main");
   assert.equal(result.afterBranch, "main");
   assert.equal(result.beforeHead, result.afterHead);
