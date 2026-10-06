@@ -9,6 +9,9 @@
   "engines": {
     "node": ">=22"
   },
+  "overrides": {
+    "source-map-js": "^1.2.2"
+  },
   "scripts": {
     "dev": "node --import tsx scripts/dev.ts",
     "dev:web": "npm run dev -w apps/web",
