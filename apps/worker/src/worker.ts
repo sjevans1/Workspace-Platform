@@ -224,6 +224,8 @@ export async function tick(
       );
       if (!j) return;
       await q.query("SAVEPOINT import_job");
+      let pendingOutputKey: string | undefined;
+      let importedObjectKeys: string[] = [];
       try {
         const m = await one(
           q,
@@ -242,7 +244,6 @@ export async function tick(
         const p = j.payload;
         let resource;
         let jobResult: any;
-        let stagedOutputKey: string | undefined;
         if (p.format === "workspace_archive_export") {
           const source = await requireAccess(q, a, p.source_id);
           assert(source.id === j.resource_id, 400, "Archive export source changed");
@@ -251,7 +252,7 @@ export async function tick(
             key = `${tenant}/${source.id}/${artifactId}`,
             digest = createHash("sha256").update(archive).digest("hex");
           await storage.put(key, archive, "application/zip");
-          stagedOutputKey = key;
+          pendingOutputKey = key;
           await q.query(
             "INSERT INTO job_artifacts(id,tenant_id,job_id,object_key,kind,name,mime,size,sha256,expires_at)" +
               " VALUES($1,$2,$3,$4,'output',$5,'application/zip',$6,$7,now()+interval '24 hours')",
@@ -296,6 +297,9 @@ export async function tick(
             storage,
             suppliedAntivirus || createAntivirus(),
           );
+          importedObjectKeys = imported.stored_object_keys;
+          const { stored_object_keys: _internalKeys, ...publicImportResult } =
+            imported;
           await q.query(
             "INSERT INTO object_deletions(id,tenant_id,object_key,reason)" +
               " VALUES($1,$2,$3,'job_input_consumed')" +
@@ -304,7 +308,7 @@ export async function tick(
           );
           await q.query("DELETE FROM job_artifacts WHERE id=$1", [artifact.id]);
           resource = { id: imported.resource_id };
-          jobResult = imported;
+          jobResult = publicImportResult;
         } else if (p.format === "markdown") {
           resource = await createResource(q, a, {
             parent_id: p.parent_id,
@@ -363,15 +367,14 @@ export async function tick(
           "UPDATE jobs SET status='completed',result=$2 WHERE id=$1",
           [j.id, json(jobResult)],
         );
+        pendingOutputKey = undefined;
+        importedObjectKeys = [];
       } catch (e) {
-        const outputArtifact = await one(
-          q,
-          "SELECT object_key FROM job_artifacts WHERE job_id=$1 AND kind='output'",
-          [j.id],
-        ).catch(() => null);
         await q.query("ROLLBACK TO SAVEPOINT import_job");
-        if (outputArtifact?.object_key)
-          await storage.delete(outputArtifact.object_key).catch(() => {});
+        if (pendingOutputKey)
+          await storage.delete(pendingOutputKey).catch(() => {});
+        for (const key of importedObjectKeys)
+          await storage.delete(key).catch(() => {});
         await q.query("UPDATE jobs SET status='failed',result=$2 WHERE id=$1", [
           j.id,
           json({ error: (e as Error).message.slice(0, 300) }),
