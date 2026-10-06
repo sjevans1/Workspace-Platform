@@ -47,6 +47,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
         timeout-minutes: 3
+      - name: Verify CI event orchestrator
+        run: npm run test:ci-orchestrator
       - name: Verify production S3 acceptance harness
         run: |
           node --input-type=module <<'NODE'
