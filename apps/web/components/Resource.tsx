@@ -13,7 +13,16 @@ import {
   Link as LinkIcon,
   Activity,
 } from "lucide-react";
-import { api, run, notify, changed, go, icon, date } from "../lib/api";
+import {
+  api,
+  downloadWorkspaceArchive,
+  run,
+  notify,
+  changed,
+  go,
+  icon,
+  date,
+} from "../lib/api";
 import { Modal, Spinner, Empty, Field } from "./common";
 import Database, { PropertyInput } from "./Database";
 const Editor = dynamic(() => import("./Editor"), {
@@ -39,7 +48,8 @@ export default function Resource({
     [commentAnchor, setCommentAnchor] = useState(""),
     [menu, setMenu] = useState(false),
     [record, setRecord] = useState<any>(),
-    [members, setMembers] = useState<any[]>([]);
+    [members, setMembers] = useState<any[]>([]),
+    [exportingArchive, setExportingArchive] = useState(false);
   async function load() {
     const n = await api(`/resources/${id}`);
     setNode(n);
@@ -62,6 +72,41 @@ export default function Resource({
     // edit/refresh. Failure to record cosmetic history must not block editing.
     void api(`/resources/${id}/bookmark`, "POST", {}).catch(() => {});
   }, [id, node?.id]);
+  async function exportArchive() {
+    setMenu(false);
+    setExportingArchive(true);
+    try {
+      const queued = await api(
+        `/resources/${id}/export/archive/jobs`,
+        "POST",
+        {},
+      );
+      notify("Workspace archive export queued.");
+      for (let attempt = 0; attempt < 90; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const job = await api(`/jobs/${queued.id}`);
+        if (job.status === "failed")
+          throw Error(job.result?.error || "Archive export failed");
+        if (job.status !== "completed") continue;
+        const blob = await downloadWorkspaceArchive(
+          `/jobs/${queued.id}/archive`,
+        );
+        const url = URL.createObjectURL(blob),
+          anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${node.title || "workspace"}-archive.zip`;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+        notify("Workspace archive is ready.");
+        return;
+      }
+      throw Error(`Archive export still running. Job ID: ${queued.id}`);
+    } finally {
+      setExportingArchive(false);
+    }
+  }
   if (!node) return <Spinner />;
   const editable = node.effective_permission >= 3;
   const collection = ["space", "workspace"].includes(node.kind);
@@ -168,6 +213,16 @@ export default function Resource({
                       Export JSON
                     </a>
                   </>
+                )}
+                {node.kind !== "record" && (
+                  <button
+                    disabled={exportingArchive}
+                    onClick={() => run(exportArchive)}
+                  >
+                    {exportingArchive
+                      ? "Preparing workspace archive…"
+                      : "Export workspace archive"}
+                  </button>
                 )}
                 {editable && ["page", "database", "space"].includes(node.kind) && (
                   <button
