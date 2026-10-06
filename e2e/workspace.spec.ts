@@ -1102,7 +1102,13 @@ test("users can link a page from the editor and follow its accessible backlink",
   await sourceEditor.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Backspace");
-  await expect(page.getByRole("status").filter({hasText:"Saved"})).toBeVisible();
+  // Wait for the deletion itself to reach canonical persisted content. The
+  // generic Saved indicator may still reflect the preceding edit.
+  await expect.poll(async()=>{
+    const response=await page.request.get("/api/v1/pages/"+sourceId+"/content");
+    if(!response.ok())return false;
+    return !JSON.stringify(await response.json()).includes(targetId);
+  },{timeout:12000}).toBe(true);
   await expect.poll(async()=>{
     const response=await page.request.get(
       "/api/v1/resources/"+targetId+"/backlinks?limit=20",
