@@ -885,9 +885,19 @@ function CreateDialog({
   useEffect(() => {
     if (!importing) return;
     run(async () => {
-      const siblings = await api(
-        `/resources?parent_id=${destination}&limit=200`);
-      setDatabaseChoices(siblings.filter((r: any) =>
+      // A throttled or transiently failing list request must not leave the
+      // append-only destination select permanently empty; retry briefly.
+      let siblings: any[] | undefined;
+      for (let attempt = 0; attempt < 3 && !siblings; attempt++) {
+        try {
+          siblings = await api(
+            `/resources?parent_id=${destination}&limit=200`);
+        } catch (e) {
+          if (attempt === 2) throw e;
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
+      setDatabaseChoices((siblings || []).filter((r: any) =>
         r.kind === "database" && !r.deleted_at));
     });
   }, [destination, importing]);
