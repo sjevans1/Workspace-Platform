@@ -1911,10 +1911,7 @@ test("W10c1 accessible formatting, local undo/redo and phone-sized editor", asyn
 test("W10c2 version restore preserves custom rich blocks, marks and identity", async ({page,browser}) => {
   test.setTimeout(120000);
   await login(page);
-  await ensurePrincipalReadBudget(page);
-  const meResponse=await page.request.get("/api/v1/me");
-  expect(meResponse.ok(),await meResponse.text()).toBeTruthy();
-  const me=await meResponse.json();
+  const me=await (await page.request.get("/api/v1/me")).json();
   const headers={"X-CSRF-Token":me.csrf};
   const roots=await (await page.request.get("/api/v1/resources")).json();
   const stamp=randomUUID();
@@ -3007,7 +3004,10 @@ test("W10c4d distinct principals merge same quote and honor live ACL changes",as
 test("W10c4e structural move/delete and peer edit converge with scoped history", async ({page,browser})=>{
   test.setTimeout(180000);
   await login(page);
-  const me=await (await page.request.get("/api/v1/me")).json();
+  await ensurePrincipalReadBudget(page);
+  const meResponse=await page.request.get("/api/v1/me");
+  expect(meResponse.ok(),await meResponse.text()).toBeTruthy();
+  const me=await meResponse.json();
   const headers={"X-CSRF-Token":me.csrf};
   const roots=await (await page.request.get("/api/v1/resources")).json();
   const spaceRes=await page.request.post("/api/v1/resources",{
