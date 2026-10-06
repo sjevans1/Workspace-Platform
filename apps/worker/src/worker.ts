@@ -240,7 +240,6 @@ export async function tick(
           scopes: null,
           expires_at: new Date(Date.now() + 10000),
         };
-        await requireAccess(q, a, j.resource_id, 3);
         const p = j.payload;
         let resource;
         let jobResult: any;
