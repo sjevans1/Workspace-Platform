@@ -52,7 +52,14 @@ class FakeD1 {
   constructor() {
     this.ids = new Set();
   }
-  prepare() {
+  prepare(sql) {
+    if (sql.startsWith("DELETE")) {
+      return {
+        bind: (id) => ({
+          run: async () => ({ meta: { changes: this.ids.delete(id) ? 1 : 0 } }),
+        }),
+      };
+    }
     return {
       bind: (id) => ({
         run: async () => {
@@ -126,6 +133,28 @@ test("duplicate GitHub delivery is acknowledged but not requeued", async () => {
   assert.equal(second.status, 200);
   assert.equal(bindings.sent.length, 1);
   assert.equal((await second.json()).duplicate, true);
+});
+
+test("queue failure releases the D1 claim so GitHub retry can enqueue", async () => {
+  const body = JSON.stringify(payload());
+  const bindings = env();
+  let attempts = 0;
+  bindings.CI_EVENTS.send = async (event) => {
+    attempts++;
+    if (attempts === 1) throw new Error("queue unavailable");
+    bindings.sent.push(event);
+  };
+
+  await assert.rejects(
+    handleWebhook(await requestFor(body), bindings),
+    /queue unavailable/,
+  );
+  assert.equal(bindings.DELIVERIES.ids.size, 0);
+
+  const retried = await handleWebhook(await requestFor(body), bindings);
+  assert.equal(retried.status, 202);
+  assert.equal(bindings.sent.length, 1);
+  assert.equal(attempts, 2);
 });
 
 test("irrelevant workflow and repository events are ignored", async () => {

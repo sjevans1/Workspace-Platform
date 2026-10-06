@@ -106,6 +106,14 @@ async function claimDelivery(env, event, deliveryId) {
   return Number(result?.meta?.changes || 0) === 1;
 }
 
+async function releaseDelivery(env, deliveryId) {
+  await env.DELIVERIES.prepare(
+    "DELETE FROM github_deliveries WHERE delivery_id = ?1",
+  )
+    .bind(deliveryId)
+    .run();
+}
+
 async function enqueue(env, event) {
   if (!env.CI_EVENTS?.send)
     throw new Error("Missing required Queue binding: CI_EVENTS");
@@ -159,7 +167,19 @@ export async function handleWebhook(request, env) {
   if (!(await claimDelivery(env, normalized, deliveryId)))
     return jsonResponse({ ok: true, duplicate: true }, 200);
 
-  await enqueue(env, normalized);
+  try {
+    await enqueue(env, normalized);
+  } catch (error) {
+    try {
+      await releaseDelivery(env, deliveryId);
+    } catch (releaseError) {
+      console.error("Failed to release unqueued GitHub delivery claim", {
+        delivery_id: deliveryId,
+        error: releaseError instanceof Error ? releaseError.message : String(releaseError),
+      });
+    }
+    throw error;
+  }
   return jsonResponse({ ok: true, queued: true }, 202);
 }
 
