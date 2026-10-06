@@ -299,13 +299,17 @@ export default function Database({
       setMembers(await api("/members"));
     });
   }, [id, selected, offset, month, cursor]);
+  async function retryLoad() {
+    await load();
+    if (!members.length) setMembers(await api("/members"));
+  }
   if (!data && loadError)
     return (
       <div className="database-status error" role="alert">
         <strong>Database unavailable</strong>
         <span>{loadError}</span>
         <button className="button" type="button"
-          onClick={() => run(() => load())}>Retry database</button>
+          onClick={() => run(() => retryLoad())}>Retry database</button>
       </div>
     );
   if (!data) return <div className="loading" role="status">Opening database…</div>;
@@ -398,7 +402,7 @@ export default function Database({
         <div className="database-status error" role="alert">
           <span>{loadError}</span>
           <button className="button" type="button"
-            onClick={() => run(() => load())}>Retry database</button>
+            onClick={() => run(() => retryLoad())}>Retry database</button>
         </div>
       )}
       {loading && <div className="database-status muted" role="status">
