@@ -1634,9 +1634,11 @@ test("W13c 10k backlink target is paged, ACL-safe and index-qualified", async ()
     const fixtureMs = Date.now() - fixtureStarted;
 
     const backfillSql =
-      "INSERT INTO resource_links(tenant_id,source_id,target_id)" +
-      " SELECT DISTINCT d.tenant_id,d.resource_id,(match.ids)[1]::uuid" +
+      "INSERT INTO resource_links(tenant_id,source_id,target_id,source_updated_at)" +
+      " SELECT DISTINCT d.tenant_id,d.resource_id,(match.ids)[1]::uuid,source.updated_at" +
       " FROM page_documents d" +
+      " JOIN resources source ON source.tenant_id=d.tenant_id" +
+      " AND source.id=d.resource_id" +
       " CROSS JOIN LATERAL regexp_matches(" +
       " d.blocks::text," +
       " '[/]?[?]page=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})','g'" +
