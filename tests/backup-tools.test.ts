@@ -5,6 +5,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  compareBackups,
   encodeBackup,
   rotateBackups,
   verifyBackup,
@@ -68,6 +69,36 @@ test("W23 backup verification accepts a sound archive and refuses unsafe ones", 
   assert.throws(
     () => verifyBackup(JSON.stringify(envelope)),
     /Backup decryption failed/,
+  );
+});
+
+test("W23 backup comparison detects durable table and object drift", () => {
+  process.env.ENCRYPTION_KEY = key;
+  const left = archive();
+  const same = structuredClone(left);
+  same.created_at = "2026-10-08T00:00:00.000Z";
+  const comparison = compareBackups(encodeBackup(left), encodeBackup(same));
+  assert.equal(comparison.rows, 1);
+  assert.equal(comparison.objects, 1);
+  assert.equal(comparison.object_bytes, "attachment bytes".length);
+
+  const tableDrift = structuredClone(left);
+  tableDrift.tables.organisations = [{ id: "org-2" }];
+  assert.throws(
+    () => compareBackups(encodeBackup(left), encodeBackup(tableDrift)),
+    /table content differs: organisations/,
+  );
+
+  const objectDrift = structuredClone(left);
+  const changed = Buffer.from("different attachment bytes");
+  objectDrift.objects["org-1/file-1"] = {
+    sha256: createHash("sha256").update(changed).digest("hex"),
+    mime: "text/plain",
+    data: changed.toString("base64"),
+  };
+  assert.throws(
+    () => compareBackups(encodeBackup(left), encodeBackup(objectDrift)),
+    /object catalogs differ/,
   );
 });
 
