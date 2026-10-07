@@ -6,7 +6,7 @@ import { useCreateBlockNote } from "@blocknote/react";
 import { withCollaboration } from "@blocknote/core/yjs";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
-import { api, notify } from "../lib/api";
+import { api, ApiError, notify } from "../lib/api";
 import {
   clearWorkspaceDraft,
   loadWorkspaceDraft,
@@ -453,6 +453,17 @@ export default function Editor({
       if (draftTimer) clearTimeout(draftTimer);
       draftTimer = setTimeout(persistLocalRecovery, 75);
     };
+    const loseAccess = () => {
+      if (accessLost) return;
+      accessLost = true;
+      if (draftTimer) clearTimeout(draftTimer);
+      if (identity) clearWorkspaceDraft(identity);
+      pendingRecovery = false;
+      setRecovery(undefined);
+      setConnection(undefined);
+      setStatus("Access changed · refresh to continue");
+    };
+
     doc.on("update", update);
 
     api(`/pages/${id}/collab`, "POST", {})
@@ -473,7 +484,20 @@ export default function Editor({
           url,
           name: ticket.name,
           token: () =>
-            api(`/pages/${id}/collab`, "POST", {}).then((t) => t.token),
+            api(`/pages/${id}/collab`, "POST", {})
+              .then((t) => t.token)
+              .catch((error) => {
+                // Ticket refresh can fail before Hocuspocus emits
+                // onAuthenticationFailed. Explicit authorization loss must
+                // immediately destroy replayable local recovery material,
+                // while transient 5xx/network failures keep the draft.
+                if (
+                  error instanceof ApiError &&
+                  [401, 403, 404].includes(error.status)
+                )
+                  loseAccess();
+                throw error;
+              }),
           document: doc,
           onStatus: ({ status: s }) => {
             connected = s === "connected";
@@ -543,15 +567,9 @@ export default function Editor({
             }
           },
           onAuthenticationFailed: () => {
-            accessLost = true;
-            if (identity) clearWorkspaceDraft(identity);
-            pendingRecovery = false;
-            setRecovery(undefined);
-            // Fail closed: a session that can no longer obtain a ticket
-            // (revocation or deletion) must not keep an editor open or
-            // rebuild local recovery material on later disconnects.
-            setConnection(undefined);
-            setStatus("Access changed · refresh to continue");
+            // Fail closed: a session that can no longer authenticate must not
+            // keep an editor open or rebuild recovery material later.
+            loseAccess();
           },
           onAwarenessChange: ({ states }) =>
             setPeople([
