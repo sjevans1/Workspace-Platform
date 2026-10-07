@@ -1364,9 +1364,17 @@ test("users can link a page from the editor and follow its accessible backlink",
   await backlink.click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(sourceName);
   const sourceEditor=page.locator(".bn-editor");
+  // Remove the linked block through the editor's own control. A synthetic
+  // Ctrl+A/Backspace was unreliable here: the select-all applied but the
+  // immediately following delete could arrive before the editor's selection
+  // state settled and became a no-op, leaving the link in place so the
+  // backlink never cleared. The toolbar control is the supported user path,
+  // is arbitrated by the collaboration server, and is how the other
+  // structural tests delete a block.
   await sourceEditor.click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.press("Backspace");
+  await page.getByRole("toolbar",{name:"Formatting"})
+    .getByRole("button",{name:"Delete current block"}).click();
+  await expect(sourceEditor).not.toContainText(targetName);
   // Wait for the deletion itself to reach canonical persisted content. The
   // generic Saved indicator may still reflect the preceding edit.
   await expect.poll(async()=>{
