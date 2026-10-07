@@ -229,6 +229,37 @@ docker compose up -d
 
 Verify sign-in, page content, restored history, files, a table/board record, and collaboration from two browsers. The automated tests verify metadata, raw Yjs equality and attachment bytes. The SeaweedFS drill uses separate source/recovery databases and buckets, retains soft-deleted attachments, rejects anonymous reads and bad credentials, and checks checksum/key/schema validation, existing-object collisions, concurrent overwrite protection and upload-failure rollback. It also rejects a nonempty restore and confirms that source objects remain intact. It does not substitute for a periodic host-level restore drill.
 
+### Disposable Compose restore qualification
+
+For a non-production source deployment that is already running, the repository also
+includes a bounded host/CI drill:
+
+```bash
+./scripts/accept-compose-restore.sh
+```
+
+The drill stops only the source API/collaboration/worker long enough to create and
+verify an encrypted maintenance backup, then immediately restarts them. It creates
+a uniquely named **second Compose project** with fresh PostgreSQL, file, Caddy and
+ClamAV volumes on ports `8081/8444` by default. The drill proves a wrong
+`ENCRYPTION_KEY` cannot verify the archive, migrates the empty recovery database,
+restores with the correct key, creates a second backup from the recovered target
+and uses `backup.ts compare` to compare every durable table row and private-object
+checksum. Only after that match does it start the recovered stack and require
+`/ready`.
+
+The cleanup trap removes only the disposable recovery project and volumes. It does
+not run `down -v` against the source project. Encrypted source/target drill
+archives are deleted by default; set `KEEP_RESTORE_BACKUPS=true` only in an
+approved diagnostic environment. The host `backups/` directory must already be
+writable by container UID 1000.
+
+The current durable backup contract includes notification preferences, indexed
+resource links, logout replay protection and live job artifacts plus their object
+bytes. Short-lived OIDC login/PKCE state is intentionally not restored. Archives
+created by an older incomplete table contract now fail `verify` rather than being
+reported healthy.
+
 ## Upgrades and health
 
 Back up before each upgrade. Review release notes, build the new image, stop writers, run migrations once, and start the new services. Migrations are transactional and tracked in `schema_migrations`; the migration runner uses an advisory lock. Downgrade is not automatic: recover the matching backup into a separate deployment if needed.
