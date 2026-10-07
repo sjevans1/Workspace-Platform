@@ -1,8 +1,20 @@
 # Build checkpoint
 
-Updated 1 October 2026. Repository: https://github.com/sjevans1/Workspace-Platform
+Updated 6 October 2026. Repository: https://github.com/sjevans1/Workspace-Platform
 
-## Scope and authorization
+## Current Workspace 1.0 baseline — W17 accepted
+
+Current `main`: `6b7f60f422723ec19e8a5006f3033ab082d7e8b9`, merge of PR #158 (W17 portable workspace archive import/export).
+
+Accepted W-items at this checkpoint: **W01, W05, W06, W07, W13, W14, W15, W16 and W17 (9/28)**. W15 merged via #154; W16 via #156; W17 via #158. W17 exact-head workflow `37531024966` completed successfully on final feature head `13469db32b16fa03a17fa0511f81dac1624cdc29` with backend and deployment green.
+
+The forward plan is now organized into bundled delivery waves in [DELIVERY_WAVES_1_0.md](DELIVERY_WAVES_1_0.md). The immediate engineering wave is **Wave R: W18 interrupted-edit recovery + W19 collaboration/reconnect reliability + the W24 capacity evidence specific to those behaviors**. This bundling shares one fault-injection/load harness but does not merge the acceptance definitions: each W-ID must still be independently evidenced before closure.
+
+Older W02–W04 and W08–W12 packages remain formally open only for their unproven acceptance boundaries. Do not rebuild accepted slices merely because old tracker prose predates later merges.
+
+Standalone boundary remains non-negotiable: Workspace operates independently; no mandatory OpenJM Enterprise AI code, runtime, credentials, data, model or service dependency.
+
+## Historical checkpoint trail
 
 Build the self-hosted OpenJM Workspace first pass from the Astra handoff. The user authorized implementation and GitHub commits/pushes, and requested incremental checkpoints to preserve continuity. Keep working without unnecessary confirmation. This is an executable alpha; see ACCEPTANCE.md for unfinished MVP requirements. Do not use Sites or connect a production Intelligence deployment without its configuration.
 
