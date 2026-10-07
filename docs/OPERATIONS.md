@@ -235,7 +235,7 @@ For a non-production source deployment that is already running, the repository a
 includes a bounded host/CI drill:
 
 ```bash
-./scripts/accept-compose-restore.sh
+bash scripts/accept-compose-restore.sh
 ```
 
 The drill stops only the source API/collaboration/worker long enough to create and
