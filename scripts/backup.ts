@@ -27,6 +27,7 @@ const tables = [
   "acl",
   "page_documents",
   "page_versions",
+  "resource_links",
   "databases",
   "database_records",
   "database_views",
@@ -34,11 +35,13 @@ const tables = [
   "files",
   "bookmarks",
   "notifications",
+  "notification_preferences",
   "event_outbox",
   "webhook_subscriptions",
   "webhook_deliveries",
   "audit_events",
   "jobs",
+  "job_artifacts",
   "object_deletions",
 ] as const;
 const digest = (b: string | Buffer) =>
@@ -228,19 +231,29 @@ export async function backup(url: string, storage: Storage): Promise<Archive> {
         await c.query(`SELECT row_to_json(t) AS value FROM ${t} t`)
       ).rows.map((r) => r.value);
     let total = 0;
-    for (const f of result.tables.files) {
-      const bytes = await storage.get(f.object_key);
+    const captureObject = async (
+      row: { object_key: string; mime: string; size?: number | string; sha256?: string },
+    ) => {
+      const bytes = await storage.get(row.object_key);
+      if (row.size !== undefined && bytes.length !== Number(row.size))
+        throw Error("Backup object size does not match catalog metadata");
+      const sha256 = digest(bytes);
+      if (row.sha256 !== undefined && sha256 !== row.sha256)
+        throw Error("Backup object checksum does not match catalog metadata");
       total += bytes.length;
       if (total > 1073741824)
         throw Error(
           "Logical backup exceeds 1 GiB; use PostgreSQL and object-store native backup tooling",
         );
-      result.objects[f.object_key] = {
-        sha256: digest(bytes),
-        mime: f.mime,
+      result.objects[row.object_key] = {
+        sha256,
+        mime: row.mime,
         data: bytes.toString("base64"),
       };
-    }
+    };
+    for (const file of result.tables.files) await captureObject(file);
+    for (const artifact of result.tables.job_artifacts)
+      await captureObject(artifact);
     await c.query("COMMIT");
     return result;
   } catch (e) {
@@ -268,6 +281,9 @@ export async function restore(url: string, archive: Archive, storage: Storage) {
   for (const f of archive.tables.files)
     if (!archive.objects[f.object_key])
       throw Error("Archive is missing a file");
+  for (const artifact of archive.tables.job_artifacts)
+    if (!archive.objects[artifact.object_key])
+      throw Error("Archive is missing a job artifact");
   const c = new pg.Client({ connectionString: url }),
     written: string[] = [];
   await c.connect();
