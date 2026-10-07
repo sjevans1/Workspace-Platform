@@ -4241,6 +4241,71 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
   }
 });
 
+test("W09 queued jobs cancel safely and expired running leases recover", async () => {
+  const cancelledTitle = "W09 cancelled " + randomUUID().slice(0, 8);
+  const queued = await ok("POST", "/imports", {
+    parent_id: space.id,
+    name: cancelledTitle,
+    format: "markdown",
+    content: "# Must not execute",
+  });
+  const cancelled = await ok("POST", `/jobs/${queued.id}/cancel`, {});
+  assert.deepEqual(cancelled, { id: queued.id, status: "cancelled" });
+  assert.equal((await ok("GET", `/jobs/${queued.id}`)).status, "cancelled");
+  await tick(db);
+  const cancelledRows = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT id FROM resources WHERE title=$1", [cancelledTitle]),
+  );
+  assert.equal(cancelledRows.rowCount, 0, "cancelled queued job must never execute");
+  assert.equal(
+    (await req("POST", `/jobs/${queued.id}/cancel`, {})).statusCode,
+    409,
+  );
+
+  const recoveredTitle = "W09 recovered " + randomUUID().slice(0, 8);
+  const crashed = await ok("POST", "/imports", {
+    parent_id: space.id,
+    name: recoveredTitle,
+    format: "markdown",
+    content: "# Crash recovery",
+  });
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE jobs SET status='running',lease_token=$2," +
+        " lease_expires_at=now()-interval '1 second' WHERE id=$1",
+      [crashed.id, randomUUID()],
+    ),
+  );
+
+  // Running work is not interruptible through the user API. Once the crashed
+  // worker's lease expires, another worker may reclaim the same job.
+  assert.equal(
+    (await req("POST", `/jobs/${crashed.id}/cancel`, {})).statusCode,
+    409,
+  );
+  await tick(db);
+  const recovered = await ok("GET", `/jobs/${crashed.id}`);
+  assert.equal(recovered.status, "completed");
+  const lifecycle = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT status,attempts,lease_token,lease_expires_at,started_at,completed_at" +
+        " FROM jobs WHERE id=$1",
+      [crashed.id],
+    ),
+  );
+  assert.equal(lifecycle.status, "completed");
+  assert.equal(lifecycle.attempts, 1);
+  assert.equal(lifecycle.lease_token, null);
+  assert.equal(lifecycle.lease_expires_at, null);
+  assert.ok(lifecycle.started_at);
+  assert.ok(lifecycle.completed_at);
+  const recoveredRows = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT id FROM resources WHERE title=$1", [recoveredTitle]),
+  );
+  assert.equal(recoveredRows.rowCount, 1);
+});
+
 test("imports run asynchronously and recheck current permissions", async () => {
   const runOwnedJob = async (id: string, actor = member) => {
     for (let attempt = 0; attempt < 20; attempt++) {
