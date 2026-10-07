@@ -177,17 +177,23 @@ test("W24-R measures 1/5/10/25 editor reconnect capacity on the CI host", async 
       const baselineDb = postgresStats();
 
       // Give every client a distinct acknowledged edit before the fault.
+      const preTokens = sessions.map(
+        (_, i) => "pre" + count + "-" + i + "-" + Date.now(),
+      );
       for (let i = 0; i < sessions.length; i++) {
-        const token = " pre" + count + "-" + i + "-" + Date.now();
         const editor = sessions[i].page.locator(".bn-editor");
         await editor.click();
         await sessions[i].page.keyboard.press("ControlOrMeta+End");
-        await sessions[i].page.keyboard.insertText(token);
+        await sessions[i].page.keyboard.insertText(" " + preTokens[i]);
       }
+      // plain_text is whitespace-normalised and trimmed, so the separator space
+      // before the first token is not preserved and counting " pre" occurrences
+      // can never reach `count`. Require each editor's own token instead.
       await expect.poll(async () => {
         const response = await page.request.get(contentUrl);
         if (!response.ok()) return 0;
-        return ((await response.json()).plain_text.match(/ pre/g) || []).length;
+        const plain = (await response.json()).plain_text || "";
+        return preTokens.filter((token) => plain.includes(token)).length;
       }, { timeout: 45000 }).toBeGreaterThanOrEqual(count);
 
       compose(["stop", "collab"]);
@@ -218,11 +224,11 @@ test("W24-R measures 1/5/10/25 editor reconnect capacity on the CI host", async 
         const response = await page.request.get(contentUrl);
         if (!response.ok()) return "";
         return (await response.json()).plain_text || "";
-      }, { timeout: 90000 }).toContain(tokens[tokens.length - 1]);
+      }, { timeout: 90000 }).toContain(tokens[tokens.length - 1].trim());
 
       const canonical = await (await page.request.get(contentUrl)).json();
       for (const token of tokens)
-        expect(canonical.plain_text.split(token).length - 1).toBe(1);
+        expect(canonical.plain_text.split(token.trim()).length - 1).toBe(1);
 
       const peakDocker = dockerStats();
       const peakDb = postgresStats();
