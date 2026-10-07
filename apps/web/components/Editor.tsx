@@ -7,6 +7,12 @@ import { withCollaboration } from "@blocknote/core/yjs";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { api, notify } from "../lib/api";
+import {
+  clearWorkspaceDraft,
+  loadWorkspaceDraft,
+  saveWorkspaceDraft,
+  type WorkspaceDraftIdentity,
+} from "../lib/recovery-drafts";
 import { workspacePageHref } from "../../../packages/editor/links";
 import { workspaceEditorSchema } from "../../../packages/editor/schema";
 function Body({
@@ -368,26 +374,74 @@ export default function Editor({
   const [connection, setConnection] = useState<any>(),
     [status, setStatus] = useState("Connecting…"),
     [people, setPeople] = useState<string[]>([]),
-    [generation, setGeneration] = useState(0);
+    [generation, setGeneration] = useState(0),
+    [recovery, setRecovery] = useState<{
+      identity: WorkspaceDraftIdentity;
+      updatedAt: number;
+      restore: () => void;
+      discard: () => void;
+    }>();
   useEffect(() => {
     let disposed = false,
       p: HocuspocusProvider | undefined;
     const doc = new Y.Doc();
     let persisted: Y.Snapshot | undefined,
-      connected = false;
-    const update = () =>
-      setStatus(
-        connected
-          ? persisted && Y.equalSnapshots(persisted, Y.snapshot(doc))
-            ? "Saved"
-            : "Saving…"
-          : "Offline · changes are not saved",
-      );
+      connected = false,
+      readOnly = true,
+      identity: WorkspaceDraftIdentity | undefined,
+      pendingRecovery = false,
+      draftTimer: ReturnType<typeof setTimeout> | undefined,
+      recoveryWarningShown = false;
+
+    const statusFromState = () =>
+      connected
+        ? persisted && Y.equalSnapshots(persisted, Y.snapshot(doc))
+          ? "Saved"
+          : "Saving…"
+        : "Offline · changes are not saved";
+
+    const persistLocalRecovery = () => {
+      if (
+        disposed ||
+        !identity ||
+        readOnly ||
+        !persisted ||
+        Y.equalSnapshots(persisted, Y.snapshot(doc))
+      )
+        return;
+      const saved = saveWorkspaceDraft(identity, Y.encodeStateAsUpdate(doc));
+      if (saved.ok) {
+        if (!connected) setStatus("Offline · changes saved on this device");
+        return;
+      }
+      if (!recoveryWarningShown) {
+        recoveryWarningShown = true;
+        notify(
+          saved.reason === "too-large"
+            ? "This unsaved draft is too large for device recovery. Keep this page open until it is saved."
+            : "Device recovery storage is unavailable. Keep this page open until it is saved.",
+        );
+      }
+      if (!connected) setStatus("Offline · keep this page open");
+    };
+
+    const update = () => {
+      setStatus(statusFromState());
+      if (!persisted || readOnly || !identity) return;
+      if (draftTimer) clearTimeout(draftTimer);
+      draftTimer = setTimeout(persistLocalRecovery, 75);
+    };
     doc.on("update", update);
+
     api(`/pages/${id}/collab`, "POST", {})
       .then((ticket) => {
         if (disposed) return;
-        let readOnly = ticket.readOnly;
+        readOnly = ticket.readOnly;
+        identity = { principal: user.id, room: ticket.name };
+        const stored = readOnly ? null : loadWorkspaceDraft(identity);
+        if (readOnly) clearWorkspaceDraft(identity);
+        pendingRecovery = Boolean(stored);
+
         const url =
           process.env.NEXT_PUBLIC_COLLAB_URL ||
           (location.port === "3000"
@@ -402,10 +456,30 @@ export default function Editor({
           onStatus: ({ status: s }) => {
             connected = s === "connected";
             update();
+            if (!connected) persistLocalRecovery();
           },
           onSynced: () => {
             if (disposed) return;
             setConnection({ provider: p, doc, readOnly });
+            if (stored && identity && !readOnly) {
+              const recoveryIdentity = identity;
+              setRecovery({
+                identity: recoveryIdentity,
+                updatedAt: stored.updatedAt,
+                restore: () => {
+                  if (disposed || readOnly) return;
+                  pendingRecovery = false;
+                  Y.applyUpdate(doc, stored.update, "device-recovery");
+                  setRecovery(undefined);
+                  persistLocalRecovery();
+                },
+                discard: () => {
+                  pendingRecovery = false;
+                  clearWorkspaceDraft(recoveryIdentity);
+                  setRecovery(undefined);
+                },
+              });
+            }
             p?.sendStateless("status");
           },
           onStateless: ({ payload }) => {
@@ -414,23 +488,44 @@ export default function Editor({
               persisted = Y.decodeSnapshot(
                 Uint8Array.from(atob(v.snapshot), (c) => c.charCodeAt(0)),
               );
+              if (
+                identity &&
+                !pendingRecovery &&
+                Y.equalSnapshots(persisted, Y.snapshot(doc))
+              )
+                clearWorkspaceDraft(identity);
+              else persistLocalRecovery();
               update();
             }
-            if (v.type === "persistence-error")
-              setStatus("Save failed · keep this page open");
+            if (v.type === "persistence-error") {
+              persistLocalRecovery();
+              setStatus("Save failed · changes kept on this device");
+            }
             if (v.type === "permission") {
               readOnly = v.readOnly;
+              if (readOnly && identity) {
+                pendingRecovery = false;
+                clearWorkspaceDraft(identity);
+                setRecovery(undefined);
+              }
               setConnection((current: any) =>
                 current ? { ...current, readOnly } : current,
               );
             }
             if (v.type === "reset") {
+              if (identity) clearWorkspaceDraft(identity);
+              pendingRecovery = false;
+              setRecovery(undefined);
               setConnection(undefined);
               setGeneration((x) => x + 1);
             }
           },
-          onAuthenticationFailed: () =>
-            setStatus("Access changed · refresh to continue"),
+          onAuthenticationFailed: () => {
+            if (identity) clearWorkspaceDraft(identity);
+            pendingRecovery = false;
+            setRecovery(undefined);
+            setStatus("Access changed · refresh to continue");
+          },
           onAwarenessChange: ({ states }) =>
             setPeople([
               ...new Set(states.map((s: any) => s.user?.name).filter(Boolean)),
@@ -443,13 +538,35 @@ export default function Editor({
       });
     return () => {
       disposed = true;
+      if (draftTimer) clearTimeout(draftTimer);
+      // Preserve an unacknowledged local draft across reload/crash, but never
+      // create one without a known persisted server baseline.
+      persistLocalRecovery();
       setConnection(undefined);
       p?.destroy();
       doc.destroy();
     };
-  }, [id, generation]);
+  }, [id, generation, user.id]);
   return (
     <>
+      {recovery && (
+        <div className="recovery-banner" role="alert">
+          <div>
+            <strong>Unsaved changes are available from this device.</strong>
+            <span>
+              Restore them into the current page, or discard this local draft.
+            </span>
+          </div>
+          <div className="recovery-actions">
+            <button className="button" onClick={recovery.restore}>
+              Restore draft
+            </button>
+            <button className="button secondary" onClick={recovery.discard}>
+              Discard draft
+            </button>
+          </div>
+        </div>
+      )}
       <div className="editor-state">
         <div className="presence">
           {people.slice(0, 4).map((n) => (
