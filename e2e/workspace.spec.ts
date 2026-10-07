@@ -3941,3 +3941,72 @@ test("W09b3 deployed browser stops after three throttled destination list attemp
   expect(await destination.locator(`option[value="${database.id}"]`).count(),
     "the target really is unavailable, the failure is not hidden").toBe(0);
 });
+
+
+test("W19 two connected editors recover after repeated simultaneous network interruptions", async ({ page, browser }) => {
+  test.setTimeout(210000);
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: { kind: "space", parent_id: roots[0].id, title: "W19 reconnect " + randomUUID() },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const pageResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: { kind: "page", parent_id: space.id, title: "W19 reconnect convergence" },
+  });
+  expect(pageResponse.ok(), await pageResponse.text()).toBeTruthy();
+  const resource = await pageResponse.json();
+  const url = "/?page=" + resource.id;
+  await page.goto(url);
+  await expect(page.locator(".bn-editor")).toBeVisible();
+  const secondContext = await browser.newContext();
+  try {
+    const peer = await secondContext.newPage();
+    await login(peer, false);
+    await peer.goto(url);
+    await expect(peer.locator(".bn-editor")).toBeVisible();
+
+    const initial = "W19-canonical-" + randomUUID();
+    await page.locator(".bn-editor").click();
+    await page.keyboard.insertText(initial);
+    await expect.poll(async () => {
+      const response = await page.request.get("/api/v1/pages/" + resource.id + "/content");
+      if (!response.ok()) return "";
+      return (await response.json()).plain_text || "";
+    }, { timeout: 30000 }).toContain(initial);
+    await expect(peer.locator(".bn-editor")).toContainText(initial);
+
+    // Exercise actual browser network isolation, never a test-only server bypass.
+    // Both sockets must reconnect to the canonical persisted document.
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await Promise.all([page.context().setOffline(true), secondContext.setOffline(true)]);
+      await page.waitForTimeout(1000);
+      await Promise.all([page.context().setOffline(false), secondContext.setOffline(false)]);
+      await expect(page.locator(".bn-editor")).toContainText(initial, { timeout: 30000 });
+      await expect(peer.locator(".bn-editor")).toContainText(initial, { timeout: 30000 });
+    }
+
+    const subsequent = " W19-after-reconnect-" + randomUUID();
+    await peer.locator(".bn-editor").click();
+    await peer.keyboard.press("ControlOrMeta+End");
+    await peer.keyboard.insertText(subsequent);
+    await expect.poll(async () => {
+      const response = await page.request.get("/api/v1/pages/" + resource.id + "/content");
+      if (!response.ok()) return "";
+      return (await response.json()).plain_text || "";
+    }, { timeout: 30000 }).toContain(subsequent);
+    await expect(page.locator(".bn-editor")).toContainText(subsequent);
+    const canonical = await (await page.request.get("/api/v1/pages/" + resource.id + "/content")).json();
+    expect(canonical.plain_text.split(initial).length - 1).toBe(1);
+    expect(canonical.plain_text.split(subsequent).length - 1).toBe(1);
+  } finally {
+    await page.context().setOffline(false);
+    await secondContext.setOffline(false);
+    await secondContext.close();
+  }
+});
