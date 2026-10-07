@@ -574,8 +574,8 @@ export async function importPortableArchive(
         assert(!catalogued, 409, "Retry object key is already catalogued");
         await storage.delete(file.key).catch(() => {});
       }
-      await storage.put(file.key, file.bytes, file.mime);
       written.push(file.key);
+      await storage.put(file.key, file.bytes, file.mime);
       await q.query(
         "INSERT INTO files(id,tenant_id,resource_id,object_key,name,mime,size)" +
           " VALUES($1,$2,$3,$4,$5,$6,$7)",
