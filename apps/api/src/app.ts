@@ -3300,7 +3300,12 @@ function dataRoutes(
       admin(a);
       const jobs = await one(
           q,
-          "SELECT count(*) FILTER (WHERE status='pending')::int pending,count(*) FILTER (WHERE status='failed')::int failed,min(created_at) FILTER (WHERE status='pending') oldest_pending_at FROM jobs",
+          "SELECT count(*) FILTER (WHERE status='pending')::int pending," +
+            " count(*) FILTER (WHERE status='running')::int running," +
+            " count(*) FILTER (WHERE status='failed')::int failed," +
+            " count(*) FILTER (WHERE status='cancelled')::int cancelled," +
+            " min(created_at) FILTER (WHERE status='pending') oldest_pending_at" +
+            " FROM jobs",
         ),
         webhooks = await one(
           q,
@@ -4389,6 +4394,11 @@ function dataRoutes(
         "UPDATE jobs SET status='cancelled',cancelled_at=now(),completed_at=now()," +
           " lease_token=NULL,lease_expires_at=NULL WHERE id=$1",
         [jobId],
+      );
+      await q.query(
+        "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id,request_id)" +
+          " VALUES($1,$2,$3,'job.cancelled',$4,$5)",
+        [randomUUID(), a.tenant_id, a.user_id, j.resource_id, a.requestId || null],
       );
       return { id: jobId, status: "cancelled" };
     },
