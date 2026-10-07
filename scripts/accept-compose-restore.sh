@@ -23,6 +23,7 @@ target_compose() {
 
 cleanup() {
   status=$?
+  trap - EXIT
   if [ "$SOURCE_WRITERS_STOPPED" -eq 1 ]; then
     docker compose start api collab worker >/dev/null 2>&1 || true
   fi
