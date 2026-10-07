@@ -50,6 +50,15 @@ test("W23 backup verification accepts a sound archive and refuses unsafe ones", 
   assert.equal(summary.object_bytes, "attachment bytes".length);
   assert.equal(summary.key_fingerprint, fingerprint);
 
+  // An archive produced by an older/incomplete table contract must not be
+  // reported healthy, even when its ciphertext and object checksums are sound.
+  const incomplete = archive();
+  delete incomplete.tables.job_artifacts;
+  assert.throws(
+    () => verifyBackup(encodeBackup(incomplete)),
+    /missing durable table: job_artifacts/,
+  );
+
   // A deployment holding a different key cannot read the archive offered to it.
   assert.throws(
     () =>
