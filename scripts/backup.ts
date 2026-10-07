@@ -142,6 +142,60 @@ export type BackupSummary = {
   key_fingerprint: string;
 };
 
+export type BackupComparison = {
+  tables: number;
+  rows: number;
+  objects: number;
+  object_bytes: number;
+};
+
+export function compareBackups(
+  leftText: string,
+  rightText: string,
+  env: NodeJS.ProcessEnv = process.env,
+): BackupComparison {
+  const left = decodeBackup(leftText, env),
+    right = decodeBackup(rightText, env);
+  if (JSON.stringify(left.versions) !== JSON.stringify(right.versions))
+    throw new Error("Backup schema versions differ");
+  if (left.key_fingerprint !== right.key_fingerprint)
+    throw new Error("Backup encryption-key fingerprints differ");
+
+  let rows = 0;
+  for (const table of tables) {
+    const canonical = (archive: Archive) =>
+      [...(archive.tables[table] || [])]
+        .map((row) => JSON.stringify(row))
+        .sort();
+    const a = canonical(left),
+      b = canonical(right);
+    rows += a.length;
+    if (JSON.stringify(a) !== JSON.stringify(b))
+      throw new Error(`Backup table content differs: ${table}`);
+  }
+
+  const objectShape = (archive: Archive) =>
+    Object.entries(archive.objects || {})
+      .map(([key, value]) => [
+        key,
+        value.sha256,
+        value.mime,
+        Buffer.from(value.data, "base64").length,
+      ])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const leftObjects = objectShape(left),
+    rightObjects = objectShape(right);
+  if (JSON.stringify(leftObjects) !== JSON.stringify(rightObjects))
+    throw new Error("Backup object catalogs differ");
+
+  return {
+    tables: tables.length,
+    rows,
+    objects: leftObjects.length,
+    object_bytes: leftObjects.reduce((sum, item) => sum + Number(item[3]), 0),
+  };
+}
+
 // Read-only integrity check used by operators and CI before trusting an
 // archive. It never touches the database or the object store, and it refuses
 // an archive that was produced with a different deployment key, because the
@@ -336,9 +390,10 @@ export async function restore(url: string, archive: Archive, storage: Storage) {
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [mode, target, ...rest] = process.argv.slice(2);
-  if (!target || !["backup", "restore", "verify", "rotate"].includes(mode))
+  if (!target || !["backup", "restore", "verify", "rotate", "compare"].includes(mode))
     throw Error(
       "Usage: backup.ts backup|restore|verify <archive.json>" +
+        " | backup.ts compare <source.json> <restored.json>" +
         " | backup.ts rotate <directory> --keep <count>",
     );
   if (mode === "verify") {
@@ -346,6 +401,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const summary = verifyBackup(await readFile(target, "utf8"));
     console.log(JSON.stringify(summary, null, 2));
     console.log(`Backup verified: ${target}`);
+  } else if (mode === "compare") {
+    const other = rest[0];
+    if (!other)
+      throw Error("Usage: backup.ts compare <source.json> <restored.json>");
+    const comparison = compareBackups(
+      await readFile(target, "utf8"),
+      await readFile(other, "utf8"),
+    );
+    console.log(JSON.stringify(comparison, null, 2));
+    console.log(`Backup contents match: ${target} == ${other}`);
   } else if (mode === "rotate") {
     const keepFlag = rest.indexOf("--keep");
     const keep = Number(rest[keepFlag + 1]);
