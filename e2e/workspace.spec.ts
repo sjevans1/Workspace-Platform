@@ -2564,6 +2564,15 @@ test("W10c4b two live editors merge rich edits and isolate local undo/redo", asy
     await expect(other.locator(".workspace-callout"))
       .toContainText("Alpha baseline");
     await expect(other.locator(".bn-editor")).toContainText("Beta baseline");
+    // Visible seeded text can arrive before both Hocuspocus providers have
+    // completed their initial sync. Starting simultaneous input at that point
+    // can make a valid local keystroke race the provider's initial document
+    // reconciliation. Require both editors to reach the product's canonical
+    // Saved/connected boundary before exercising concurrent edits.
+    for(const client of [page,other])
+      await expect(
+        client.getByRole("status").filter({hasText:"Saved"}),
+      ).toBeVisible({timeout:30000});
     const alphaEdit=" Alpha from editor one";
     const betaEdit=" Beta from editor two";
     // Place each caret at the exact named block edge directly before its
