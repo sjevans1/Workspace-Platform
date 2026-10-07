@@ -391,7 +391,12 @@ export default function Editor({
       identity: WorkspaceDraftIdentity | undefined,
       pendingRecovery = false,
       draftTimer: ReturnType<typeof setTimeout> | undefined,
-      recoveryWarningShown = false;
+      recoveryWarningShown = false,
+      // Set when the server or ticket endpoint proves this session lost
+      // access. Local recovery material must then stay discarded: persisting
+      // the revoked session's draft would retain content the principal can
+      // no longer read or write.
+      accessLost = false;
 
     // The provider's socket status alone can lag behind real connectivity:
     // a live WebSocket may take a long time to error out after the browser
@@ -417,6 +422,7 @@ export default function Editor({
     const persistLocalRecovery = () => {
       if (
         disposed ||
+        accessLost ||
         !identity ||
         readOnly ||
         pendingRecovery ||
@@ -441,6 +447,7 @@ export default function Editor({
     };
 
     const update = () => {
+      if (accessLost) return;
       setStatus(statusFromState());
       if (!persisted || readOnly || !identity) return;
       if (draftTimer) clearTimeout(draftTimer);
@@ -536,15 +543,25 @@ export default function Editor({
             }
           },
           onAuthenticationFailed: () => {
+            accessLost = true;
             if (identity) clearWorkspaceDraft(identity);
             pendingRecovery = false;
             setRecovery(undefined);
+            // Fail closed: a session that can no longer obtain a ticket
+            // (revocation or deletion) must not keep an editor open or
+            // rebuild local recovery material on later disconnects.
+            setConnection(undefined);
             setStatus("Access changed · refresh to continue");
           },
           onAwarenessChange: ({ states }) =>
             setPeople([
               ...new Set(states.map((s: any) => s.user?.name).filter(Boolean)),
             ] as string[]),
+          // The managed websocket provider forwards this to its retry loop.
+          // Without it, backoff climbs to 30s and a reconnected editor can
+          // spend an entire failure-detection window waiting for its next
+          // authentication attempt.
+          ...({ maxDelay: 5000 } as unknown as Record<string, unknown>),
         });
       })
       .catch((e) => {
