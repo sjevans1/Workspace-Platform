@@ -393,12 +393,26 @@ export default function Editor({
       draftTimer: ReturnType<typeof setTimeout> | undefined,
       recoveryWarningShown = false;
 
+    // The provider's socket status alone can lag behind real connectivity:
+    // a live WebSocket may take a long time to error out after the browser
+    // loses its network, so the browser's own online state must gate the
+    // status to avoid claiming progress while offline.
     const statusFromState = () =>
-      connected
+      !navigator.onLine
+        ? "Offline · changes are not saved"
+        : connected
         ? persisted && Y.equalSnapshots(persisted, Y.snapshot(doc))
           ? "Saved"
           : "Saving…"
         : "Offline · changes are not saved";
+
+    const onConnectivityChange = () => {
+      if (disposed) return;
+      setStatus(statusFromState());
+      if (!navigator.onLine) persistLocalRecovery();
+    };
+    window.addEventListener("offline", onConnectivityChange);
+    window.addEventListener("online", onConnectivityChange);
 
     const persistLocalRecovery = () => {
       if (
@@ -538,6 +552,8 @@ export default function Editor({
         notify(e.message);
       });
     return () => {
+      window.removeEventListener("offline", onConnectivityChange);
+      window.removeEventListener("online", onConnectivityChange);
       if (draftTimer) clearTimeout(draftTimer);
       // Preserve an unacknowledged local draft across reload/crash, but never
       // create one without a known persisted server baseline.
