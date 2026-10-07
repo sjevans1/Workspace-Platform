@@ -3634,6 +3634,97 @@ test("outbox dispatch signs webhooks and records retries without following redir
     redirectTarget.close();
   }
 });
+test("W20 webhook leases prevent double-claim and recover after expiry", async () => {
+  const seen: string[] = [];
+  let releaseResponse = () => {};
+  let firstArrived = () => {};
+  let hold = false;
+  const receiver = createServer(async (r, res) => {
+    const eventId = String(r.headers["x-workspace-event"] || "");
+    seen.push(eventId);
+    firstArrived();
+    if (hold)
+      await new Promise<void>((resolve) => {
+        releaseResponse = resolve;
+      });
+    res.end("ok");
+  });
+  await new Promise<void>((resolve) =>
+    receiver.listen(49664, "127.0.0.1", resolve),
+  );
+  process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49664";
+  try {
+    const subscription = await ok("POST", "/webhooks", {
+      url: "http://127.0.0.1:49664/w20",
+      events: ["page.w20_lease_test"],
+    });
+    const eventId = randomUUID();
+    const deliveryId = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO event_outbox(id,tenant_id,actor_id,type,resource_id,version,dispatched_at)" +
+          " VALUES($1,$2,$3,'page.w20_lease_test',$4,1,now())",
+        [eventId, owner.tenant, owner.id, page.id],
+      );
+      await q.query(
+        "INSERT INTO webhook_deliveries" +
+          "(id,tenant_id,subscription_id,event_id,lease_token,lease_expires_at)" +
+          " VALUES($1,$2,$3,$4,$5,now()+interval '30 seconds')",
+        [deliveryId, owner.tenant, subscription.id, eventId, randomUUID()],
+      );
+    });
+
+    // A live lease represents a worker that may still be performing the HTTP
+    // request. Another worker tick must not deliver the same event.
+    await tick(db);
+    assert.equal(seen.filter((id) => id === eventId).length, 0);
+
+    // Simulate the original worker dying: once the lease expires the delivery
+    // becomes claimable again.
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "UPDATE webhook_deliveries SET lease_expires_at=now()-interval '1 second'" +
+          " WHERE id=$1",
+        [deliveryId],
+      ),
+    );
+
+    hold = true;
+    const arrived = new Promise<void>((resolve) => {
+      firstArrived = resolve;
+    });
+    const firstWorker = tick(db);
+    await arrived;
+
+    // The first worker has committed its lease before beginning network I/O,
+    // so a second tick can run without blocking on that delivery and must not
+    // send a duplicate request.
+    const secondWorker = tick(db);
+    await pause(150);
+    assert.equal(seen.filter((id) => id === eventId).length, 1);
+
+    hold = false;
+    releaseResponse();
+    await Promise.all([firstWorker, secondWorker]);
+
+    const final = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT status,attempts,lease_token,lease_expires_at" +
+          " FROM webhook_deliveries WHERE id=$1",
+        [deliveryId],
+      ),
+    );
+    assert.equal(final.status, "delivered");
+    assert.equal(final.attempts, 1);
+    assert.equal(final.lease_token, null);
+    assert.equal(final.lease_expires_at, null);
+    assert.equal(seen.filter((id) => id === eventId).length, 1);
+  } finally {
+    receiver.close();
+  }
+});
+
 test("dead webhook deliveries can be replayed only by same-tenant administrators", async () => {
   process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49661";
   const subscription = await ok("POST", "/webhooks", {
