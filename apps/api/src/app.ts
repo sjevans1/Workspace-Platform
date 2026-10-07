@@ -3953,15 +3953,27 @@ function dataRoutes(
           "Prepared webhook secret changed; reload before continuing",
         );
         if (activate) {
-          const leased = await one(
-            q,
-            "SELECT id FROM webhook_deliveries" +
-              " WHERE subscription_id=$1 AND tenant_id=$2" +
-              " AND status IN ('pending','retry')" +
-              " AND lease_token IS NOT NULL AND lease_expires_at>now()" +
-              " LIMIT 1",
-            [subscriptionId, a.tenant_id],
-          );
+          // Preserve the accepted rotation contract without holding the
+          // worker's tenant transaction across network I/O. This activation
+          // transaction already owns the subscription row; new claims block
+          // on FOR SHARE, while an already-leased delivery may finalize
+          // independently because finalization touches only the delivery row.
+          // Wait through the normal 10s HTTP timeout, then fail closed if a
+          // crashed worker still owns an unexpired lease.
+          let leased;
+          for (let attempt = 0; attempt < 120; attempt++) {
+            leased = await one(
+              q,
+              "SELECT id FROM webhook_deliveries" +
+                " WHERE subscription_id=$1 AND tenant_id=$2" +
+                " AND status IN ('pending','retry')" +
+                " AND lease_token IS NOT NULL AND lease_expires_at>now()" +
+                " LIMIT 1",
+              [subscriptionId, a.tenant_id],
+            );
+            if (!leased) break;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
           assert(
             !leased,
             409,
