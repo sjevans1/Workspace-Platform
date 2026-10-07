@@ -16,6 +16,9 @@ const tables = [
   "memberships",
   "sessions",
   "oidc_identities",
+  // Restore logout replay protection, but intentionally do not persist
+  // short-lived oidc_login_states (PKCE/nonce authorization-flow state).
+  "oidc_logout_events",
   "oidc_tenant_providers",
   "scim_connectors",
   "scim_users",
@@ -234,6 +237,8 @@ export async function backup(url: string, storage: Storage): Promise<Archive> {
     const captureObject = async (
       row: { object_key: string; mime: string; size?: number | string; sha256?: string },
     ) => {
+      if (result.objects[row.object_key])
+        throw Error("Duplicate backup object key across durable catalogs");
       const bytes = await storage.get(row.object_key);
       if (row.size !== undefined && bytes.length !== Number(row.size))
         throw Error("Backup object size does not match catalog metadata");
