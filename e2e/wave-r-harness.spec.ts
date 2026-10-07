@@ -528,3 +528,318 @@ test("W19 writer lease remains single-owner and two live editors converge after 
     await secondContext.close();
   }
 });
+
+
+test("W19 deleted page fails closed for an offline draft instead of resurrecting content", async ({
+  page,
+  browser,
+}) => {
+  test.skip(
+    process.env.E2E_WAVE_R_HARNESS !== "1",
+    "W19 structural-delete acceptance runs only in the deployed Wave R step",
+  );
+  test.setTimeout(210000);
+
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "space",
+      parent_id: roots[0].id,
+      title: "W19 structural delete " + Date.now(),
+    },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const resourceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "page",
+      parent_id: space.id,
+      title: "W19 deleted during outage " + Date.now(),
+    },
+  });
+  expect(resourceResponse.ok(), await resourceResponse.text()).toBeTruthy();
+  const resource = await resourceResponse.json();
+  const url = "/?page=" + resource.id;
+
+  await page.goto(url);
+  const ownerEditor = page.locator(".bn-editor");
+  await expect(ownerEditor).toBeVisible();
+
+  const peerContext = await browser.newContext();
+  try {
+    const peer = await peerContext.newPage();
+    await login(peer);
+    await peer.goto(url);
+    const peerEditor = peer.locator(".bn-editor");
+    await expect(peerEditor).toBeVisible();
+
+    // Confirmed transport loss before the offline mutation, as in W18.
+    compose(["stop", "collab"]);
+    await expect(
+      page.getByRole("status").filter({ hasText: "Offline" }),
+    ).toBeVisible({ timeout: 20000 });
+    await expect(
+      peer.getByRole("status").filter({ hasText: "Offline" }),
+    ).toBeVisible({ timeout: 20000 });
+
+    const offlineToken = " OFFLINE_AFTER_DELETE_" + Date.now();
+    await peerEditor.click();
+    await peer.keyboard.press("ControlOrMeta+End");
+    await peer.keyboard.insertText(offlineToken);
+    await expect
+      .poll(
+        async () =>
+          peer.evaluate(() =>
+            Object.keys(localStorage).some((key) =>
+              key.startsWith("workspace-recovery:v1:"),
+            ),
+          ),
+        { timeout: 10000 },
+      )
+      .toBe(true);
+
+    // Structural deletion while the peer cannot receive live updates.
+    const deleted = await page.request.delete(
+      "/api/v1/resources/" + resource.id,
+      {
+        headers,
+      },
+    );
+    expect(deleted.ok(), await deleted.text()).toBeTruthy();
+
+    compose(["start", "collab"]);
+    await waitForCollabHealth();
+
+    // Reconnect must fail closed: the denied room ticket clears the recovery
+    // draft, the stale editor is removed, and the deletion is never
+    // resurrected by replayed collaboration state.
+    await expect
+      .poll(
+        async () =>
+          peer.evaluate(
+            () =>
+              Object.keys(localStorage).filter((key) =>
+                key.startsWith("workspace-recovery:v1:"),
+              ).length,
+          ),
+        { timeout: 30000 },
+      )
+      .toBe(0);
+    await expect(peer.locator(".bn-editor")).toHaveCount(0, { timeout: 30000 });
+    const check = await page.request.get("/api/v1/resources/" + resource.id);
+    expect(check.status()).toBe(404);
+    await expect(
+      peer.getByText("Unsaved changes are available from this device.", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+  } finally {
+    try {
+      compose(["start", "collab"]);
+    } catch {}
+    await waitForCollabHealth();
+    await peerContext.close();
+  }
+});
+
+test("W19 history restore converges reconnecting clients and drafts stay room-scoped", async ({
+  page,
+  browser,
+}) => {
+  test.skip(
+    process.env.E2E_WAVE_R_HARNESS !== "1",
+    "W19 restore-during-reconnect acceptance runs only in the deployed Wave R step",
+  );
+  test.setTimeout(240000);
+
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "space",
+      parent_id: roots[0].id,
+      title: "W19 restore reconnect " + Date.now(),
+    },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+
+  const created = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "page",
+      parent_id: space.id,
+      title: "W19 restore target " + Date.now(),
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const target = await created.json();
+  const otherResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "page",
+      parent_id: space.id,
+      title: "W19 unrelated room " + Date.now(),
+    },
+  });
+  expect(otherResponse.ok(), await otherResponse.text()).toBeTruthy();
+  const other = await otherResponse.json();
+  const targetUrl = "/?page=" + target.id;
+  const targetEndpoint = "/api/v1/pages/" + target.id + "/content";
+  const v1Token = "W19-restore-v1-" + Date.now();
+  const v2Token = " W19-restore-v2-" + Date.now();
+
+  const peerContext = await browser.newContext();
+  try {
+    // Seed the restore target through the API so the version row exists
+    // deterministically before any client opens the room.
+    const seedBase = await (await page.request.get(targetEndpoint)).json();
+    const seeded = await page.request.patch(targetEndpoint, {
+      headers,
+      data: {
+        blocks: [
+          {
+            id: crypto.randomUUID(),
+            type: "paragraph",
+            content: v1Token,
+          },
+        ],
+        expected_revision: seedBase.revision,
+      },
+    });
+    expect(seeded.ok(), await seeded.text()).toBeTruthy();
+
+    await page.goto(targetUrl);
+    const ownerEditor = page.locator(".bn-editor");
+    await expect(ownerEditor).toBeVisible();
+    const peer = await peerContext.newPage();
+    await login(peer);
+    await peer.goto(targetUrl);
+    const peerEditor = peer.locator(".bn-editor");
+    await expect(peerEditor).toBeVisible();
+
+    await expect(ownerEditor).toContainText(v1Token);
+    await expect(peerEditor).toContainText(v1Token);
+
+    const stampedV2 = v2Token + " " + Date.now();
+    await ownerEditor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.insertText(stampedV2);
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(targetEndpoint);
+          if (!response.ok()) return "";
+          return (await response.json()).plain_text || "";
+        },
+        { timeout: 30000 },
+      )
+      .toContain(stampedV2.trim());
+    await expect(peerEditor).toContainText(stampedV2.trim());
+
+    // The only recorded snapshot is the API-seeded v1 replacement.
+    const versions = await (
+      await page.request.get("/api/v1/pages/" + target.id + "/versions")
+    ).json();
+    const v1 = versions[0];
+    expect(v1?.id).toBeTruthy();
+    expect(versions).toHaveLength(1);
+
+    // Cut the writer, then bring it back and restore the older version while
+    // both clients are still re-establishing their sockets.
+    compose(["stop", "collab"]);
+    await expect(
+      page.getByRole("status").filter({ hasText: "Offline" }),
+    ).toBeVisible({ timeout: 20000 });
+    await expect(
+      peer.getByRole("status").filter({ hasText: "Offline" }),
+    ).toBeVisible({ timeout: 20000 });
+    compose(["start", "collab"]);
+    await waitForCollabHealth();
+
+    const currentRevision = (
+      await (await page.request.get(targetEndpoint)).json()
+    ).revision;
+    const restore = await page.request.post(
+      "/api/v1/pages/" + target.id + "/versions/" + v1.id + "/restore",
+      { headers, data: { expected_revision: currentRevision } },
+    );
+    expect(restore.ok(), await restore.text()).toBeTruthy();
+
+    // Deterministic convergence on the restored canonical document: the v2
+    // edit is superseded in every connected view, with no stale-authority
+    // rewrite of the restored state.
+    for (const editor of [ownerEditor, peerEditor]) {
+      await expect(editor).toContainText(v1Token, { timeout: 45000 });
+      await expect(editor).not.toContainText(v2Token.trim(), {
+        timeout: 45000,
+      });
+    }
+    const canonical = await (await page.request.get(targetEndpoint)).json();
+    expect(canonical.plain_text).toContain(v1Token);
+    expect(canonical.plain_text).not.toContain(v2Token.trim());
+
+    // Room-scoped recovery: a draft left for the target page must surface
+    // only there, never in the unrelated room, and is explicitly discarded.
+    const draftToken = " W19-room-scoped-" + Date.now();
+    compose(["stop", "collab"]);
+    await expect(
+      page.getByRole("status").filter({ hasText: "Offline" }),
+    ).toBeVisible({ timeout: 20000 });
+    await ownerEditor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.insertText(draftToken);
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            Object.keys(localStorage).filter((key) =>
+              key.startsWith("workspace-recovery:v1:"),
+            ).length,
+        ),
+      )
+      .toBeGreaterThan(0);
+    await page.close();
+    await peer.close();
+    compose(["start", "collab"]);
+    await waitForCollabHealth();
+
+    const unrelated = await peerContext.newPage();
+    await unrelated.goto("/?page=" + other.id);
+    const unrelatedEditor = unrelated.locator(".bn-editor");
+    await expect(unrelatedEditor).toBeVisible({ timeout: 30000 });
+    await expect(
+      unrelated.getByText("Unsaved changes are available from this device.", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await expect(unrelatedEditor).not.toContainText(draftToken.trim());
+
+    const back = await peerContext.newPage();
+    await back.goto(targetUrl);
+    await expect(
+      back.getByText("Unsaved changes are available from this device.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await back.getByRole("button", { name: "Discard draft" }).click();
+    const afterDiscard = await back.request.get(targetEndpoint);
+    expect((await afterDiscard.json()).plain_text).not.toContain(
+      draftToken.trim(),
+    );
+  } finally {
+    try {
+      compose(["start", "collab"]);
+    } catch {}
+    await waitForCollabHealth();
+    await peerContext.close();
+  }
+});
