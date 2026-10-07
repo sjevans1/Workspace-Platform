@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Query } from "../../../packages/database/index.ts";
 import { one } from "../../../packages/database/index.ts";
@@ -34,6 +34,22 @@ import {
 } from "../../../packages/editor/server.ts";
 import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import { emit } from "../../../packages/events/index.ts";
+
+function retryUuid(seed: string, scope: string, source: string) {
+  const bytes = Buffer.from(
+    createHash("sha256").update(seed + ":" + scope + ":" + source).digest().subarray(0, 16),
+  );
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
 
 const treeNodeSchema = z.object({
   id: uuid,
@@ -228,6 +244,7 @@ export async function importPortableArchive(
   archive: Buffer,
   storage: Storage,
   antivirus: Antivirus,
+  retrySeed?: string,
 ) {
   const destination = await requireAccess(q, a, destinationId, 3);
   const inspected = inspectPortableArchive(archive, { collect: true }),
@@ -298,7 +315,10 @@ export async function importPortableArchive(
     assert(!fileIds.has(file.id), 400, "Archive contains duplicate files");
     assert(entries.has(`files/${file.id}.data`), 400,
       "Archive attachment bytes are missing");
-    fileIds.set(file.id, randomUUID());
+    fileIds.set(
+      file.id,
+      retrySeed ? retryUuid(retrySeed, "file", file.id) : randomUUID(),
+    );
   }
 
   const ids = new Map<string, string>(),
@@ -339,6 +359,7 @@ export async function importPortableArchive(
       title: node.title,
       icon: node.icon,
       blocks: [],
+      id: retrySeed ? retryUuid(retrySeed, "resource", node.id) : undefined,
     });
     ids.set(node.id, created.id);
     report.resources += 1;
@@ -431,7 +452,13 @@ export async function importPortableArchive(
       if (Object.prototype.hasOwnProperty.call(exported.values, property.id))
         initial[property.id] = exported.values[property.id];
     }
-    const created = await createRecord(q, a, targetDatabaseId, initial);
+    const created = await createRecord(
+      q,
+      a,
+      targetDatabaseId,
+      initial,
+      retrySeed ? retryUuid(retrySeed, "resource", node.id) : undefined,
+    );
     ids.set(node.id, created.id);
     await q.query(
       "UPDATE resources SET icon=$2,position=$3 WHERE id=$1",
@@ -538,6 +565,15 @@ export async function importPortableArchive(
   const written: string[] = [];
   try {
     for (const file of preparedFiles) {
+      if (retrySeed) {
+        const catalogued = await one(
+          q,
+          "SELECT 1 FROM files WHERE object_key=$1",
+          [file.key],
+        );
+        assert(!catalogued, 409, "Retry object key is already catalogued");
+        await storage.delete(file.key).catch(() => {});
+      }
       await storage.put(file.key, file.bytes, file.mime);
       written.push(file.key);
       await q.query(
