@@ -106,8 +106,16 @@ export function cleanupWorkspaceDrafts(
 ) {
   const storage = storeOrDefault(store);
   if (!storage) return;
-  for (const entry of entries(storage))
-    if (entry.value.expiresAt <= now) storage.removeItem(entry.key);
+  // Snapshot keys before deletion: Storage.key() indices shift after removeItem.
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key?.startsWith(WORKSPACE_DRAFT_PREFIX)) keys.push(key);
+  }
+  for (const key of keys) {
+    const value = parse(storage.getItem(key));
+    if (!value || value.expiresAt <= now) storage.removeItem(key);
+  }
 }
 
 export function loadWorkspaceDraft(
@@ -202,8 +210,15 @@ export function clearPrincipalWorkspaceDrafts(
   const storage = storeOrDefault(store);
   if (!storage) return;
   try {
-    for (const entry of entries(storage))
-      if (entry.value.principal === principal) storage.removeItem(entry.key);
+    // Match the encoded principal in the storage key, not untrusted JSON.
+    // This also removes malformed records for the signing-out principal only.
+    const prefix = WORKSPACE_DRAFT_PREFIX + encodeURIComponent(principal) + ":";
+    const keys: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key?.startsWith(prefix)) keys.push(key);
+    }
+    for (const key of keys) storage.removeItem(key);
   } catch {
     // Logout must continue even if browser storage is unavailable.
   }
