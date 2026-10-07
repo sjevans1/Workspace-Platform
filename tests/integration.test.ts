@@ -4262,6 +4262,60 @@ test("W09 queued jobs cancel safely and expired running leases recover", async (
     409,
   );
 
+  const archiveSource = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W09 staged archive source " + randomUUID().slice(0, 8),
+  });
+  const exportedArchive = await req(
+    "GET",
+    `/resources/${archiveSource.id}/export/archive`,
+    undefined,
+    owner,
+  );
+  assert.equal(exportedArchive.statusCode, 200, exportedArchive.body);
+  const staged = await req(
+    "POST",
+    `/imports/archive?parent_id=${space.id}`,
+    exportedArchive.rawPayload,
+    owner,
+    { "content-type": "application/zip" },
+  );
+  assert.equal(staged.statusCode, 200, staged.body);
+  const stagedJob = staged.json();
+  const stagedArtifact = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT id,object_key FROM job_artifacts WHERE job_id=$1 AND kind='input'",
+      [stagedJob.id],
+    ),
+  );
+  assert.ok(stagedArtifact?.object_key);
+  await ok("POST", `/jobs/${stagedJob.id}/cancel`, {});
+  assert.equal(
+    await db.tenant(owner.tenant, async (q) =>
+      Number(
+        (
+          await one(q, "SELECT count(*) n FROM job_artifacts WHERE job_id=$1", [
+            stagedJob.id,
+          ])
+        ).n,
+      ),
+    ),
+    0,
+  );
+  const cancelledDeletion = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT status,reason FROM object_deletions WHERE object_key=$1",
+      [stagedArtifact.object_key],
+    ),
+  );
+  assert.deepEqual(
+    [cancelledDeletion.status, cancelledDeletion.reason],
+    ["pending", "job_cancelled"],
+  );
+
   const recoveredTitle = "W09 recovered " + randomUUID().slice(0, 8);
   const crashed = await ok("POST", "/imports", {
     parent_id: space.id,
