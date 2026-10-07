@@ -461,7 +461,7 @@ export default function Editor({
           onSynced: () => {
             if (disposed) return;
             setConnection({ provider: p, doc, readOnly });
-            if (stored && identity && !readOnly) {
+            if (stored && pendingRecovery && identity && !readOnly) {
               const recoveryIdentity = identity;
               setRecovery({
                 identity: recoveryIdentity,
@@ -537,11 +537,11 @@ export default function Editor({
         notify(e.message);
       });
     return () => {
-      disposed = true;
       if (draftTimer) clearTimeout(draftTimer);
       // Preserve an unacknowledged local draft across reload/crash, but never
       // create one without a known persisted server baseline.
       persistLocalRecovery();
+      disposed = true;
       setConnection(undefined);
       p?.destroy();
       doc.destroy();
