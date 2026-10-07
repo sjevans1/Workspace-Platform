@@ -35,7 +35,7 @@ import {
 import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import { emit } from "../../../packages/events/index.ts";
 
-function retryUuid(seed: string, scope: string, source: string) {
+export function retryUuid(seed: string, scope: string, source: string) {
   const bytes = Buffer.from(
     createHash("sha256").update(seed + ":" + scope + ":" + source).digest().subarray(0, 16),
   );
