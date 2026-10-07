@@ -405,6 +405,7 @@ export default function Editor({
         disposed ||
         !identity ||
         readOnly ||
+        pendingRecovery ||
         !persisted ||
         Y.equalSnapshots(persisted, Y.snapshot(doc))
       )
