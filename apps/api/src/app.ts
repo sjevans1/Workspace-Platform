@@ -4370,6 +4370,21 @@ function dataRoutes(
       assert(j && j.user_id === a.user_id, 404, "Job not found");
       await requireAccess(q, a, j.resource_id);
       assert(j.status === "pending", 409, "Only queued jobs can be cancelled");
+      for (const artifact of (
+        await q.query(
+          "SELECT id,object_key FROM job_artifacts" +
+            " WHERE job_id=$1 AND kind='input' FOR UPDATE",
+          [jobId],
+        )
+      ).rows) {
+        await q.query(
+          "INSERT INTO object_deletions(id,tenant_id,object_key,reason)" +
+            " VALUES($1,$2,$3,'job_cancelled')" +
+            " ON CONFLICT(tenant_id,object_key) DO NOTHING",
+          [randomUUID(), a.tenant_id, artifact.object_key],
+        );
+        await q.query("DELETE FROM job_artifacts WHERE id=$1", [artifact.id]);
+      }
       await q.query(
         "UPDATE jobs SET status='cancelled',cancelled_at=now(),completed_at=now()," +
           " lease_token=NULL,lease_expires_at=NULL WHERE id=$1",
