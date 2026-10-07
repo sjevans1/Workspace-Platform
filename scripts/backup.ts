@@ -10,7 +10,7 @@ import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStorage, type Storage } from "../packages/storage/index.ts";
-const tables = [
+export const backupTables = [
   "organisations",
   "users",
   "memberships",
@@ -47,6 +47,7 @@ const tables = [
   "job_artifacts",
   "object_deletions",
 ] as const;
+const tables = backupTables;
 const digest = (b: string | Buffer) =>
   createHash("sha256").update(b).digest("hex"),
   backupEnvelopeFormat = "openjm-backup-encrypted-v1";
