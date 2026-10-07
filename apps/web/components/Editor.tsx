@@ -480,12 +480,27 @@ export default function Editor({
           (location.port === "3000"
             ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:1234`
             : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/collaboration`);
+        // The provider joins a room whose name embeds the page document epoch,
+        // and the epoch is bumped by a version restore. The document name is
+        // fixed when the provider is constructed while the auth token is
+        // re-fetched on every connect, so a restore that lands while this
+        // client is still reconnecting would pin the socket to the retired
+        // room: the server rejects it (epoch mismatch) and it retries a doomed
+        // handshake forever, leaving superseded content on screen. Track the
+        // joined room and reissue it when the ticket advertises a new one.
+        let room = ticket.name;
         p = new HocuspocusProvider({
           url,
-          name: ticket.name,
+          name: room,
           token: () =>
             api(`/pages/${id}/collab`, "POST", {})
-              .then((t) => t.token)
+              .then((t) => {
+                if (!disposed && t.name !== room) {
+                  room = t.name;
+                  setGeneration((x) => x + 1);
+                }
+                return t.token;
+              })
               .catch((error) => {
                 // Ticket refresh can fail before Hocuspocus emits
                 // onAuthenticationFailed. Explicit authorization loss must
