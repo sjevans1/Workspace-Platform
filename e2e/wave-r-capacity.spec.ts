@@ -258,12 +258,15 @@ test("W24-R measures 1/5/10/25 editor reconnect capacity on the CI host", async 
   }
 
   evidence.completedAt = new Date().toISOString();
-  await mkdir("test-results", { recursive: true });
+  await mkdir("capacity-results", { recursive: true });
   await writeFile(
-    "test-results/w24-r-capacity.json",
+    "capacity-results/w24-r-capacity.json",
     JSON.stringify(evidence, null, 2) + "\n",
     "utf8",
   );
+
+  console.log("W24-R CAPACITY EVIDENCE");
+  console.log(JSON.stringify(evidence, null, 2));
 
   expect(evidence.scenarios.map((entry: any) => entry.sessions))
     .toEqual(capacities);
