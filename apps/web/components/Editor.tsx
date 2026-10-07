@@ -6,7 +6,13 @@ import { useCreateBlockNote } from "@blocknote/react";
 import { withCollaboration } from "@blocknote/core/yjs";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
-import { api, notify } from "../lib/api";
+import { api, ApiError, notify } from "../lib/api";
+import {
+  clearWorkspaceDraft,
+  loadWorkspaceDraft,
+  saveWorkspaceDraft,
+  type WorkspaceDraftIdentity,
+} from "../lib/recovery-drafts";
 import { workspacePageHref } from "../../../packages/editor/links";
 import { workspaceEditorSchema } from "../../../packages/editor/schema";
 function Body({
@@ -368,44 +374,173 @@ export default function Editor({
   const [connection, setConnection] = useState<any>(),
     [status, setStatus] = useState("Connecting…"),
     [people, setPeople] = useState<string[]>([]),
-    [generation, setGeneration] = useState(0);
+    [generation, setGeneration] = useState(0),
+    [recovery, setRecovery] = useState<{
+      identity: WorkspaceDraftIdentity;
+      updatedAt: number;
+      restore: () => void;
+      discard: () => void;
+    }>();
   useEffect(() => {
     let disposed = false,
       p: HocuspocusProvider | undefined;
     const doc = new Y.Doc();
     let persisted: Y.Snapshot | undefined,
-      connected = false;
-    const update = () =>
-      setStatus(
-        connected
-          ? persisted && Y.equalSnapshots(persisted, Y.snapshot(doc))
-            ? "Saved"
-            : "Saving…"
-          : "Offline · changes are not saved",
-      );
+      connected = false,
+      readOnly = true,
+      identity: WorkspaceDraftIdentity | undefined,
+      pendingRecovery = false,
+      draftTimer: ReturnType<typeof setTimeout> | undefined,
+      recoveryWarningShown = false,
+      // Set when the server or ticket endpoint proves this session lost
+      // access. Local recovery material must then stay discarded: persisting
+      // the revoked session's draft would retain content the principal can
+      // no longer read or write.
+      accessLost = false;
+
+    // The provider's socket status alone can lag behind real connectivity:
+    // a live WebSocket may take a long time to error out after the browser
+    // loses its network, so the browser's own online state must gate the
+    // status to avoid claiming progress while offline.
+    const statusFromState = () =>
+      !navigator.onLine
+        ? "Offline · changes are not saved"
+        : connected
+        ? persisted && Y.equalSnapshots(persisted, Y.snapshot(doc))
+          ? "Saved"
+          : "Saving…"
+        : "Offline · changes are not saved";
+
+    const onConnectivityChange = () => {
+      if (disposed) return;
+      setStatus(statusFromState());
+      if (!navigator.onLine) persistLocalRecovery();
+    };
+    window.addEventListener("offline", onConnectivityChange);
+    window.addEventListener("online", onConnectivityChange);
+
+    const persistLocalRecovery = () => {
+      if (
+        disposed ||
+        accessLost ||
+        !identity ||
+        readOnly ||
+        pendingRecovery ||
+        !persisted ||
+        Y.equalSnapshots(persisted, Y.snapshot(doc))
+      )
+        return;
+      const saved = saveWorkspaceDraft(identity, Y.encodeStateAsUpdate(doc));
+      if (saved.ok) {
+        if (!connected) setStatus("Offline · changes saved on this device");
+        return;
+      }
+      if (!recoveryWarningShown) {
+        recoveryWarningShown = true;
+        notify(
+          saved.reason === "too-large"
+            ? "This unsaved draft is too large for device recovery. Keep this page open until it is saved."
+            : "Device recovery storage is unavailable. Keep this page open until it is saved.",
+        );
+      }
+      if (!connected) setStatus("Offline · keep this page open");
+    };
+
+    const update = () => {
+      if (accessLost) return;
+      setStatus(statusFromState());
+      if (!persisted || readOnly || !identity) return;
+      if (draftTimer) clearTimeout(draftTimer);
+      draftTimer = setTimeout(persistLocalRecovery, 75);
+    };
+    const loseAccess = () => {
+      if (accessLost) return;
+      accessLost = true;
+      if (draftTimer) clearTimeout(draftTimer);
+      if (identity) clearWorkspaceDraft(identity);
+      pendingRecovery = false;
+      setRecovery(undefined);
+      setConnection(undefined);
+      setStatus("Access changed · refresh to continue");
+    };
+
     doc.on("update", update);
+
     api(`/pages/${id}/collab`, "POST", {})
       .then((ticket) => {
         if (disposed) return;
-        let readOnly = ticket.readOnly;
+        readOnly = ticket.readOnly;
+        identity = { principal: user.id, room: ticket.name };
+        const stored = readOnly ? null : loadWorkspaceDraft(identity);
+        if (readOnly) clearWorkspaceDraft(identity);
+        pendingRecovery = Boolean(stored);
+
         const url =
           process.env.NEXT_PUBLIC_COLLAB_URL ||
           (location.port === "3000"
             ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:1234`
             : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/collaboration`);
+        // The provider joins a room whose name embeds the page document epoch,
+        // and the epoch is bumped by a version restore. The document name is
+        // fixed when the provider is constructed while the auth token is
+        // re-fetched on every connect, so a restore that lands while this
+        // client is still reconnecting would pin the socket to the retired
+        // room: the server rejects it (epoch mismatch) and it retries a doomed
+        // handshake forever, leaving superseded content on screen. Track the
+        // joined room and reissue it when the ticket advertises a new one.
+        let room = ticket.name;
         p = new HocuspocusProvider({
           url,
-          name: ticket.name,
+          name: room,
           token: () =>
-            api(`/pages/${id}/collab`, "POST", {}).then((t) => t.token),
+            api(`/pages/${id}/collab`, "POST", {})
+              .then((t) => {
+                if (!disposed && t.name !== room) {
+                  room = t.name;
+                  setGeneration((x) => x + 1);
+                }
+                return t.token;
+              })
+              .catch((error) => {
+                // Ticket refresh can fail before Hocuspocus emits
+                // onAuthenticationFailed. Explicit authorization loss must
+                // immediately destroy replayable local recovery material,
+                // while transient 5xx/network failures keep the draft.
+                if (
+                  error instanceof ApiError &&
+                  [401, 403, 404].includes(error.status)
+                )
+                  loseAccess();
+                throw error;
+              }),
           document: doc,
           onStatus: ({ status: s }) => {
             connected = s === "connected";
             update();
+            if (!connected) persistLocalRecovery();
           },
           onSynced: () => {
             if (disposed) return;
             setConnection({ provider: p, doc, readOnly });
+            if (stored && pendingRecovery && identity && !readOnly) {
+              const recoveryIdentity = identity;
+              setRecovery({
+                identity: recoveryIdentity,
+                updatedAt: stored.updatedAt,
+                restore: () => {
+                  if (disposed || readOnly) return;
+                  pendingRecovery = false;
+                  Y.applyUpdate(doc, stored.update, "device-recovery");
+                  setRecovery(undefined);
+                  persistLocalRecovery();
+                },
+                discard: () => {
+                  pendingRecovery = false;
+                  clearWorkspaceDraft(recoveryIdentity);
+                  setRecovery(undefined);
+                },
+              });
+            }
             p?.sendStateless("status");
           },
           onStateless: ({ payload }) => {
@@ -414,27 +549,52 @@ export default function Editor({
               persisted = Y.decodeSnapshot(
                 Uint8Array.from(atob(v.snapshot), (c) => c.charCodeAt(0)),
               );
+              if (
+                identity &&
+                !pendingRecovery &&
+                Y.equalSnapshots(persisted, Y.snapshot(doc))
+              )
+                clearWorkspaceDraft(identity);
+              else persistLocalRecovery();
               update();
             }
-            if (v.type === "persistence-error")
-              setStatus("Save failed · keep this page open");
+            if (v.type === "persistence-error") {
+              persistLocalRecovery();
+              setStatus("Save failed · changes kept on this device");
+            }
             if (v.type === "permission") {
               readOnly = v.readOnly;
+              if (readOnly && identity) {
+                pendingRecovery = false;
+                clearWorkspaceDraft(identity);
+                setRecovery(undefined);
+              }
               setConnection((current: any) =>
                 current ? { ...current, readOnly } : current,
               );
             }
             if (v.type === "reset") {
+              if (identity) clearWorkspaceDraft(identity);
+              pendingRecovery = false;
+              setRecovery(undefined);
               setConnection(undefined);
               setGeneration((x) => x + 1);
             }
           },
-          onAuthenticationFailed: () =>
-            setStatus("Access changed · refresh to continue"),
+          onAuthenticationFailed: () => {
+            // Fail closed: a session that can no longer authenticate must not
+            // keep an editor open or rebuild recovery material later.
+            loseAccess();
+          },
           onAwarenessChange: ({ states }) =>
             setPeople([
               ...new Set(states.map((s: any) => s.user?.name).filter(Boolean)),
             ] as string[]),
+          // The managed websocket provider forwards this to its retry loop.
+          // Without it, backoff climbs to 30s and a reconnected editor can
+          // spend an entire failure-detection window waiting for its next
+          // authentication attempt.
+          ...({ maxDelay: 5000 } as unknown as Record<string, unknown>),
         });
       })
       .catch((e) => {
@@ -442,14 +602,38 @@ export default function Editor({
         notify(e.message);
       });
     return () => {
+      window.removeEventListener("offline", onConnectivityChange);
+      window.removeEventListener("online", onConnectivityChange);
+      if (draftTimer) clearTimeout(draftTimer);
+      // Preserve an unacknowledged local draft across reload/crash, but never
+      // create one without a known persisted server baseline.
+      persistLocalRecovery();
       disposed = true;
       setConnection(undefined);
       p?.destroy();
       doc.destroy();
     };
-  }, [id, generation]);
+  }, [id, generation, user.id]);
   return (
     <>
+      {recovery && (
+        <div className="recovery-banner" role="alert">
+          <div>
+            <strong>Unsaved changes are available from this device.</strong>
+            <span>
+              Restore them into the current page, or discard this local draft.
+            </span>
+          </div>
+          <div className="recovery-actions">
+            <button className="button" onClick={recovery.restore}>
+              Restore draft
+            </button>
+            <button className="button secondary" onClick={recovery.discard}>
+              Discard draft
+            </button>
+          </div>
+        </div>
+      )}
       <div className="editor-state">
         <div className="presence">
           {people.slice(0, 4).map((n) => (

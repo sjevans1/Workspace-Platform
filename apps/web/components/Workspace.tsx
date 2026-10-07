@@ -32,6 +32,7 @@ import {
   icon,
   date,
 } from "../lib/api";
+import { clearPrincipalWorkspaceDrafts } from "../lib/recovery-drafts";
 import { Modal, Empty, Spinner, Field } from "./common";
 import Resource from "./Resource";
 import NotificationInbox from "./NotificationInbox";
@@ -342,6 +343,9 @@ export default function Workspace() {
               aria-label="Sign out"
               onClick={() =>
                 run(async () => {
+                  // Explicit logout clears this principal's device-local
+                  // recovery material before the server session is revoked.
+                  clearPrincipalWorkspaceDrafts(me.user.id);
                   await api("/auth/logout", "POST", {});
                   await init();
                 })

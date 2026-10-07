@@ -221,6 +221,26 @@ jobs:
           NODE
       - name: Verify deployed browser workflow
         run: node scripts/test-deployment.mjs
+      - name: Verify Wave R fault-injection harness
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_WAVE_R_HARNESS: "1"
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Reuse the already-running production-like Compose stack. This
+          # dedicated test may restart only the collaboration service and must
+          # prove it reacquires health before continuing.
+          npx playwright test e2e/wave-r-harness.spec.ts
+      - name: Qualify W24-R collaboration capacity
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_W24_CAPACITY: "1"
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Measured CI-host evidence only: 1/5/10/25 simultaneous editors,
+          # real collaboration writer restart, reconnect latency, Docker
+          # CPU/RSS, PostgreSQL activity/locks and collab health.
+          npx playwright test e2e/wave-r-capacity.spec.ts
       - name: Verify application antivirus scan counters
         run: |
           token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"
@@ -256,16 +276,42 @@ jobs:
           # Chromium/Firefox and preceding deployed workflows share Caddy's
           # inbound IP in CI. Wait for real response-header budget recovery.
           # The API's production rate limiting remains enabled and unchanged.
+          remaining=""
           for attempt in $(seq 1 24); do
             headers="$(curl -sS -D - -o /dev/null http://localhost:8080/api/v1/auth/methods)"
             remaining="$(printf '%s\n' "$headers" | awk 'tolower($1)=="x-ratelimit-remaining:" { gsub("\r","",$2); print $2; exit }')"
             if [[ "$remaining" =~ ^[0-9]+$ ]] && [ "$remaining" -ge 240 ]; then
-              echo "Rate-limit budget available for isolated browser acceptance: $remaining"
-              exit 0
+              break
             fi
             sleep 5
           done
-          echo "Shared test rate-limit window did not recover" >&2
+          if ! { [[ "$remaining" =~ ^[0-9]+$ ]] && [ "$remaining" -ge 240 ]; }; then
+            echo "Shared test rate-limit window did not recover" >&2
+            exit 1
+          fi
+          echo "Rate-limit budget available for isolated browser acceptance: $remaining"
+          # The sign-in route keeps its own strict production budget
+          # (10 attempts / 5 minutes per network) which the shared IP exhausts
+          # during the preceding browser workflows. Wait for the server's own
+          # retry hint instead of weakening or bypassing that limiter.
+          for attempt in $(seq 1 12); do
+            code="$(curl -sS -o /tmp/login-probe.json -D /tmp/login-probe.headers -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' \
+              -d '{"email":"rate-limit-probe@example.test","password":"probe-not-a-real-credential"}' \
+              http://localhost:8080/api/v1/auth/login)"
+            if [ "$code" != "429" ]; then
+              echo "Sign-in rate-limit budget available (status $code)"
+              exit 0
+            fi
+            wait="$(awk 'tolower($1)=="retry-after:"{gsub("\r","",$2); print $2; exit}' /tmp/login-probe.headers)"
+            if ! [[ "$wait" =~ ^[0-9]+$ ]]; then
+              wait="$(sed -n 's/.*retry in \([0-9][0-9]*\) second.*/\1/p' /tmp/login-probe.json | head -1)"
+            fi
+            [[ "$wait" =~ ^[0-9]+$ ]] || wait=10
+            echo "Sign-in limited; waiting ${wait}s before retry $attempt"
+            sleep "$((wait + 2))"
+          done
+          echo "Sign-in rate-limit window did not recover" >&2
           exit 1
       - name: Verify keyboard accessibility in Chromium and Firefox
         run: |
@@ -339,6 +385,7 @@ jobs:
           path: |
             playwright-report
             test-results
+            capacity-results
             docs/screenshots
       - name: Deployment logs
         if: failure() && hashFiles('.env') != ''

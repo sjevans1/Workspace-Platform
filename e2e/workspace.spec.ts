@@ -1,6 +1,7 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 const email = "browser@example.test",
   password = "browser-password-123";
 // Subsequent sequential tests reuse the genuine authenticated session instead
@@ -3599,10 +3600,19 @@ test("W11b browser: anchored comment, orphan badge and preserved stale draft", a
   await expect(stale).toContainText("Selected block removed");
   await stale.getByRole("button",{name:"Switch to page comment"}).click();
   await stale.getByRole("button",{name:"Post comment"}).click();
-  await expect(stale).toContainText("Retain my unsent draft");
-  const final=(await (await page.request.get("/api/v1/resources/"+resource.id+"/comments")).json())
-    .find((c:any)=>c.body==="Retain my unsent draft");
-  expect(final?.block_id).toBeNull();
+  // Posting is asynchronous: the composer clears and the thread reloads only
+  // after the server acknowledges the comment. Wait for the posted page
+  // comment to render, then read the authoritative list so the assert cannot
+  // race the in-flight POST. The persisted row must carry an explicit null
+  // anchor: never the removed block id and never a missing key.
+  await expect(stale).toContainText("Page discussion");
+  await expect.poll(async ()=>{
+    const response=await page.request.get("/api/v1/resources/"+resource.id+"/comments");
+    if(!response.ok()) return "pending";
+    const list=await response.json();
+    const posted=list.find((c:any)=>c.body==="Retain my unsent draft");
+    return posted ? posted.block_id : "pending";
+  },{timeout:15000,intervals:[200,500,1000]}).toBeNull();
 });
 
 test("W11d browser: two principals reply, resolve and revoke thread access",async ({page,browser})=>{
@@ -3940,4 +3950,191 @@ test("W09b3 deployed browser stops after three throttled destination list attemp
   await expect(page.locator('.toast[role="alert"]')).toBeVisible({timeout:15000});
   expect(await destination.locator(`option[value="${database.id}"]`).count(),
     "the target really is unavailable, the failure is not hidden").toBe(0);
+});
+
+
+test("W19 two connected editors recover after repeated simultaneous network interruptions", async ({ page, browser }) => {
+  test.setTimeout(210000);
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: { kind: "space", parent_id: roots[0].id, title: "W19 reconnect " + randomUUID() },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const pageResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: { kind: "page", parent_id: space.id, title: "W19 reconnect convergence" },
+  });
+  expect(pageResponse.ok(), await pageResponse.text()).toBeTruthy();
+  const resource = await pageResponse.json();
+  const url = "/?page=" + resource.id;
+  await page.goto(url);
+  await expect(page.locator(".bn-editor")).toBeVisible();
+  const secondContext = await browser.newContext();
+  try {
+    const peer = await secondContext.newPage();
+    await login(peer, false);
+    await peer.goto(url);
+    await expect(peer.locator(".bn-editor")).toBeVisible();
+
+    const initial = "W19-canonical-" + randomUUID();
+    await page.locator(".bn-editor").click();
+    await page.keyboard.insertText(initial);
+    await expect.poll(async () => {
+      const response = await page.request.get("/api/v1/pages/" + resource.id + "/content");
+      if (!response.ok()) return "";
+      return (await response.json()).plain_text || "";
+    }, { timeout: 30000 }).toContain(initial);
+    await expect(peer.locator(".bn-editor")).toContainText(initial);
+
+    // Exercise actual browser network isolation, never a test-only server bypass.
+    // Both sockets must reconnect to the canonical persisted document.
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await Promise.all([page.context().setOffline(true), secondContext.setOffline(true)]);
+      await page.waitForTimeout(1000);
+      await Promise.all([page.context().setOffline(false), secondContext.setOffline(false)]);
+      await expect(page.locator(".bn-editor")).toContainText(initial, { timeout: 30000 });
+      await expect(peer.locator(".bn-editor")).toContainText(initial, { timeout: 30000 });
+    }
+
+    const subsequent = " W19-after-reconnect-" + randomUUID();
+    await peer.locator(".bn-editor").click();
+    await peer.keyboard.press("ControlOrMeta+End");
+    await peer.keyboard.insertText(subsequent);
+    await expect.poll(async () => {
+      const response = await page.request.get("/api/v1/pages/" + resource.id + "/content");
+      if (!response.ok()) return "";
+      return (await response.json()).plain_text || "";
+    }, { timeout: 30000 }).toContain(subsequent);
+    await expect(page.locator(".bn-editor")).toContainText(subsequent);
+    const canonical = await (await page.request.get("/api/v1/pages/" + resource.id + "/content")).json();
+    expect(canonical.plain_text.split(initial).length - 1).toBe(1);
+    expect(canonical.plain_text.split(subsequent).length - 1).toBe(1);
+  } finally {
+    await page.context().setOffline(false);
+    await secondContext.setOffline(false);
+    await secondContext.close();
+  }
+});
+
+
+test("W19 offline in-flight edit is discarded after access revocation before reconnect", async ({ page, browser }) => {
+  test.setTimeout(210000);
+  await login(page);
+  const owner = await (await page.request.get("/api/v1/me")).json();
+  const ownerHeaders = { "X-CSRF-Token": owner.csrf };
+
+  const invitation = await page.request.post("/api/v1/members/invite", {
+    headers: ownerHeaders,
+    data: { name: "Revocation Partner", email: "revoked-" + randomUUID() + "@example.test", role: "member" },
+  });
+  expect(invitation.ok(), await invitation.text()).toBeTruthy();
+
+  const partnerContext = await browser.newContext();
+  try {
+    const partner = await partnerContext.newPage();
+    await partner.goto((await invitation.json()).url);
+    await partner.getByLabel("Password", { exact: true }).fill("partner-test-password-123");
+    await partner.getByRole("button", { name: "Accept invitation", exact: true }).click();
+    await expect(partner.getByRole("heading", { name: "Welcome back, Revocation." })).toBeVisible();
+    const member = await (await partner.request.get("/api/v1/me")).json();
+
+    const roots = await (await page.request.get("/api/v1/resources")).json();
+    const spaceResponse = await page.request.post("/api/v1/resources", {
+      headers: ownerHeaders,
+      data: { kind: "space", parent_id: roots[0].id, title: "W19 revoke " + randomUUID() },
+    });
+    expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+    const space = await spaceResponse.json();
+    const created = await page.request.post("/api/v1/resources", {
+      headers: ownerHeaders,
+      data: { kind: "page", parent_id: space.id, title: "W19 offline revocation" },
+    });
+    expect(created.ok(), await created.text()).toBeTruthy();
+    const resource = await created.json();
+    const endpoint = "/api/v1/pages/" + resource.id + "/content";
+    const baseline = await (await page.request.get(endpoint)).json();
+    const seeded = await page.request.patch(endpoint, {
+      headers: ownerHeaders,
+      data: {
+        blocks: [{ id: randomUUID(), type: "paragraph", content: "Canonical before revocation" }],
+        expected_revision: baseline.revision,
+      },
+    });
+    expect(seeded.ok(), await seeded.text()).toBeTruthy();
+
+    // Grant the invited principal edit access while both sessions are online.
+    await page.goto("/?page=" + resource.id);
+    await page.getByRole("button", { name: "Page actions" }).click();
+    await page.getByRole("button", { name: "Manage access", exact: true }).click();
+    const access = page.getByRole("dialog", { name: "Manage access" });
+    await access.getByRole("button", { name: "Add person or integration" }).click();
+    await access.getByLabel("Principal", { exact: true }).selectOption(member.user.id);
+    await access.getByLabel("Access level", { exact: true }).selectOption("3");
+    await access.getByRole("button", { name: "Save access", exact: true }).click();
+    await expect(access).toBeHidden();
+
+    await partner.goto("/?page=" + resource.id);
+    const partnerEditor = partner.locator(".bn-editor");
+    await expect(partnerEditor).toContainText("Canonical before revocation");
+    await expect(partnerEditor).toHaveAttribute("contenteditable", "true");
+
+    // Stop the real collaboration writer so the established WebSocket is
+    // actually severed. Browser offline emulation does not reliably drop an
+    // already-open socket, so it cannot prove this authority transition.
+    const compose = (args: string[]) =>
+      execFileSync("docker", ["compose", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    compose(["stop", "collab"]);
+    await expect(partner.getByRole("status").filter({ hasText: "Offline" }))
+      .toBeVisible({ timeout: 20000 });
+
+    const forbidden = " OFFLINE_FORBIDDEN_" + randomUUID();
+    await partnerEditor.click();
+    await partner.keyboard.press("ControlOrMeta+End");
+    await partner.keyboard.insertText(forbidden);
+    await expect(partnerEditor).toContainText(forbidden);
+    await expect.poll(async () =>
+      partner.evaluate(() =>
+        Object.keys(localStorage).some((key) => key.startsWith("workspace-recovery:v1:"))
+      )
+    , { timeout: 10000 }).toBe(true);
+
+    // Revoke while the member cannot receive the live permission message.
+    await page.getByRole("button", { name: "Page actions" }).click();
+    await page.getByRole("button", { name: "Manage access", exact: true }).click();
+    await expect(access.getByLabel("Access level", { exact: true })).toHaveValue("3");
+    await access.getByRole("button", { name: "Remove grant" }).click();
+    await access.getByLabel("Inherit access from parent").uncheck();
+    await access.getByRole("button", { name: "Save access", exact: true }).click();
+    await expect(access).toBeHidden();
+
+    // Reconnect must fail closed: no replay, no retained local recovery material.
+    compose(["start", "collab"]);
+    await expect.poll(async () =>
+      partner.evaluate(() =>
+        Object.keys(localStorage).some((key) => key.startsWith("workspace-recovery:v1:"))
+      )
+    , { timeout: 30000 }).toBe(false);
+    await expect(partner.locator(".bn-editor")).toHaveCount(0, { timeout: 30000 });
+
+    const canonical = await (await page.request.get(endpoint)).json();
+    expect(canonical.plain_text).toContain("Canonical before revocation");
+    expect(canonical.plain_text).not.toContain(forbidden);
+    expect((await partner.request.get("/api/v1/resources/" + resource.id)).status()).toBe(404);
+  } finally {
+    try {
+      execFileSync("docker", ["compose", "start", "collab"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {}
+    await partnerContext.close();
+  }
 });
