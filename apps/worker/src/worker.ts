@@ -321,9 +321,13 @@ export async function tick(
           const source = await requireAccess(q, a, p.source_id);
           assert(source.id === j.resource_id, 400, "Archive export source changed");
           const archive = await exportPortableTree(q, a, source.id, storage);
-          const artifactId = randomUUID(),
+          const artifactId = j.id,
             key = `${tenant}/${source.id}/${artifactId}`,
             digest = createHash("sha256").update(archive).digest("hex");
+          // Async export uses the job ID as a stable object identity. A
+          // crashed attempt may have written this key without committing the
+          // surrounding DB transaction; delete that orphan before retrying.
+          await storage.delete(key).catch(() => {});
           await storage.put(key, archive, "application/zip");
           pendingOutputKey = key;
           await q.query(
@@ -369,6 +373,7 @@ export async function tick(
             archive,
             storage,
             suppliedAntivirus || createAntivirus(),
+            j.id,
           );
           importedObjectKeys = imported.stored_object_keys;
           const { stored_object_keys: _internalKeys, ...publicImportResult } =
