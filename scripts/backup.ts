@@ -154,6 +154,8 @@ export function compareBackups(
   rightText: string,
   env: NodeJS.ProcessEnv = process.env,
 ): BackupComparison {
+  verifyBackup(leftText, env);
+  verifyBackup(rightText, env);
   const left = decodeBackup(leftText, env),
     right = decodeBackup(rightText, env);
   if (JSON.stringify(left.versions) !== JSON.stringify(right.versions))
@@ -215,8 +217,12 @@ export function verifyBackup(
     );
   let rows = 0,
     objectBytes = 0;
-  for (const [table, entries] of Object.entries(archive.tables))
-    rows += Array.isArray(entries) ? entries.length : 0;
+  for (const table of tables) {
+    const entries = archive.tables[table];
+    if (!Array.isArray(entries))
+      throw new Error(`Backup is missing durable table: ${table}`);
+    rows += entries.length;
+  }
   for (const [key, entry] of Object.entries(archive.objects || {})) {
     if (!entry || typeof entry.data !== "string" || typeof entry.sha256 !== "string")
       throw new Error(`Backup object ${key} is malformed`);
@@ -225,6 +231,12 @@ export function verifyBackup(
       throw new Error(`Backup object ${key} failed its checksum`);
     objectBytes += bytes.length;
   }
+  for (const file of archive.tables.files)
+    if (!archive.objects[file.object_key])
+      throw new Error("Backup is missing a file object");
+  for (const artifact of archive.tables.job_artifacts)
+    if (!archive.objects[artifact.object_key])
+      throw new Error("Backup is missing a job artifact object");
   return {
     format: archive.format,
     created_at: archive.created_at,
