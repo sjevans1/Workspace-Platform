@@ -717,6 +717,24 @@ test("W19 history restore converges reconnecting clients and drafts stay room-sc
     });
     expect(seeded.ok(), await seeded.text()).toBeTruthy();
 
+    // replaceDocument records the PRE-replace document as the version
+    // snapshot (an undo point), so a second identical replacement is what
+    // captures the v1 content as the newest restorable version.
+    const seededAgain = await page.request.patch(targetEndpoint, {
+      headers,
+      data: {
+        blocks: [
+          {
+            id: crypto.randomUUID(),
+            type: "paragraph",
+            content: v1Token,
+          },
+        ],
+        expected_revision: (await seeded.json()).revision,
+      },
+    });
+    expect(seededAgain.ok(), await seededAgain.text()).toBeTruthy();
+
     await page.goto(targetUrl);
     const ownerEditor = page.locator(".bn-editor");
     await expect(ownerEditor).toBeVisible();
@@ -745,13 +763,21 @@ test("W19 history restore converges reconnecting clients and drafts stay room-sc
       .toContain(stampedV2.trim());
     await expect(peerEditor).toContainText(stampedV2.trim());
 
-    // The only recorded snapshot is the API-seeded v1 replacement.
+    // The recorded snapshot holding the v1 content is the pre-second-seed
+    // replacement; the older row holds the pre-seed initial document.
+    const secondRevision = (await seededAgain.json()).revision;
     const versions = await (
       await page.request.get("/api/v1/pages/" + target.id + "/versions")
     ).json();
-    const v1 = versions[0];
+    const v1 = versions.find(
+      (candidate: any) => candidate.revision === secondRevision - 1,
+    );
     expect(v1?.id).toBeTruthy();
-    expect(versions).toHaveLength(1);
+    expect(versions).toHaveLength(2);
+    const v1Snapshot = await (
+      await page.request.get("/api/v1/pages/" + target.id + "/versions/" + v1.id)
+    ).json();
+    expect(JSON.stringify(v1Snapshot.blocks)).toContain(v1Token);
 
     // Cut the writer, then bring it back and restore the older version while
     // both clients are still re-establishing their sockets.
