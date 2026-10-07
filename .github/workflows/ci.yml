@@ -231,6 +231,16 @@ jobs:
           # dedicated test may restart only the collaboration service and must
           # prove it reacquires health before continuing.
           npx playwright test e2e/wave-r-harness.spec.ts
+      - name: Qualify W24-R collaboration capacity
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_W24_CAPACITY: "1"
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Measured CI-host evidence only: 1/5/10/25 simultaneous editors,
+          # real collaboration writer restart, reconnect latency, Docker
+          # CPU/RSS, PostgreSQL activity/locks and collab health.
+          npx playwright test e2e/wave-r-capacity.spec.ts
       - name: Verify application antivirus scan counters
         run: |
           token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"
