@@ -650,6 +650,7 @@ test("W19 deleted page fails closed for an offline draft instead of resurrecting
 test("W19 history restore converges reconnecting clients and drafts stay room-scoped", async ({
   page,
   browser,
+  context,
 }) => {
   test.skip(
     process.env.E2E_WAVE_R_HARNESS !== "1",
@@ -838,7 +839,10 @@ test("W19 history restore converges reconnecting clients and drafts stay room-sc
     compose(["start", "collab"]);
     await waitForCollabHealth();
 
-    const unrelated = await peerContext.newPage();
+    // Recovery drafts are device-local, so the post-restart checks must run
+    // in the same browser context that wrote the draft; the peer context has
+    // its own isolated localStorage and would never surface the banner.
+    const unrelated = await context.newPage();
     await unrelated.goto("/?page=" + other.id);
     const unrelatedEditor = unrelated.locator(".bn-editor");
     await expect(unrelatedEditor).toBeVisible({ timeout: 30000 });
@@ -849,7 +853,7 @@ test("W19 history restore converges reconnecting clients and drafts stay room-sc
     ).toHaveCount(0);
     await expect(unrelatedEditor).not.toContainText(draftToken.trim());
 
-    const back = await peerContext.newPage();
+    const back = await context.newPage();
     await back.goto(targetUrl);
     await expect(
       back.getByText("Unsaved changes are available from this device.", {
