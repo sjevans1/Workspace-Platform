@@ -6,8 +6,8 @@ import {
   hkdfSync,
   randomBytes,
 } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStorage, type Storage } from "../packages/storage/index.ts";
 const tables = [
@@ -123,6 +123,91 @@ export type Archive = {
   tables: Record<string, any[]>;
   objects: Record<string, { sha256: string; mime: string; data: string }>;
 };
+
+export type BackupSummary = {
+  format: string;
+  created_at: string;
+  schema_versions: number;
+  newest_schema_version: string | null;
+  tables: number;
+  rows: number;
+  objects: number;
+  object_bytes: number;
+  key_fingerprint: string;
+};
+
+// Read-only integrity check used by operators and CI before trusting an
+// archive. It never touches the database or the object store, and it refuses
+// an archive that was produced with a different deployment key, because the
+// contained attachment bytes could not be decrypted after such a restore.
+export function verifyBackup(
+  text: string,
+  env: NodeJS.ProcessEnv = process.env,
+): BackupSummary {
+  const archive = decodeBackup(text, env);
+  if (!Array.isArray(archive.versions)) throw new Error("Backup has no schema versions");
+  if (!archive.tables || typeof archive.tables !== "object")
+    throw new Error("Backup has no table data");
+  const fingerprint = digest(env.ENCRYPTION_KEY || "");
+  if (archive.key_fingerprint !== fingerprint)
+    throw new Error(
+      "Backup was produced with a different ENCRYPTION_KEY; it cannot be restored by this deployment",
+    );
+  let rows = 0,
+    objectBytes = 0;
+  for (const [table, entries] of Object.entries(archive.tables))
+    rows += Array.isArray(entries) ? entries.length : 0;
+  for (const [key, entry] of Object.entries(archive.objects || {})) {
+    if (!entry || typeof entry.data !== "string" || typeof entry.sha256 !== "string")
+      throw new Error(`Backup object ${key} is malformed`);
+    const bytes = Buffer.from(entry.data, "base64");
+    if (digest(bytes) !== entry.sha256)
+      throw new Error(`Backup object ${key} failed its checksum`);
+    objectBytes += bytes.length;
+  }
+  return {
+    format: archive.format,
+    created_at: archive.created_at,
+    schema_versions: archive.versions.length,
+    newest_schema_version: archive.versions.length
+      ? archive.versions[archive.versions.length - 1]
+      : null,
+    tables: Object.keys(archive.tables).length,
+    rows,
+    objects: Object.keys(archive.objects || {}).length,
+    object_bytes: objectBytes,
+    key_fingerprint: archive.key_fingerprint,
+  };
+}
+
+// Bounded retention. Only files that verify as encrypted Workspace backups are
+// candidates for deletion, so an operator file or an unreadable archive is
+// reported and kept rather than silently removed.
+export async function rotateBackups(
+  directory: string,
+  keep: number,
+): Promise<{ kept: string[]; removed: string[]; skipped: string[] }> {
+  if (!Number.isSafeInteger(keep) || keep < 1)
+    throw new Error("Retention count must be a positive integer");
+  const verified: { name: string; created_at: string }[] = [],
+    skipped: string[] = [];
+  for (const name of (await readdir(directory)).filter((n) => n.endsWith(".json")).sort()) {
+    try {
+      verified.push({
+        name,
+        created_at: verifyBackup(await readFile(join(directory, name), "utf8")).created_at,
+      });
+    } catch {
+      skipped.push(name);
+    }
+  }
+  verified.sort(
+    (a, b) => b.created_at.localeCompare(a.created_at) || a.name.localeCompare(b.name),
+  );
+  const removed = verified.slice(keep).map((entry) => entry.name);
+  for (const name of removed) await rm(join(directory, name));
+  return { kept: verified.slice(0, keep).map((entry) => entry.name), removed, skipped };
+};
 export async function backup(url: string, storage: Storage): Promise<Archive> {
   const c = new pg.Client({ connectionString: url });
   await c.connect();
@@ -229,29 +314,52 @@ export async function restore(url: string, archive: Archive, storage: Storage) {
   }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (process.env.WORKSPACE_MAINTENANCE !== "true")
+  const [mode, target, ...rest] = process.argv.slice(2);
+  if (!target || !["backup", "restore", "verify", "rotate"].includes(mode))
     throw Error(
-      "Stop api, collab and worker, then set WORKSPACE_MAINTENANCE=true",
+      "Usage: backup.ts backup|restore|verify <archive.json>" +
+        " | backup.ts rotate <directory> --keep <count>",
     );
-  const [mode, path] = process.argv.slice(2);
-  if (!path || !["backup", "restore"].includes(mode))
-    throw Error("Usage: backup.ts backup|restore <archive.json>");
-  const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
-  if (!url) throw Error("Owner database URL required");
-  const storage = createStorage();
-  try {
-    if (mode === "backup") {
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, encodeBackup(await backup(url, storage)), {
-        mode: 0o600,
-        flag: "wx",
-      });
-      console.log(`Backup written: ${path}`);
-    } else {
-      await restore(url, decodeBackup(await readFile(path, "utf8")), storage);
-      console.log("Restore completed");
+  if (mode === "verify") {
+    // Read-only integrity check: no maintenance window and no database access.
+    const summary = verifyBackup(await readFile(target, "utf8"));
+    console.log(JSON.stringify(summary, null, 2));
+    console.log(`Backup verified: ${target}`);
+  } else if (mode === "rotate") {
+    const keepFlag = rest.indexOf("--keep");
+    const keep = Number(rest[keepFlag + 1]);
+    if (keepFlag < 0 || !Number.isSafeInteger(keep) || keep < 1)
+      throw Error("Usage: backup.ts rotate <directory> --keep <count>");
+    const result = await rotateBackups(target, keep);
+    console.log(
+      `Retained ${result.kept.length} encrypted backup(s), removed ` +
+        (result.removed.length ? result.removed.join(", ") : "none") +
+        (result.skipped.length
+          ? `, kept ${result.skipped.length} unverified file(s) untouched: ${result.skipped.join(", ")}`
+          : ""),
+    );
+  } else {
+    if (process.env.WORKSPACE_MAINTENANCE !== "true")
+      throw Error(
+        "Stop api, collab and worker, then set WORKSPACE_MAINTENANCE=true",
+      );
+    const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
+    if (!url) throw Error("Owner database URL required");
+    const storage = createStorage();
+    try {
+      if (mode === "backup") {
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, encodeBackup(await backup(url, storage)), {
+          mode: 0o600,
+          flag: "wx",
+        });
+        console.log(`Backup written: ${target}`);
+      } else {
+        await restore(url, decodeBackup(await readFile(target, "utf8")), storage);
+        console.log("Restore completed");
+      }
+    } finally {
+      storage.close?.();
     }
-  } finally {
-    storage.close?.();
   }
 }
