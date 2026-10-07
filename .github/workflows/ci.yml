@@ -45,6 +45,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Upload generated integration client
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: integration-client-generated
+          path: packages/integration-client/generated.ts
       - run: npm test
         timeout-minutes: 3
       - name: Verify CI event orchestrator
