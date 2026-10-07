@@ -120,7 +120,7 @@ export type IntegrationRoutes = {
     params: {  };
     query: {  };
     body: { "parent_id": string; "format": "markdown" | "csv"; "name": string; "content": string; "target_database_id"?: string; "expected_schema_digest"?: string; "existing_mode"?: "append"; "idempotency_key"?: string; "mapping"?: Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; };
-    response: { "id": string; "status": "pending" | "completed" | "failed"; };
+    response: { "id": string; "status": "pending" | "running" | "completed" | "failed" | "cancelled"; };
   };
   "GET /jobs/:id": {
     method: "GET";
@@ -128,7 +128,7 @@ export type IntegrationRoutes = {
     params: { "id": string; };
     query: {  };
     body: null;
-    response: { "id": string; "user_id": string; "resource_id": string; "status": "pending" | "completed" | "failed"; "result"?: unknown; };
+    response: { "id": string; "user_id": string; "resource_id": string; "status": "pending" | "running" | "completed" | "failed" | "cancelled"; "result"?: unknown; };
   };
 };
 

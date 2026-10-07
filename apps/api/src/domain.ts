@@ -39,6 +39,7 @@ export async function createResource(
     icon?: string;
     blocks?: any[];
     tasks?: boolean;
+    id?: string;
   },
 ) {
   await treeLock(q, a.tenant_id);
@@ -57,7 +58,7 @@ export async function createResource(
     assert(allowed[v.kind]?.includes(p.kind), 400, "Invalid parent");
     assert((await ancestry(q, p.id)).length < 32, 400, "Nesting limit reached");
   }
-  const id = randomUUID(),
+  const id = v.id || randomUUID(),
     blocks = v.blocks || [];
   await q.query(
     "INSERT INTO resources(id,tenant_id,parent_id,kind,title,icon,created_by,updated_by,search_text,position) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,(SELECT coalesce(max(position),0)+1 FROM resources WHERE parent_id IS NOT DISTINCT FROM $3::uuid))",
@@ -402,6 +403,7 @@ export async function createRecord(
   a: Actor,
   id: string,
   values: any,
+  resourceId?: string,
 ) {
   await requireAccess(q, a, id, 3);
   const d = await one(
@@ -417,6 +419,7 @@ export async function createRecord(
     kind: "record",
     parent_id: id,
     title: v[d.properties.find((p: Property) => p.type === "title").id],
+    id: resourceId,
   });
   await q.query(
     "INSERT INTO database_records(tenant_id,resource_id,database_id,values) VALUES($1,$2,$3,$4)",

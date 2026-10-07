@@ -264,10 +264,37 @@ export async function tick(
         }
       }
     });
+    const claimedJob = await db.tenant(tenant, async (q) => {
+      const candidate = await one(
+        q,
+        "SELECT id FROM jobs" +
+          " WHERE status='pending'" +
+          " OR (status='running' AND lease_expires_at<=now())" +
+          " ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED",
+      );
+      if (!candidate) return null;
+      const leaseToken = randomUUID();
+      return one(
+        q,
+        "UPDATE jobs SET status='running',lease_token=$2," +
+          " lease_expires_at=now()+interval '15 minutes'," +
+          " attempts=attempts+1,started_at=COALESCE(started_at,now())" +
+          " WHERE id=$1 RETURNING id,lease_token",
+        [candidate.id, leaseToken],
+      );
+    });
+    if (claimedJob)
     await db.tenant(tenant, async (q) => {
+      // Hold the claimed job row for the processing transaction. If this
+      // worker crashes, the transaction rolls back but the committed lease
+      // remains on the row; after expiry another worker can safely reclaim it.
+      // While this transaction is alive a competing worker uses SKIP LOCKED and
+      // cannot process the same job, even if the lease clock itself expires.
       const j = await one(
         q,
-        "SELECT * FROM jobs WHERE status='pending' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED",
+        "SELECT * FROM jobs WHERE id=$1 AND status='running'" +
+          " AND lease_token=$2 FOR UPDATE",
+        [claimedJob.id, claimedJob.lease_token],
       );
       if (!j) return;
       await q.query("SAVEPOINT import_job");
@@ -294,11 +321,15 @@ export async function tick(
           const source = await requireAccess(q, a, p.source_id);
           assert(source.id === j.resource_id, 400, "Archive export source changed");
           const archive = await exportPortableTree(q, a, source.id, storage);
-          const artifactId = randomUUID(),
+          const artifactId = j.id,
             key = `${tenant}/${source.id}/${artifactId}`,
             digest = createHash("sha256").update(archive).digest("hex");
-          await storage.put(key, archive, "application/zip");
+          // Async export uses the job ID as a stable object identity. A
+          // crashed attempt may have written this key without committing the
+          // surrounding DB transaction; delete that orphan before retrying.
+          await storage.delete(key).catch(() => {});
           pendingOutputKey = key;
+          await storage.put(key, archive, "application/zip");
           await q.query(
             "INSERT INTO job_artifacts(id,tenant_id,job_id,object_key,kind,name,mime,size,sha256,expires_at)" +
               " VALUES($1,$2,$3,$4,'output',$5,'application/zip',$6,$7,now()+interval '24 hours')",
@@ -342,6 +373,7 @@ export async function tick(
             archive,
             storage,
             suppliedAntivirus || createAntivirus(),
+            j.id,
           );
           importedObjectKeys = imported.stored_object_keys;
           const { stored_object_keys: _internalKeys, ...publicImportResult } =
@@ -410,8 +442,9 @@ export async function tick(
           jobResult = { resource_id: resource.id };
         }
         await q.query(
-          "UPDATE jobs SET status='completed',result=$2 WHERE id=$1",
-          [j.id, json(jobResult)],
+          "UPDATE jobs SET status='completed',result=$2,completed_at=now()," +
+            " lease_token=NULL,lease_expires_at=NULL WHERE id=$1 AND lease_token=$3",
+          [j.id, json(jobResult), claimedJob.lease_token],
         );
         pendingOutputKey = undefined;
         importedObjectKeys = [];
@@ -421,10 +454,15 @@ export async function tick(
           await storage.delete(pendingOutputKey).catch(() => {});
         for (const key of importedObjectKeys)
           await storage.delete(key).catch(() => {});
-        await q.query("UPDATE jobs SET status='failed',result=$2 WHERE id=$1", [
-          j.id,
-          json({ error: (e as Error).message.slice(0, 300) }),
-        ]);
+        await q.query(
+          "UPDATE jobs SET status='failed',result=$2,completed_at=now()," +
+            " lease_token=NULL,lease_expires_at=NULL WHERE id=$1 AND lease_token=$3",
+          [
+            j.id,
+            json({ error: (e as Error).message.slice(0, 300) }),
+            claimedJob.lease_token,
+          ],
+        );
       }
     });
   }

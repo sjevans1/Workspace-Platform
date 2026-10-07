@@ -3300,7 +3300,12 @@ function dataRoutes(
       admin(a);
       const jobs = await one(
           q,
-          "SELECT count(*) FILTER (WHERE status='pending')::int pending,count(*) FILTER (WHERE status='failed')::int failed,min(created_at) FILTER (WHERE status='pending') oldest_pending_at FROM jobs",
+          "SELECT count(*) FILTER (WHERE status='pending')::int pending," +
+            " count(*) FILTER (WHERE status='running')::int running," +
+            " count(*) FILTER (WHERE status='failed')::int failed," +
+            " count(*) FILTER (WHERE status='cancelled')::int cancelled," +
+            " min(created_at) FILTER (WHERE status='pending') oldest_pending_at" +
+            " FROM jobs",
         ),
         webhooks = await one(
           q,
@@ -4356,6 +4361,52 @@ function dataRoutes(
       return reply.send(bytes);
     },
   );
+  route(
+    "POST",
+    "/jobs/:id/cancel",
+    "Cancel a queued user-owned job",
+    async (q, a, r) => {
+      const jobId = id(r);
+      const j = await one(
+        q,
+        "SELECT id,user_id,resource_id,status FROM jobs WHERE id=$1",
+        [jobId],
+      );
+      assert(j && j.user_id === a.user_id, 404, "Job not found");
+      await requireAccess(q, a, j.resource_id);
+      assert(j.status === "pending", 409, "Only queued jobs can be cancelled");
+      const cancelled = await one(
+        q,
+        "UPDATE jobs SET status='cancelled',cancelled_at=now(),completed_at=now()," +
+          " lease_token=NULL,lease_expires_at=NULL" +
+          " WHERE id=$1 AND status='pending' RETURNING id",
+        [jobId],
+      );
+      assert(cancelled, 409, "Only queued jobs can be cancelled");
+      for (const artifact of (
+        await q.query(
+          "SELECT id,object_key FROM job_artifacts" +
+            " WHERE job_id=$1 AND kind='input' FOR UPDATE",
+          [jobId],
+        )
+      ).rows) {
+        await q.query(
+          "INSERT INTO object_deletions(id,tenant_id,object_key,reason)" +
+            " VALUES($1,$2,$3,'job_cancelled')" +
+            " ON CONFLICT(tenant_id,object_key) DO NOTHING",
+          [randomUUID(), a.tenant_id, artifact.object_key],
+        );
+        await q.query("DELETE FROM job_artifacts WHERE id=$1", [artifact.id]);
+      }
+      await q.query(
+        "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id,request_id)" +
+          " VALUES($1,$2,$3,'job.cancelled',$4,$5)",
+        [randomUUID(), a.tenant_id, a.user_id, j.resource_id, a.requestId || null],
+      );
+      return { id: jobId, status: "cancelled" };
+    },
+  );
+
   route(
     "GET",
     "/jobs/:id",

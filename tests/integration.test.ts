@@ -2,6 +2,8 @@ import { test, before, after } from "node:test";
 import { shutdownDiagnostics } from "./shutdown-diagnostics.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { createStorage } from "../packages/storage/index.ts";
+import { retryUuid } from "../apps/api/src/portable-import.ts";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
@@ -4239,6 +4241,244 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
       receiver.close((e) => (e ? reject(e) : resolve())),
     );
   }
+});
+
+test("W09 queued jobs cancel safely and expired running leases recover", async () => {
+  const cancelledTitle = "W09 cancelled " + randomUUID().slice(0, 8);
+  const queued = await ok("POST", "/imports", {
+    parent_id: space.id,
+    name: cancelledTitle,
+    format: "markdown",
+    content: "# Must not execute",
+  });
+  const cancelled = await ok("POST", `/jobs/${queued.id}/cancel`, {});
+  assert.deepEqual(cancelled, { id: queued.id, status: "cancelled" });
+  assert.equal((await ok("GET", `/jobs/${queued.id}`)).status, "cancelled");
+  await tick(db);
+  const cancelledRows = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT id FROM resources WHERE title=$1", [cancelledTitle]),
+  );
+  assert.equal(cancelledRows.rowCount, 0, "cancelled queued job must never execute");
+  assert.equal(
+    (await req("POST", `/jobs/${queued.id}/cancel`, {})).statusCode,
+    409,
+  );
+
+  const archiveSource = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W09 staged archive source " + randomUUID().slice(0, 8),
+  });
+  const exportedArchive = await req(
+    "GET",
+    `/resources/${archiveSource.id}/export/archive`,
+    undefined,
+    owner,
+  );
+  assert.equal(exportedArchive.statusCode, 200, exportedArchive.body);
+  const staged = await req(
+    "POST",
+    `/imports/archive?parent_id=${space.id}`,
+    exportedArchive.rawPayload,
+    owner,
+    { "content-type": "application/zip" },
+  );
+  assert.equal(staged.statusCode, 200, staged.body);
+  const stagedJob = staged.json();
+  const stagedArtifact = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT id,object_key FROM job_artifacts WHERE job_id=$1 AND kind='input'",
+      [stagedJob.id],
+    ),
+  );
+  assert.ok(stagedArtifact?.object_key);
+  await ok("POST", `/jobs/${stagedJob.id}/cancel`, {});
+  assert.equal(
+    await db.tenant(owner.tenant, async (q) =>
+      Number(
+        (
+          await one(q, "SELECT count(*) n FROM job_artifacts WHERE job_id=$1", [
+            stagedJob.id,
+          ])
+        ).n,
+      ),
+    ),
+    0,
+  );
+  const cancelledDeletion = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT status,reason FROM object_deletions WHERE object_key=$1",
+      [stagedArtifact.object_key],
+    ),
+  );
+  assert.deepEqual(
+    [cancelledDeletion.status, cancelledDeletion.reason],
+    ["pending", "job_cancelled"],
+  );
+
+  const recoveredTitle = "W09 recovered " + randomUUID().slice(0, 8);
+  const crashed = await ok("POST", "/imports", {
+    parent_id: space.id,
+    name: recoveredTitle,
+    format: "markdown",
+    content: "# Crash recovery",
+  });
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE jobs SET status='running',lease_token=$2," +
+        " lease_expires_at=now()-interval '1 second' WHERE id=$1",
+      [crashed.id, randomUUID()],
+    ),
+  );
+
+  // Running work is not interruptible through the user API. Once the crashed
+  // worker's lease expires, another worker may reclaim the same job.
+  assert.equal(
+    (await req("POST", `/jobs/${crashed.id}/cancel`, {})).statusCode,
+    409,
+  );
+  await tick(db);
+  const recovered = await ok("GET", `/jobs/${crashed.id}`);
+  assert.equal(recovered.status, "completed");
+  const lifecycle = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT status,attempts,lease_token,lease_expires_at,started_at,completed_at" +
+        " FROM jobs WHERE id=$1",
+      [crashed.id],
+    ),
+  );
+  assert.equal(lifecycle.status, "completed");
+  assert.equal(lifecycle.attempts, 1);
+  assert.equal(lifecycle.lease_token, null);
+  assert.equal(lifecycle.lease_expires_at, null);
+  assert.ok(lifecycle.started_at);
+  assert.ok(lifecycle.completed_at);
+  const recoveredRows = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT id FROM resources WHERE title=$1", [recoveredTitle]),
+  );
+  assert.equal(recoveredRows.rowCount, 1);
+
+  const exportSource = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W09 retry-stable export " + randomUUID().slice(0, 8),
+  });
+  const exportJob = await ok(
+    "POST",
+    `/resources/${exportSource.id}/export/archive/jobs`,
+    {},
+  );
+  const exportKey = `${owner.tenant}/${exportSource.id}/${exportJob.id}`;
+  const stored = new Map<string, Buffer>([
+    [exportKey, Buffer.from("orphaned-prior-attempt")],
+  ]);
+  const retryStorage = {
+    async put(key: string, bytes: Buffer) {
+      if (stored.has(key)) throw new Error("immutable object already exists");
+      stored.set(key, Buffer.from(bytes));
+    },
+    async get(key: string) {
+      const value = stored.get(key);
+      if (!value) throw new Error("missing test object");
+      return Buffer.from(value);
+    },
+    async delete(key: string) {
+      stored.delete(key);
+    },
+    async health() {},
+  };
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE jobs SET status='running',lease_token=$2," +
+        " lease_expires_at=now()-interval '1 second' WHERE id=$1",
+      [exportJob.id, randomUUID()],
+    ),
+  );
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await tick(db, retryStorage as any, fakeAntivirus);
+    const status = await db.tenant(owner.tenant, (q) =>
+      one(q, "SELECT status FROM jobs WHERE id=$1", [exportJob.id]),
+    );
+    if (status?.status === "completed") break;
+  }
+  const recoveredExport = await ok("GET", `/jobs/${exportJob.id}`);
+  assert.equal(recoveredExport.status, "completed");
+  const archiveBytes = stored.get(exportKey);
+  assert.ok(archiveBytes);
+  assert.equal(archiveBytes!.subarray(0, 2).toString(), "PK");
+  assert.notEqual(
+    archiveBytes!.toString(),
+    "orphaned-prior-attempt",
+    "recovered export must replace the orphan from the dead attempt",
+  );
+});
+
+test("W09 archive import recovery replaces retry-stable orphan objects", async () => {
+  const source = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W09 retry-stable import " + randomUUID().slice(0, 8),
+  });
+  const boundary = "w09-retry-boundary";
+  const fileBytes = Buffer.from("W09 retry-stable attachment bytes");
+  const multipart =
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="retry.txt"\r\n` +
+    "Content-Type: text/plain\r\n\r\n" +
+    fileBytes.toString() +
+    `\r\n--${boundary}--\r\n`;
+  const uploaded = await req(
+    "POST",
+    `/resources/${source.id}/files`,
+    multipart,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+  const sourceFileId = uploaded.json().id;
+
+  const exported = await req(
+    "GET",
+    `/resources/${source.id}/export/archive`,
+    undefined,
+    owner,
+  );
+  assert.equal(exported.statusCode, 200, exported.body);
+  const staged = await req(
+    "POST",
+    `/imports/archive?parent_id=${space.id}`,
+    exported.rawPayload,
+    owner,
+    { "content-type": "application/zip" },
+  );
+  assert.equal(staged.statusCode, 200, staged.body);
+  const job = staged.json();
+
+  const targetResourceId = retryUuid(job.id, "resource", source.id);
+  const targetFileId = retryUuid(job.id, "file", sourceFileId);
+  const orphanKey = `${owner.tenant}/${targetResourceId}/${targetFileId}`;
+  const storage = createStorage();
+  await storage.put(
+    orphanKey,
+    Buffer.from("orphaned-import-attempt"),
+    "text/plain",
+  );
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE jobs SET status='running',lease_token=$2," +
+        " lease_expires_at=now()-interval '1 second' WHERE id=$1",
+      [job.id, randomUUID()],
+    ),
+  );
+
+  await tick(db, storage, fakeAntivirus);
+  const recovered = await ok("GET", `/jobs/${job.id}`);
+  assert.equal(recovered.status, "completed");
+  assert.equal(recovered.result.report.files, 1);
+  assert.deepEqual(await storage.get(orphanKey), fileBytes);
+  storage.close?.();
 });
 
 test("imports run asynchronously and recheck current permissions", async () => {
