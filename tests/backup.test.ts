@@ -154,6 +154,10 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
           " VALUES($1,$2,$3,$4,'output','backup-result.txt','text/plain',$5,$6,now()+interval '1 day')",
         [jobArtifact, tenant, job, jobKey, jobBytes.length, jobSha],
       );
+      await q.query(
+        "INSERT INTO oidc_logout_events(issuer,jti,expires_at)" +
+          " VALUES('https://idp.example.test/','backup-logout-jti',now()+interval '1 hour')",
+      );
       const providerId = randomUUID();
       await q.query(
         "INSERT INTO webhook_subscriptions(id,tenant_id,url,events,secret_encrypted," +
@@ -321,6 +325,12 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
     );
     assert.equal(providers.rows.length, 1);
     assert.equal(providers.rows[0].enabled, false);
+    const logoutReplay = await db.system((q) =>
+      q.query(
+        "SELECT jti FROM oidc_logout_events WHERE issuer='https://idp.example.test/'",
+      ),
+    );
+    assert.equal(logoutReplay.rows[0].jti, "backup-logout-jti");
     assert.equal(
       openTenantOidcSecret(
         providers.rows[0].client_secret_encrypted,
