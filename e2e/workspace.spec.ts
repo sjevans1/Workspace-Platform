@@ -3600,10 +3600,19 @@ test("W11b browser: anchored comment, orphan badge and preserved stale draft", a
   await expect(stale).toContainText("Selected block removed");
   await stale.getByRole("button",{name:"Switch to page comment"}).click();
   await stale.getByRole("button",{name:"Post comment"}).click();
-  await expect(stale).toContainText("Retain my unsent draft");
-  const final=(await (await page.request.get("/api/v1/resources/"+resource.id+"/comments")).json())
-    .find((c:any)=>c.body==="Retain my unsent draft");
-  expect(final?.block_id).toBeNull();
+  // Posting is asynchronous: the composer clears and the thread reloads only
+  // after the server acknowledges the comment. Wait for the posted page
+  // comment to render, then read the authoritative list so the assert cannot
+  // race the in-flight POST. The persisted row must carry an explicit null
+  // anchor: never the removed block id and never a missing key.
+  await expect(stale).toContainText("Page discussion");
+  await expect.poll(async ()=>{
+    const response=await page.request.get("/api/v1/resources/"+resource.id+"/comments");
+    if(!response.ok()) return "pending";
+    const list=await response.json();
+    const posted=list.find((c:any)=>c.body==="Retain my unsent draft");
+    return posted ? posted.block_id : "pending";
+  },{timeout:15000,intervals:[200,500,1000]}).toBeNull();
 });
 
 test("W11d browser: two principals reply, resolve and revoke thread access",async ({page,browser})=>{
