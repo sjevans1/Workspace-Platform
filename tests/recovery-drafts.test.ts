@@ -4,6 +4,8 @@ import {
   WORKSPACE_DRAFT_MAX_BYTES,
   WORKSPACE_DRAFT_MAX_COUNT,
   WORKSPACE_DRAFT_TTL_MS,
+  WORKSPACE_DRAFT_PREFIX,
+  cleanupWorkspaceDrafts,
   clearPrincipalWorkspaceDrafts,
   clearWorkspaceDraft,
   loadWorkspaceDraft,
@@ -84,4 +86,32 @@ test("W18 recovery store clears exact and principal-scoped drafts", () => {
   clearPrincipalWorkspaceDrafts("user-a", store);
   assert.equal(loadWorkspaceDraft(identity("user-a", "tenant/b/epoch"), 1004, store), null);
   assert.ok(loadWorkspaceDraft(identity("user-b", "tenant/a/epoch"), 1004, store));
+});
+
+test("W18 maintenance drops malformed prefixed entries without touching unrelated storage", () => {
+  const store = new MemoryStore();
+  store.setItem(WORKSPACE_DRAFT_PREFIX + "user-a:broken", "{not-json");
+  store.setItem(WORKSPACE_DRAFT_PREFIX + "user-a:invalid", JSON.stringify({ version: 2 }));
+  store.setItem("other-application-key", "preserve");
+  saveWorkspaceDraft(identity("user-b", "tenant/page/epoch"), Uint8Array.of(9), 1000, store);
+  cleanupWorkspaceDrafts(1001, store);
+  assert.equal(store.getItem(WORKSPACE_DRAFT_PREFIX + "user-a:broken"), null);
+  assert.equal(store.getItem(WORKSPACE_DRAFT_PREFIX + "user-a:invalid"), null);
+  assert.equal(store.getItem("other-application-key"), "preserve");
+  assert.ok(loadWorkspaceDraft(identity("user-b", "tenant/page/epoch"), 1002, store));
+});
+
+test("W18 logout cleans malformed principal-bound entries without clearing other principals", () => {
+  const store = new MemoryStore();
+  const encodedA = encodeURIComponent("user:a");
+  const encodedB = encodeURIComponent("user:b");
+  store.setItem(WORKSPACE_DRAFT_PREFIX + encodedA + ":room1", "{bad");
+  store.setItem(WORKSPACE_DRAFT_PREFIX + encodedA + ":room2", JSON.stringify({ version: 99 }));
+  store.setItem(WORKSPACE_DRAFT_PREFIX + encodedB + ":room1", "{bad");
+  store.setItem("other-application-key", "preserve");
+  clearPrincipalWorkspaceDrafts("user:a", store);
+  assert.equal(store.getItem(WORKSPACE_DRAFT_PREFIX + encodedA + ":room1"), null);
+  assert.equal(store.getItem(WORKSPACE_DRAFT_PREFIX + encodedA + ":room2"), null);
+  assert.equal(store.getItem(WORKSPACE_DRAFT_PREFIX + encodedB + ":room1"), "{bad");
+  assert.equal(store.getItem("other-application-key"), "preserve");
 });
