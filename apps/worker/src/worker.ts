@@ -104,47 +104,94 @@ export async function tick(
           [e.id],
         );
       }
-      for (const d of (
+    });
+
+    // W20: claim a bounded lease in a short tenant transaction, perform the
+    // outbound HTTP request without holding DB row/transaction locks, then
+    // finalize only if this worker still owns the lease token. A crashed
+    // worker leaves a recoverable lease that becomes claimable after expiry.
+    for (let deliveryIndex = 0; deliveryIndex < 10; deliveryIndex++) {
+      const claimed = await db.tenant(tenant, async (q) => {
         await q.query(
-          "SELECT * FROM webhook_deliveries WHERE status IN ('pending','retry') AND next_at<=now() ORDER BY next_at LIMIT 10 FOR UPDATE SKIP LOCKED",
-        )
-      ).rows) {
+          "UPDATE webhook_deliveries AS d SET status='cancelled'," +
+            " lease_token=NULL,lease_expires_at=NULL" +
+            " FROM webhook_subscriptions AS s" +
+            " WHERE d.subscription_id=s.id AND d.tenant_id=$1" +
+            " AND d.status IN ('pending','retry') AND s.active=false",
+          [tenant],
+        );
+        const d = await one(
+          q,
+          "SELECT d.* FROM webhook_deliveries AS d" +
+            " JOIN webhook_subscriptions AS s ON s.id=d.subscription_id" +
+            " WHERE d.tenant_id=$1 AND s.active=true" +
+            " AND d.status IN ('pending','retry') AND d.next_at<=now()" +
+            " AND (d.lease_expires_at IS NULL OR d.lease_expires_at<=now())" +
+            " ORDER BY d.next_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED",
+          [tenant],
+        );
+        if (!d) return null;
         const s = await one(
           q,
-          // Retain a read lock through the send/commit. Secret activation waits
-          // for already-started delivery transactions to finish signing.
+          // Coordinate only the short claim transaction with secret activation.
+          // The lock is released before any network I/O begins.
           "SELECT * FROM webhook_subscriptions WHERE id=$1 FOR SHARE",
           [d.subscription_id],
         );
-        if (!s?.active) {
-          await q.query(
-            "UPDATE webhook_deliveries SET status='cancelled' WHERE id=$1",
-            [d.id],
-          );
-          continue;
-        }
+        if (!s?.active) return null;
         const e = await one(q, "SELECT * FROM event_outbox WHERE id=$1", [
           d.event_id,
         ]);
-        try {
-          await deliver(s.url, decrypt(s.secret_encrypted), e);
-          await q.query(
-            "UPDATE webhook_deliveries SET status='delivered',attempts=attempts+1,last_error=NULL WHERE id=$1",
-            [d.id],
-          );
-        } catch (err) {
-          await q.query(
-            "UPDATE webhook_deliveries SET status=$2,attempts=attempts+1,last_error=$3,next_at=now()+$4::interval WHERE id=$1",
-            [
-              d.id,
-              d.attempts >= 7 ? "dead" : "retry",
-              (err as Error).message.slice(0, 200),
-              `${Math.min(3600, 5 * 2 ** d.attempts)} seconds`,
-            ],
-          );
-        }
+        const leaseToken = randomUUID();
+        await q.query(
+          "UPDATE webhook_deliveries SET lease_token=$2," +
+            " lease_expires_at=now()+interval '30 seconds' WHERE id=$1",
+          [d.id, leaseToken],
+        );
+        return {
+          delivery: d,
+          subscription: s,
+          event: e,
+          leaseToken,
+        };
+      });
+      if (!claimed) break;
+
+      let deliveryError: Error | null = null;
+      try {
+        await deliver(
+          claimed.subscription.url,
+          decrypt(claimed.subscription.secret_encrypted),
+          claimed.event,
+        );
+      } catch (error) {
+        deliveryError = error as Error;
       }
-    });
+
+      await db.tenant(tenant, async (q) => {
+        if (!deliveryError) {
+          await q.query(
+            "UPDATE webhook_deliveries SET status='delivered'," +
+              " attempts=attempts+1,last_error=NULL,lease_token=NULL," +
+              " lease_expires_at=NULL WHERE id=$1 AND lease_token=$2",
+            [claimed.delivery.id, claimed.leaseToken],
+          );
+          return;
+        }
+        await q.query(
+          "UPDATE webhook_deliveries SET status=$3,attempts=attempts+1," +
+            " last_error=$4,next_at=now()+$5::interval,lease_token=NULL," +
+            " lease_expires_at=NULL WHERE id=$1 AND lease_token=$2",
+          [
+            claimed.delivery.id,
+            claimed.leaseToken,
+            claimed.delivery.attempts >= 7 ? "dead" : "retry",
+            deliveryError.message.slice(0, 200),
+            `${Math.min(3600, 5 * 2 ** claimed.delivery.attempts)} seconds`,
+          ],
+        );
+      });
+    }
     await db.tenant(tenant, async (q) => {
       const policy = await one(
         q,
