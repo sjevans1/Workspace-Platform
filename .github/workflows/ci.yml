@@ -350,6 +350,14 @@ jobs:
               health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
               if [ "$health" != "healthy" ]; then all_healthy=0; fi
             done
+            # `web` declares no healthcheck and starts after the API reports
+            # healthy, so it must be required to be running explicitly or the
+            # browser can be launched against a half-started front end.
+            web_id="$(docker compose ps -q web)"
+            if [ -z "$web_id" ] || \
+               [ "$(docker inspect --format '{{.State.Status}}' "$web_id")" != "running" ]; then
+              all_healthy=0
+            fi
             caddy_id="$(docker compose ps -q caddy)"
             if [ "$all_healthy" -eq 1 ] && [ -n "$caddy_id" ]; then break; fi
             sleep 2
@@ -374,6 +382,11 @@ jobs:
           certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n "OpenJM Workspace CI" -i /tmp/openjm-workspace-root.crt
           curl --fail --cacert /tmp/openjm-workspace-root.crt https://workspace.test/ready
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://workspace.test/ready)" = "308"
+          # Chromium aborts an in-flight navigation with ERR_NETWORK_CHANGED
+          # when the host's interfaces change mid-request. Docker keeps
+          # creating container interfaces for a moment after every service
+          # reports ready, so let that settle before launching a browser.
+          sleep 5
           NODE_EXTRA_CA_CERTS=/tmp/openjm-workspace-root.crt \
             E2E_BASE_URL=https://workspace.test \
             E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)" \
