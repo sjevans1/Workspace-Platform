@@ -4358,6 +4358,60 @@ test("W09 queued jobs cancel safely and expired running leases recover", async (
     q.query("SELECT id FROM resources WHERE title=$1", [recoveredTitle]),
   );
   assert.equal(recoveredRows.rowCount, 1);
+
+  const exportSource = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W09 retry-stable export " + randomUUID().slice(0, 8),
+  });
+  const exportJob = await ok(
+    "POST",
+    `/resources/${exportSource.id}/export/archive/jobs`,
+    {},
+  );
+  const exportKey = `${owner.tenant}/${exportSource.id}/${exportJob.id}`;
+  const stored = new Map<string, Buffer>([
+    [exportKey, Buffer.from("orphaned-prior-attempt")],
+  ]);
+  const retryStorage = {
+    async put(key: string, bytes: Buffer) {
+      if (stored.has(key)) throw new Error("immutable object already exists");
+      stored.set(key, Buffer.from(bytes));
+    },
+    async get(key: string) {
+      const value = stored.get(key);
+      if (!value) throw new Error("missing test object");
+      return Buffer.from(value);
+    },
+    async delete(key: string) {
+      stored.delete(key);
+    },
+    async health() {},
+  };
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE jobs SET status='running',lease_token=$2," +
+        " lease_expires_at=now()-interval '1 second' WHERE id=$1",
+      [exportJob.id, randomUUID()],
+    ),
+  );
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await tick(db, retryStorage as any, fakeAntivirus);
+    const status = await db.tenant(owner.tenant, (q) =>
+      one(q, "SELECT status FROM jobs WHERE id=$1", [exportJob.id]),
+    );
+    if (status?.status === "completed") break;
+  }
+  const recoveredExport = await ok("GET", `/jobs/${exportJob.id}`);
+  assert.equal(recoveredExport.status, "completed");
+  const archiveBytes = stored.get(exportKey);
+  assert.ok(archiveBytes);
+  assert.equal(archiveBytes!.subarray(0, 2).toString(), "PK");
+  assert.notEqual(
+    archiveBytes!.toString(),
+    "orphaned-prior-attempt",
+    "recovered export must replace the orphan from the dead attempt",
+  );
 });
 
 test("imports run asynchronously and recheck current permissions", async () => {
