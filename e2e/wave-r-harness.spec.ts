@@ -375,3 +375,149 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
       .filter((key) => key.startsWith("workspace-recovery:v1:")).length,
   )).toBe(0);
 });
+
+
+test("W19 writer lease remains single-owner and two live editors converge after restart", async ({
+  page,
+  browser,
+}) => {
+  test.skip(
+    process.env.E2E_WAVE_R_HARNESS !== "1",
+    "W19 writer restart acceptance runs only in the dedicated deployed Wave R step",
+  );
+  test.setTimeout(210000);
+
+  await login(page);
+  const meResponse = await page.request.get("/api/v1/me");
+  expect(meResponse.ok(), await meResponse.text()).toBeTruthy();
+  const me = await meResponse.json();
+  const headers = { "X-CSRF-Token": me.csrf };
+
+  // The supported architecture is intentionally single-writer. A second
+  // genuine collab process must fail to acquire the PostgreSQL advisory lease
+  // while the deployed writer is healthy; no test-only lock path is used.
+  let contenderRejected = false;
+  try {
+    compose(["run", "--rm", "--no-deps", "collab"]);
+  } catch (error: any) {
+    contenderRejected = true;
+    const stderr = String(error?.stderr || error?.message || "");
+    expect(stderr).toContain("Only one collaboration writer is supported");
+  }
+  expect(contenderRejected, "a competing collaboration writer must not start").toBe(true);
+  const beforeRestart = await waitForCollabHealth();
+  expect(beforeRestart.healthy).toBe(true);
+
+  const rootsResponse = await page.request.get("/api/v1/resources");
+  expect(rootsResponse.ok(), await rootsResponse.text()).toBeTruthy();
+  const roots = await rootsResponse.json();
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "space",
+      parent_id: roots[0].id,
+      title: "W19 writer restart " + Date.now(),
+    },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const resourceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "page",
+      parent_id: space.id,
+      title: "W19 two-editor restart convergence " + Date.now(),
+    },
+  });
+  expect(resourceResponse.ok(), await resourceResponse.text()).toBeTruthy();
+  const resource = await resourceResponse.json();
+  const url = "/?page=" + resource.id;
+  const contentUrl = "/api/v1/pages/" + resource.id + "/content";
+
+  await page.goto(url);
+  const firstEditor = page.locator(".bn-editor");
+  await expect(firstEditor).toBeVisible();
+  await firstEditor.click();
+  await page.keyboard.insertText("W19 writer baseline.");
+  await expect.poll(async () => {
+    const response = await page.request.get(contentUrl);
+    if (!response.ok()) return "";
+    return (await response.json()).plain_text || "";
+  }, { timeout: 30000 }).toContain("W19 writer baseline.");
+
+  const secondContext = await browser.newContext();
+  try {
+    const peer = await secondContext.newPage();
+    await login(peer);
+    await peer.goto(url);
+    const peerEditor = peer.locator(".bn-editor");
+    await expect(peerEditor).toContainText("W19 writer baseline.");
+
+    // Stop the real writer. Both established WebSockets must observe the
+    // transport loss before either local mutation is made.
+    compose(["stop", "collab"]);
+    await expect(page.getByRole("status").filter({ hasText: "Offline" }))
+      .toBeVisible({ timeout: 20000 });
+    await expect(peer.getByRole("status").filter({ hasText: "Offline" }))
+      .toBeVisible({ timeout: 20000 });
+
+    const firstToken = " FIRST_OFFLINE_" + Date.now();
+    const secondToken = " SECOND_OFFLINE_" + Date.now();
+    await firstEditor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.insertText(firstToken);
+    await peerEditor.click();
+    await peer.keyboard.press("ControlOrMeta+End");
+    await peer.keyboard.insertText(secondToken);
+
+    // Neither disconnected edit may be represented as canonical before the
+    // writer is available again.
+    const duringOutage = await page.request.get(contentUrl);
+    expect(duringOutage.ok(), await duringOutage.text()).toBeTruthy();
+    const outageText = (await duringOutage.json()).plain_text || "";
+    expect(outageText).not.toContain(firstToken.trim());
+    expect(outageText).not.toContain(secondToken.trim());
+
+    compose(["start", "collab"]);
+    const afterRestart = await waitForCollabHealth();
+    expect(afterRestart.healthy).toBe(true);
+
+    // Both providers must reconnect to the one lease-owning writer and merge
+    // their independent Yjs updates. Each token must appear exactly once in
+    // both views and in canonical persisted state.
+    for (const editor of [firstEditor, peerEditor]) {
+      await expect(editor).toContainText(firstToken.trim(), { timeout: 45000 });
+      await expect(editor).toContainText(secondToken.trim(), { timeout: 45000 });
+    }
+    await expect(page.getByRole("status").filter({ hasText: "Saved" }))
+      .toBeVisible({ timeout: 45000 });
+    await expect(peer.getByRole("status").filter({ hasText: "Saved" }))
+      .toBeVisible({ timeout: 45000 });
+
+    await expect.poll(async () => {
+      const response = await page.request.get(contentUrl);
+      if (!response.ok()) return "";
+      return (await response.json()).plain_text || "";
+    }, { timeout: 45000 }).toContain(firstToken.trim());
+
+    const canonical = await (await page.request.get(contentUrl)).json();
+    for (const token of [firstToken.trim(), secondToken.trim()])
+      expect(canonical.plain_text.split(token).length - 1).toBe(1);
+
+    // A fresh contender still cannot acquire the lease after recovery.
+    let postRestartContenderRejected = false;
+    try {
+      compose(["run", "--rm", "--no-deps", "collab"]);
+    } catch (error: any) {
+      postRestartContenderRejected = true;
+      const stderr = String(error?.stderr || error?.message || "");
+      expect(stderr).toContain("Only one collaboration writer is supported");
+    }
+    expect(postRestartContenderRejected).toBe(true);
+  } finally {
+    // Leave the shared deployed acceptance stack healthy for subsequent gates.
+    try { compose(["start", "collab"]); } catch {}
+    await waitForCollabHealth();
+    await secondContext.close();
+  }
+});
