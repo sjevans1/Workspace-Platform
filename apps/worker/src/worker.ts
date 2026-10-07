@@ -328,8 +328,8 @@ export async function tick(
           // crashed attempt may have written this key without committing the
           // surrounding DB transaction; delete that orphan before retrying.
           await storage.delete(key).catch(() => {});
-          await storage.put(key, archive, "application/zip");
           pendingOutputKey = key;
+          await storage.put(key, archive, "application/zip");
           await q.query(
             "INSERT INTO job_artifacts(id,tenant_id,job_id,object_key,kind,name,mime,size,sha256,expires_at)" +
               " VALUES($1,$2,$3,$4,'output',$5,'application/zip',$6,$7,now()+interval '24 hours')",
