@@ -220,15 +220,19 @@ test("W24-R measures 1/5/10/25 editor reconnect capacity on the CI host", async 
         reconnectLatencies.push(Date.now() - restartStarted);
       }));
 
+      // Every reconnecting editor's offline edit must land exactly once. The
+      // collaboration writer persists in debounced batches and the clients
+      // reconnect at different times, so waiting only for the final token can
+      // read a batch that still lacks the editors that reconnected last.
+      // Require every token, each exactly once, in a single canonical read.
       await expect.poll(async () => {
         const response = await page.request.get(contentUrl);
-        if (!response.ok()) return "";
-        return (await response.json()).plain_text || "";
-      }, { timeout: 90000 }).toContain(tokens[tokens.length - 1].trim());
-
-      const canonical = await (await page.request.get(contentUrl)).json();
-      for (const token of tokens)
-        expect(canonical.plain_text.split(token.trim()).length - 1).toBe(1);
+        if (!response.ok()) return [];
+        const plain = (await response.json()).plain_text || "";
+        return tokens.filter(
+          (token) => plain.split(token.trim()).length - 1 === 1,
+        );
+      }, { timeout: 90000 }).toHaveLength(tokens.length);
 
       const peakDocker = dockerStats();
       const peakDb = postgresStats();
