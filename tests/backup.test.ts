@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as Y from "yjs";
 import { testPostgres } from "../scripts/test-postgres.ts";
 import { migrate } from "../packages/database/migrate.ts";
@@ -44,6 +44,7 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
     root = randomUUID(),
     space = randomUUID(),
     page = randomUUID(),
+    linkedPage = randomUUID(),
     file = randomUUID(),
     imageFile = randomUUID(),
     user = randomUUID(),
@@ -51,8 +52,13 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
     webhook = randomUUID(),
     scimUser = randomUUID(),
     scimGroup = randomUUID(),
+    job = randomUUID(),
+    jobArtifact = randomUUID(),
     key = `${tenant}/${page}/${file}`,
-    imageKey = `${tenant}/${page}/${imageFile}`;
+    imageKey = `${tenant}/${page}/${imageFile}`,
+    jobKey = `${tenant}/${page}/${jobArtifact}`,
+    jobBytes = Buffer.from("Durable job artifact bytes"),
+    jobSha = createHash("sha256").update(jobBytes).digest("hex");
   // The native backup must retain both the Yjs document *and* the actual
   // private storage objects referenced by installed BlockNote Core blocks.
   const png = Buffer.from(
@@ -106,6 +112,10 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
         [page, tenant, space],
       );
       await q.query(
+        "INSERT INTO resources(id,tenant_id,parent_id,kind,title) VALUES($1,$2,$3,'page','Linked evidence')",
+        [linkedPage, tenant, space],
+      );
+      await q.query(
         "INSERT INTO page_documents(tenant_id,resource_id,y_state,blocks,plain_text) VALUES($1,$2,$3,$4,$5)",
         [tenant, page, state, JSON.stringify(original.blocks), original.plain_text],
       );
@@ -124,6 +134,25 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
       await q.query(
         "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'guest',true)",
         [tenant, user],
+      );
+      await q.query(
+        "INSERT INTO notification_preferences(tenant_id,user_id,mentions_enabled,replies_enabled)" +
+          " VALUES($1,$2,false,true)",
+        [tenant, user],
+      );
+      await q.query(
+        "INSERT INTO resource_links(tenant_id,source_id,target_id) VALUES($1,$2,$3)",
+        [tenant, page, linkedPage],
+      );
+      await q.query(
+        "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload,status)" +
+          " VALUES($1,$2,$3,$4,$5,'completed')",
+        [job, tenant, user, page, JSON.stringify({ format: "backup-test" })],
+      );
+      await q.query(
+        "INSERT INTO job_artifacts(id,tenant_id,job_id,object_key,kind,name,mime,size,sha256,expires_at)" +
+          " VALUES($1,$2,$3,$4,'output','backup-result.txt','text/plain',$5,$6,now()+interval '1 day')",
+        [jobArtifact, tenant, job, jobKey, jobBytes.length, jobSha],
       );
       const providerId = randomUUID();
       await q.query(
@@ -173,8 +202,12 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
     });
     await source.storage.put(key, Buffer.from("Private bytes"), "text/plain");
     await source.storage.put(imageKey, png, "image/png");
+    await source.storage.put(jobKey, jobBytes, "text/plain");
     const archive = await backup(pg.url, source.storage);
-    assert.deepEqual(Object.keys(archive.objects).sort(), [key, imageKey].sort());
+    assert.deepEqual(
+      Object.keys(archive.objects).sort(),
+      [key, imageKey, jobKey].sort(),
+    );
     assert.equal(archive.objects[imageKey].mime, "image/png");
     const encodedArchive = encodeBackup(archive);
     assert.match(encodedArchive, /openjm-backup-encrypted-v1/);
@@ -301,6 +334,41 @@ test("backup restores rich Yjs blocks, table and private media bytes atomically"
     assert.equal(directory.group.rows[0].display_name, "Backup Group");
     assert.equal(directory.mapping.rows[0].role, "member");
     assert.equal(directory.members.rows[0].scim_user_id, scimUser);
+    const restoredPreference = await db.tenant(tenant, (q) =>
+      q.query(
+        "SELECT mentions_enabled,replies_enabled FROM notification_preferences" +
+          " WHERE user_id=$1",
+        [user],
+      ),
+    );
+    assert.deepEqual(
+      [
+        restoredPreference.rows[0].mentions_enabled,
+        restoredPreference.rows[0].replies_enabled,
+      ],
+      [false, true],
+    );
+    const restoredLink = await db.tenant(tenant, (q) =>
+      q.query(
+        "SELECT source_id,target_id FROM resource_links WHERE source_id=$1",
+        [page],
+      ),
+    );
+    assert.deepEqual(
+      [restoredLink.rows[0].source_id, restoredLink.rows[0].target_id],
+      [page, linkedPage],
+    );
+    const restoredArtifact = await db.tenant(tenant, (q) =>
+      q.query(
+        "SELECT object_key,sha256 FROM job_artifacts WHERE id=$1",
+        [jobArtifact],
+      ),
+    );
+    assert.deepEqual(
+      [restoredArtifact.rows[0].object_key, restoredArtifact.rows[0].sha256],
+      [jobKey, jobSha],
+    );
+    assert.deepEqual(await target.storage.get(jobKey), jobBytes);
     assert.equal((await target.storage.get(key)).toString(), "Private bytes");
     assert.deepEqual(await target.storage.get(imageKey), png,
       "private linked image must be byte-for-byte restored");
