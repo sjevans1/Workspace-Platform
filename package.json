@@ -19,7 +19,7 @@
     "start:collab": "node --import tsx apps/collab/src/main.ts",
     "start:worker": "node --import tsx apps/worker/src/main.ts",
     "migrate": "node --import tsx packages/database/migrate.ts",
-    "typecheck": "tsc --noEmit && npm run typecheck -w apps/web",
+    "typecheck": "npm run generate:integration-client && tsc --noEmit && npm run typecheck -w apps/web",
     "build": "npm run build -w apps/web",
     "test": "node --import tsx --test --test-concurrency=1 --test-timeout=90000 tests/*.test.ts",
     "test:e2e": "playwright test",
@@ -28,7 +28,9 @@
     "accept:s3": "node --import tsx scripts/accept-production-s3.ts",
     "provision:tenant": "node --import tsx scripts/provision-tenant.ts",
     "migrate:storage-encryption": "node --import tsx scripts/migrate-storage-encryption.ts",
-    "test:ci-orchestrator": "node --test tools/ci-orchestrator/test/*.test.mjs"
+    "test:ci-orchestrator": "node --test tools/ci-orchestrator/test/*.test.mjs",
+    "generate:integration-client": "node --import tsx scripts/generate-integration-client.ts",
+    "check:integration-client": "node --import tsx scripts/generate-integration-client.ts --check"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1142.0",
