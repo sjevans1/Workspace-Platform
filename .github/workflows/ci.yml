@@ -221,6 +221,16 @@ jobs:
           NODE
       - name: Verify deployed browser workflow
         run: node scripts/test-deployment.mjs
+      - name: Verify Wave R fault-injection harness
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_WAVE_R_HARNESS: "1"
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Reuse the already-running production-like Compose stack. This
+          # dedicated test may restart only the collaboration service and must
+          # prove it reacquires health before continuing.
+          npx playwright test e2e/wave-r-harness.spec.ts
       - name: Verify application antivirus scan counters
         run: |
           token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"
