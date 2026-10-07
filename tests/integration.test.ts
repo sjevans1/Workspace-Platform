@@ -22,6 +22,10 @@ import { createSession, csrf, hash } from "../packages/auth/index.ts";
 import type { OidcProfile, OidcProvider } from "../packages/auth/oidc.ts";
 import { decrypt, signature } from "../packages/events/index.ts";
 import {
+  beginReconcileCursor,
+  encodeReconcileCursor,
+} from "../packages/events/reconcile-cursor.ts";
+import {
   AntivirusUnavailableError,
   type Antivirus,
   type AntivirusScanResult,
@@ -3634,6 +3638,290 @@ test("outbox dispatch signs webhooks and records retries without following redir
     redirectTarget.close();
   }
 });
+test("W20 webhook leases prevent double-claim and recover after expiry", async () => {
+  const seen: string[] = [];
+  let releaseResponse = () => {};
+  let firstArrived = () => {};
+  let hold = false;
+  const receiver = createServer(async (r, res) => {
+    const eventId = String(r.headers["x-workspace-event"] || "");
+    seen.push(eventId);
+    firstArrived();
+    if (hold)
+      await new Promise<void>((resolve) => {
+        releaseResponse = resolve;
+      });
+    res.end("ok");
+  });
+  await new Promise<void>((resolve) =>
+    receiver.listen(49664, "127.0.0.1", resolve),
+  );
+  process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49664";
+  try {
+    const subscription = await ok("POST", "/webhooks", {
+      url: "http://127.0.0.1:49664/w20",
+      events: ["page.lease_test"],
+    });
+    const eventId = randomUUID();
+    const deliveryId = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO event_outbox(id,tenant_id,actor_id,type,resource_id,version,dispatched_at)" +
+          " VALUES($1,$2,$3,'page.lease_test',$4,1,now())",
+        [eventId, owner.tenant, owner.id, page.id],
+      );
+      await q.query(
+        "INSERT INTO webhook_deliveries" +
+          "(id,tenant_id,subscription_id,event_id,lease_token,lease_expires_at)" +
+          " VALUES($1,$2,$3,$4,$5,now()+interval '30 seconds')",
+        [deliveryId, owner.tenant, subscription.id, eventId, randomUUID()],
+      );
+    });
+
+    // A live lease represents a worker that may still be performing the HTTP
+    // request. Another worker tick must not deliver the same event.
+    await tick(db);
+    assert.equal(seen.filter((id) => id === eventId).length, 0);
+
+    // Simulate the original worker dying: once the lease expires the delivery
+    // becomes claimable again.
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "UPDATE webhook_deliveries SET lease_expires_at=now()-interval '1 second'" +
+          " WHERE id=$1",
+        [deliveryId],
+      ),
+    );
+
+    hold = true;
+    const arrived = new Promise<void>((resolve) => {
+      firstArrived = resolve;
+    });
+    const firstWorker = tick(db);
+    await arrived;
+
+    // The first worker has committed its lease before beginning network I/O,
+    // so a second tick can run without blocking on that delivery and must not
+    // send a duplicate request.
+    const secondWorker = tick(db);
+    await pause(150);
+    assert.equal(seen.filter((id) => id === eventId).length, 1);
+
+    hold = false;
+    releaseResponse();
+    await Promise.all([firstWorker, secondWorker]);
+
+    const final = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT status,attempts,lease_token,lease_expires_at" +
+          " FROM webhook_deliveries WHERE id=$1",
+        [deliveryId],
+      ),
+    );
+    assert.equal(final.status, "delivered");
+    assert.equal(final.attempts, 1);
+    assert.equal(final.lease_token, null);
+    assert.equal(final.lease_expires_at, null);
+    assert.equal(seen.filter((id) => id === eventId).length, 1);
+  } finally {
+    receiver.close();
+  }
+});
+
+test("W20 unacknowledged delivery resumes after lease expiry and revocation cancels leases", async () => {
+  const seen: string[] = [];
+  const receiver = createServer(async (r, res) => {
+    seen.push(String(r.headers["x-workspace-event"] || ""));
+    res.end("ok");
+  });
+  await new Promise<void>((resolve) =>
+    receiver.listen(49712, "127.0.0.1", resolve),
+  );
+  process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49712";
+  try {
+    const subscription = await ok("POST", "/webhooks", {
+      url: "http://127.0.0.1:49712/w20b",
+      events: ["page.lease_crash"],
+    });
+    const eventId = randomUUID();
+    const deliveryId = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO event_outbox(id,tenant_id,actor_id,type,resource_id,version,dispatched_at)" +
+          " VALUES($1,$2,$3,'page.lease_crash',$4,1,now())",
+        [eventId, owner.tenant, owner.id, page.id],
+      );
+      await q.query(
+        "INSERT INTO webhook_deliveries(id,tenant_id,subscription_id,event_id)" +
+          " VALUES($1,$2,$3,$4)",
+        [deliveryId, owner.tenant, subscription.id, eventId],
+      );
+    });
+
+    // Model a worker that sent the request but died before acknowledging: the
+    // row is still retryable and carries a lease the dead worker never cleared.
+    // At-least-once is the documented contract, so the receiver must dedupe.
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "UPDATE webhook_deliveries SET status='retry',attempts=1," +
+          " lease_token=$2, lease_expires_at=now()+interval '25 seconds'" +
+          " WHERE id=$1",
+        [deliveryId, randomUUID()],
+      ),
+    );
+    await tick(db);
+    assert.equal(
+      seen.filter((id) => id === eventId).length,
+      0,
+      "An unexpired lease owned by another worker must not be reclaimed",
+    );
+
+    // Lease state stays tenant-scoped: another tenant's administrator cannot
+    // observe this delivery or its lease through the administrative surface.
+    const otherView = await ok("GET", "/webhooks", undefined, other);
+    assert.equal(JSON.stringify(otherView).includes(deliveryId), false);
+
+    // Once the lease expires the delivery is claimable again, is sent exactly
+    // once and finalizes with a clean lease and an incremented attempt count.
+    await db.tenant(owner.tenant, (q) =>
+      q.query(
+        "UPDATE webhook_deliveries SET lease_expires_at=now()-interval '1 second'" +
+          " WHERE id=$1",
+        [deliveryId],
+      ),
+    );
+    for (
+      let attempt = 0;
+      attempt < 5 && seen.filter((id) => id === eventId).length === 0;
+      attempt++
+    )
+      await tick(db);
+    assert.equal(
+      seen.filter((id) => id === eventId).length,
+      1,
+      "An expired lease must become claimable and deliver the event once",
+    );
+    const finalized = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT status,attempts,lease_token,lease_expires_at" +
+          " FROM webhook_deliveries WHERE id=$1",
+        [deliveryId],
+      ),
+    );
+    assert.equal(finalized.status, "delivered");
+    assert.equal(finalized.attempts, 2);
+    assert.equal(finalized.lease_token, null);
+    assert.equal(finalized.lease_expires_at, null);
+
+    // A revoked subscription must cancel pending leased deliveries and must
+    // never send them, even though the lease row still exists.
+    const revoked = await ok("POST", "/webhooks", {
+      url: "http://127.0.0.1:49712/w20c",
+      events: ["page.lease_revoked"],
+    });
+    const revokedEvent = randomUUID();
+    const revokedDelivery = randomUUID();
+    await db.tenant(owner.tenant, async (q) => {
+      await q.query(
+        "INSERT INTO event_outbox(id,tenant_id,actor_id,type,resource_id,version,dispatched_at)" +
+          " VALUES($1,$2,$3,'page.lease_revoked',$4,1,now())",
+        [revokedEvent, owner.tenant, owner.id, page.id],
+      );
+      await q.query(
+        "INSERT INTO webhook_deliveries(id,tenant_id,subscription_id,event_id," +
+          "status,lease_token,lease_expires_at)" +
+          " VALUES($1,$2,$3,$4,'pending',$5,now()+interval '30 seconds')",
+        [revokedDelivery, owner.tenant, revoked.id, revokedEvent, randomUUID()],
+      );
+      await q.query("UPDATE webhook_subscriptions SET active=false WHERE id=$1", [
+        revoked.id,
+      ]);
+    });
+    await tick(db);
+    assert.equal(seen.includes(revokedEvent), false);
+    const cancelled = await db.tenant(owner.tenant, (q) =>
+      one(
+        q,
+        "SELECT status,lease_token,lease_expires_at FROM webhook_deliveries" +
+          " WHERE id=$1",
+        [revokedDelivery],
+      ),
+    );
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.lease_token, null);
+    assert.equal(cancelled.lease_expires_at, null);
+  } finally {
+    receiver.close();
+  }
+});
+
+test("W20 secret activation fails closed while a crashed worker holds a live lease", async () => {
+  process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49713";
+  const subscription = await ok("POST", "/webhooks", {
+    url: "http://127.0.0.1:49713/w20d",
+    events: ["page.lease_activate"],
+  });
+  const endpoint = `/webhooks/${subscription.id}/secret-rotation`;
+  const prepared = await ok("POST", endpoint, { expected_revision: 1 });
+  assert.equal(prepared.signing_revision, 2);
+  assert.notEqual(prepared.secret, subscription.secret);
+  const eventId = randomUUID();
+  const deliveryId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO event_outbox(id,tenant_id,actor_id,type,resource_id,version,dispatched_at)" +
+        " VALUES($1,$2,$3,'page.lease_activate',$4,1,now())",
+      [eventId, owner.tenant, owner.id, page.id],
+    );
+    await q.query(
+      "INSERT INTO webhook_deliveries(id,tenant_id,subscription_id,event_id," +
+        "status,lease_token,lease_expires_at)" +
+        " VALUES($1,$2,$3,$4,'pending',$5,now()+interval '25 seconds')",
+      [deliveryId, owner.tenant, subscription.id, eventId, randomUUID()],
+    );
+  });
+
+  // A delivery that may still be signing with the old secret must not be
+  // superseded by activation. The bounded wait expires and fails closed.
+  const refused = await req("POST", endpoint + "/activate", {
+    expected_revision: 2,
+  });
+  assert.equal(refused.statusCode, 409, refused.body);
+  const unchanged = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT signing_revision,secret_encrypted,pending_secret_encrypted" +
+        " FROM webhook_subscriptions WHERE id=$1",
+      [subscription.id],
+    ),
+  );
+  assert.equal(unchanged.signing_revision, 2);
+  assert.notEqual(unchanged.pending_secret_encrypted, null);
+  assert.equal(decrypt(unchanged.secret_encrypted), subscription.secret);
+
+  // An expired lease permits progress instead of blocking rotation forever.
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE webhook_deliveries SET lease_expires_at=now()-interval '1 second'" +
+        " WHERE id=$1",
+      [deliveryId],
+    ),
+  );
+  await ok("POST", endpoint + "/activate", { expected_revision: 2 });
+  const rotated = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT signing_revision,pending_secret_encrypted" +
+        " FROM webhook_subscriptions WHERE id=$1",
+      [subscription.id],
+    ),
+  );
+  assert.equal(rotated.signing_revision, 3);
+  assert.equal(rotated.pending_secret_encrypted, null);
+});
+
 test("dead webhook deliveries can be replayed only by same-tenant administrators", async () => {
   process.env.WEBHOOK_ALLOWED_ORIGINS = "http://127.0.0.1:49661";
   const subscription = await ok("POST", "/webhooks", {
@@ -3850,7 +4138,9 @@ test("webhook signing rotation is staged, tenant-scoped, revision-checked and us
 
     if (!pg.emulated) {
       // Native CI also proves activation cannot race a delivery using the old
-      // secret: the worker's read lock lasts until its HTTP send commits.
+      // secret: the worker now holds a live delivery lease across its HTTP send
+      // instead of a subscription read lock, so activation waits for the
+      // in-flight delivery to finish before switching the effective secret.
       await db.tenant(owner.tenant, (q) =>
         q.query(
           "UPDATE webhook_deliveries SET status='pending'," +
@@ -4619,6 +4909,20 @@ test("reconciliation enumerates only currently accessible resources with encrypt
   assert.equal((await read("/events/reconcile?limit=101")).statusCode, 400);
   assert.equal(
     (await read("/events/reconcile?cursor=" + "x".repeat(2050))).statusCode,
+    400,
+  );
+  // A correctly authenticated but expired scan position is rejected rather than
+  // silently resuming a stale full-scan pass.
+  const expiredCursor = encodeReconcileCursor(
+    beginReconcileCursor(
+      owner.tenant,
+      reconcileUser,
+      Math.floor(Date.now() / 1000) - 7200,
+    ),
+  );
+  assert.equal(
+    (await read("/events/reconcile?cursor=" + encodeURIComponent(expiredCursor)))
+      .statusCode,
     400,
   );
   const noEventScope = await db.tenant(owner.tenant, (q) =>

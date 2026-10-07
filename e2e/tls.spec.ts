@@ -9,7 +9,20 @@ test.skip(
 );
 
 async function login(page: Page) {
-  const response = await page.goto("/");
+  // Chromium can abort a navigation with ERR_NETWORK_CHANGED when the host's
+  // interfaces change while the request is in flight, which is a real risk
+  // immediately after the deployment stack is restarted for this gate. Retry
+  // the navigation once, bounded, instead of failing on that transient.
+  let response: Awaited<ReturnType<Page["goto"]>> = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      response = await page.goto("/");
+      break;
+    } catch (error) {
+      if (attempt === 1) throw error;
+      await page.waitForTimeout(2000);
+    }
+  }
   expect(response?.ok()).toBeTruthy();
   expect(response?.headers()["strict-transport-security"]).toContain("max-age=31536000");
   expect(response?.headers()["referrer-policy"]).toBe("no-referrer");

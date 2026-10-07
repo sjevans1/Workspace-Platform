@@ -3952,6 +3952,34 @@ function dataRoutes(
           409,
           "Prepared webhook secret changed; reload before continuing",
         );
+        if (activate) {
+          // Preserve the accepted rotation contract without holding the
+          // worker's tenant transaction across network I/O. This activation
+          // transaction already owns the subscription row; new claims block
+          // on FOR SHARE, while an already-leased delivery may finalize
+          // independently because finalization touches only the delivery row.
+          // Wait through the normal 10s HTTP timeout, then fail closed if a
+          // crashed worker still owns an unexpired lease.
+          let leased;
+          for (let attempt = 0; attempt < 120; attempt++) {
+            leased = await one(
+              q,
+              "SELECT id FROM webhook_deliveries" +
+                " WHERE subscription_id=$1 AND tenant_id=$2" +
+                " AND status IN ('pending','retry')" +
+                " AND lease_token IS NOT NULL AND lease_expires_at>now()" +
+                " LIMIT 1",
+              [subscriptionId, a.tenant_id],
+            );
+            if (!leased) break;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          assert(
+            !leased,
+            409,
+            "Webhook delivery in progress; retry secret activation",
+          );
+        }
         const next = await one(
           q,
           "UPDATE webhook_subscriptions SET" +
@@ -3988,7 +4016,8 @@ function dataRoutes(
       const deliveryId = id(r);
       const resumed = await q.query(
         "UPDATE webhook_deliveries AS d" +
-          " SET status='pending',attempts=0,next_at=now(),last_error=NULL" +
+          " SET status='pending',attempts=0,next_at=now(),last_error=NULL," +
+            " lease_token=NULL,lease_expires_at=NULL" +
           " FROM webhook_subscriptions AS s" +
           " WHERE d.id=$1 AND d.tenant_id=$2" +
           " AND d.subscription_id=s.id AND s.tenant_id=$2" +
