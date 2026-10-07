@@ -310,9 +310,12 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
   ).toBe(0);
 
   // A later interrupted draft can be explicitly discarded and must never
-  // reach canonical state.
+  // reach canonical state. Browser offline emulation does not drop an
+  // established WebSocket, so the transport loss is injected host-side like
+  // the restore phase above; only a confirmed disconnect keeps the draft
+  // device-local.
   const discardToken = " W18-discard-" + Date.now();
-  await context.setOffline(true);
+  compose(["stop", "collab"]);
   await expect(recovered.getByRole("status").filter({ hasText: "Offline" }))
     .toBeVisible({ timeout: 20000 });
   await recovered.locator(".bn-editor").click();
@@ -325,7 +328,8 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
     ),
   ).toBeGreaterThan(0);
   await recovered.close();
-  await context.setOffline(false);
+  compose(["start", "collab"]);
+  await waitForCollabHealth();
 
   const discarded = await context.newPage();
   await discarded.goto(url);
@@ -343,9 +347,11 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
     .not.toContain(discardToken.trim());
 
   // Explicit logout removes any remaining recovery material for this
-  // principal even when the affected page is no longer open.
+  // principal even when the affected page is no longer open. The transport
+  // loss is injected host-side (browser offline emulation leaves an
+  // established WebSocket alive).
   const logoutToken = " W18-logout-" + Date.now();
-  await context.setOffline(true);
+  compose(["stop", "collab"]);
   await expect(discarded.getByRole("status").filter({ hasText: "Offline" }))
     .toBeVisible({ timeout: 20000 });
   await discarded.locator(".bn-editor").click();
@@ -358,7 +364,8 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
     ),
   ).toBeGreaterThan(0);
   await discarded.close();
-  await context.setOffline(false);
+  compose(["start", "collab"]);
+  await waitForCollabHealth();
 
   const logoutPage = await context.newPage();
   await logoutPage.goto("/");
