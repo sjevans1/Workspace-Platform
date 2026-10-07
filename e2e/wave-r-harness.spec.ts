@@ -4,16 +4,62 @@ import { execFileSync } from "node:child_process";
 const email = "browser@example.test";
 const password = "browser-password-123";
 
+// This dedicated suite runs after the normal browser regression against the
+// same deployed Caddy/IP limiter. Replenish the real window rather than
+// disabling rate limits or misclassifying an HTTP 429 as authentication loss.
+test.beforeEach(async ({ request }) => {
+  test.setTimeout(240000);
+  for (let attempt = 0; attempt < 26; attempt++) {
+    const response = await request.get("/api/v1/auth/methods");
+    const raw = response.headers()["x-ratelimit-remaining"];
+    const remaining = raw === undefined ? NaN : Number(raw);
+    if (response.ok() && Number.isFinite(remaining) && remaining >= 160)
+      return;
+    if (attempt === 25)
+      throw new Error(
+        `Wave R shared IP rate budget did not replenish: status=${response.status()} remaining=${raw ?? "missing"}`,
+      );
+    const hint = Number(response.headers()["retry-after"]);
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Number.isFinite(hint) && hint >= 0
+        ? Math.min(60000, (hint + 1) * 1000)
+        : 5000),
+    );
+  }
+});
+
 async function login(page: import("@playwright/test").Page) {
   await page.goto("/");
-  if (await page.getByRole("button", { name: "Sign in", exact: true }).isVisible()) {
+  const heading = page.getByRole("heading", { name: "Welcome back, Shane." });
+  const signIn = page.getByRole("button", { name: "Sign in", exact: true });
+  const retry = page.getByRole("button", { name: "Retry loading workspace" });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await expect.poll(async () =>
+      (await heading.isVisible()) ||
+      (await signIn.isVisible()) ||
+      (await retry.isVisible()),
+    ).toBe(true);
+
+    if (await heading.isVisible()) return;
+    if (await retry.isVisible()) {
+      const notice = await page.getByRole("alert")
+        .filter({ hasText: "Workspace connection interrupted" }).innerText();
+      const match = notice.match(/retry after (\\d+) seconds?/i);
+      const delay = match ? Number(match[1]) : 60;
+      expect(delay).toBeGreaterThanOrEqual(0);
+      expect(delay).toBeLessThanOrEqual(60);
+      await page.waitForTimeout((delay + 2) * 1000);
+      await retry.click();
+      continue;
+    }
     await page.getByLabel("Email", { exact: true }).fill(email);
     await page.getByLabel("Password", { exact: true }).fill(password);
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await signIn.click();
+    await expect(heading).toBeVisible();
+    return;
   }
-  await expect(
-    page.getByRole("heading", { name: "Welcome back, Shane." }),
-  ).toBeVisible();
+  throw new Error("Wave R login did not recover from shared deployment rate limit");
 }
 
 function compose(args: string[]) {
