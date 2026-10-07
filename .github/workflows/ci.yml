@@ -385,6 +385,7 @@ jobs:
           path: |
             playwright-report
             test-results
+            capacity-results
             docs/screenshots
       - name: Deployment logs
         if: failure() && hashFiles('.env') != ''
