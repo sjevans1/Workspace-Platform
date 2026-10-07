@@ -3656,14 +3656,14 @@ test("W20 webhook leases prevent double-claim and recover after expiry", async (
   try {
     const subscription = await ok("POST", "/webhooks", {
       url: "http://127.0.0.1:49664/w20",
-      events: ["page.w20_lease_test"],
+      events: ["page.lease_test"],
     });
     const eventId = randomUUID();
     const deliveryId = randomUUID();
     await db.tenant(owner.tenant, async (q) => {
       await q.query(
         "INSERT INTO event_outbox(id,tenant_id,actor_id,type,resource_id,version,dispatched_at)" +
-          " VALUES($1,$2,$3,'page.w20_lease_test',$4,1,now())",
+          " VALUES($1,$2,$3,'page.lease_test',$4,1,now())",
         [eventId, owner.tenant, owner.id, page.id],
       );
       await q.query(
