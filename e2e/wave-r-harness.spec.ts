@@ -256,6 +256,10 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
 
   const restoreToken = " W18-restore-" + Date.now();
   await context.setOffline(true);
+  // Offline HTTP does not, by itself, prove an established WebSocket died.
+  // Wait for the collaboration provider to acknowledge transport loss first.
+  await expect(page.getByRole("status").filter({ hasText: "Offline" }))
+    .toBeVisible({ timeout: 20000 });
   await editor.click();
   await page.keyboard.press("ControlOrMeta+End");
   await page.keyboard.insertText(restoreToken);
@@ -306,6 +310,8 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
   // reach canonical state.
   const discardToken = " W18-discard-" + Date.now();
   await context.setOffline(true);
+  await expect(recovered.getByRole("status").filter({ hasText: "Offline" }))
+    .toBeVisible({ timeout: 20000 });
   await recovered.locator(".bn-editor").click();
   await recovered.keyboard.press("ControlOrMeta+End");
   await recovered.keyboard.insertText(discardToken);
@@ -337,6 +343,8 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
   // principal even when the affected page is no longer open.
   const logoutToken = " W18-logout-" + Date.now();
   await context.setOffline(true);
+  await expect(discarded.getByRole("status").filter({ hasText: "Offline" }))
+    .toBeVisible({ timeout: 20000 });
   await discarded.locator(".bn-editor").click();
   await discarded.keyboard.press("ControlOrMeta+End");
   await discarded.keyboard.insertText(logoutToken);
