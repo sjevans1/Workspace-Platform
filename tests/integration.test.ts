@@ -2,6 +2,8 @@ import { test, before, after } from "node:test";
 import { shutdownDiagnostics } from "./shutdown-diagnostics.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { createStorage } from "../packages/storage/index.ts";
+import { retryUuid } from "../apps/api/src/portable-import.ts";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
@@ -4412,6 +4414,71 @@ test("W09 queued jobs cancel safely and expired running leases recover", async (
     "orphaned-prior-attempt",
     "recovered export must replace the orphan from the dead attempt",
   );
+});
+
+test("W09 archive import recovery replaces retry-stable orphan objects", async () => {
+  const source = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: space.id,
+    title: "W09 retry-stable import " + randomUUID().slice(0, 8),
+  });
+  const boundary = "w09-retry-boundary";
+  const fileBytes = Buffer.from("W09 retry-stable attachment bytes");
+  const multipart =
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="retry.txt"\r\n` +
+    "Content-Type: text/plain\r\n\r\n" +
+    fileBytes.toString() +
+    `\r\n--${boundary}--\r\n`;
+  const uploaded = await req(
+    "POST",
+    `/resources/${source.id}/files`,
+    multipart,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+  const sourceFileId = uploaded.json().id;
+
+  const exported = await req(
+    "GET",
+    `/resources/${source.id}/export/archive`,
+    undefined,
+    owner,
+  );
+  assert.equal(exported.statusCode, 200, exported.body);
+  const staged = await req(
+    "POST",
+    `/imports/archive?parent_id=${space.id}`,
+    exported.rawPayload,
+    owner,
+    { "content-type": "application/zip" },
+  );
+  assert.equal(staged.statusCode, 200, staged.body);
+  const job = staged.json();
+
+  const targetResourceId = retryUuid(job.id, "resource", source.id);
+  const targetFileId = retryUuid(job.id, "file", sourceFileId);
+  const orphanKey = `${owner.tenant}/${targetResourceId}/${targetFileId}`;
+  const storage = createStorage();
+  await storage.put(
+    orphanKey,
+    Buffer.from("orphaned-import-attempt"),
+    "text/plain",
+  );
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE jobs SET status='running',lease_token=$2," +
+        " lease_expires_at=now()-interval '1 second' WHERE id=$1",
+      [job.id, randomUUID()],
+    ),
+  );
+
+  await tick(db, storage, fakeAntivirus);
+  const recovered = await ok("GET", `/jobs/${job.id}`);
+  assert.equal(recovered.status, "completed");
+  assert.equal(recovered.result.report.files, 1);
+  assert.deepEqual(await storage.get(orphanKey), fileBytes);
+  storage.close?.();
 });
 
 test("imports run asynchronously and recheck current permissions", async () => {
