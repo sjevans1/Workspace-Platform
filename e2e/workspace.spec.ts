@@ -4010,3 +4010,107 @@ test("W19 two connected editors recover after repeated simultaneous network inte
     await secondContext.close();
   }
 });
+
+
+test("W19 offline in-flight edit is discarded after access revocation before reconnect", async ({ page, browser }) => {
+  test.setTimeout(210000);
+  await login(page);
+  const owner = await (await page.request.get("/api/v1/me")).json();
+  const ownerHeaders = { "X-CSRF-Token": owner.csrf };
+
+  const invitation = await page.request.post("/api/v1/members/invite", {
+    headers: ownerHeaders,
+    data: { name: "Revocation Partner", email: "revoked-" + randomUUID() + "@example.test", role: "member" },
+  });
+  expect(invitation.ok(), await invitation.text()).toBeTruthy();
+
+  const partnerContext = await browser.newContext();
+  try {
+    const partner = await partnerContext.newPage();
+    await partner.goto((await invitation.json()).url);
+    await partner.getByLabel("Password", { exact: true }).fill("partner-test-password-123");
+    await partner.getByRole("button", { name: "Accept invitation", exact: true }).click();
+    await expect(partner.getByRole("heading", { name: "Welcome back, Revocation." })).toBeVisible();
+    const member = await (await partner.request.get("/api/v1/me")).json();
+
+    const roots = await (await page.request.get("/api/v1/resources")).json();
+    const spaceResponse = await page.request.post("/api/v1/resources", {
+      headers: ownerHeaders,
+      data: { kind: "space", parent_id: roots[0].id, title: "W19 revoke " + randomUUID() },
+    });
+    expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+    const space = await spaceResponse.json();
+    const created = await page.request.post("/api/v1/resources", {
+      headers: ownerHeaders,
+      data: { kind: "page", parent_id: space.id, title: "W19 offline revocation" },
+    });
+    expect(created.ok(), await created.text()).toBeTruthy();
+    const resource = await created.json();
+    const endpoint = "/api/v1/pages/" + resource.id + "/content";
+    const baseline = await (await page.request.get(endpoint)).json();
+    const seeded = await page.request.patch(endpoint, {
+      headers: ownerHeaders,
+      data: {
+        blocks: [{ id: randomUUID(), type: "paragraph", content: "Canonical before revocation" }],
+        expected_revision: baseline.revision,
+      },
+    });
+    expect(seeded.ok(), await seeded.text()).toBeTruthy();
+
+    // Grant the invited principal edit access while both sessions are online.
+    await page.goto("/?page=" + resource.id);
+    await page.getByRole("button", { name: "Page actions" }).click();
+    await page.getByRole("button", { name: "Manage access", exact: true }).click();
+    const access = page.getByRole("dialog", { name: "Manage access" });
+    await access.getByRole("button", { name: "Add person or integration" }).click();
+    await access.getByLabel("Principal", { exact: true }).selectOption(member.user.id);
+    await access.getByLabel("Access level", { exact: true }).selectOption("3");
+    await access.getByRole("button", { name: "Save access", exact: true }).click();
+    await expect(access).toBeHidden();
+
+    await partner.goto("/?page=" + resource.id);
+    const partnerEditor = partner.locator(".bn-editor");
+    await expect(partnerEditor).toContainText("Canonical before revocation");
+    await expect(partnerEditor).toHaveAttribute("contenteditable", "true");
+
+    // Create an unacknowledged local edit under real browser offline mode.
+    await partnerContext.setOffline(true);
+    const forbidden = " OFFLINE_FORBIDDEN_" + randomUUID();
+    await partnerEditor.click();
+    await partner.keyboard.press("ControlOrMeta+End");
+    await partner.keyboard.insertText(forbidden);
+    await expect(partnerEditor).toContainText(forbidden);
+    await expect(partner.getByRole("status")).toContainText(/Offline/);
+    await expect.poll(async () =>
+      partner.evaluate(() =>
+        Object.keys(localStorage).some((key) => key.startsWith("workspace-recovery:v1:"))
+      )
+    , { timeout: 10000 }).toBe(true);
+
+    // Revoke while the member cannot receive the live permission message.
+    await page.getByRole("button", { name: "Page actions" }).click();
+    await page.getByRole("button", { name: "Manage access", exact: true }).click();
+    await expect(access.getByLabel("Access level", { exact: true })).toHaveValue("3");
+    await access.getByRole("button", { name: "Remove grant" }).click();
+    await access.getByLabel("Inherit access from parent").uncheck();
+    await access.getByRole("button", { name: "Save access", exact: true }).click();
+    await expect(access).toBeHidden();
+
+    // Reconnect must fail closed: no replay, no retained local recovery material.
+    await partnerContext.setOffline(false);
+    await expect.poll(async () =>
+      partner.evaluate(() =>
+        Object.keys(localStorage).some((key) => key.startsWith("workspace-recovery:v1:"))
+      )
+    , { timeout: 30000 }).toBe(false);
+    await expect(partner.locator(".bn-editor")).toHaveCount(0, { timeout: 30000 });
+
+    const canonical = await (await page.request.get(endpoint)).json();
+    expect(canonical.plain_text).toContain("Canonical before revocation");
+    expect(canonical.plain_text).not.toContain(forbidden);
+    expect((await partner.request.get("/api/v1/resources/" + resource.id)).status()).toBe(404);
+  } finally {
+    await partnerContext.setOffline(false);
+    await partnerContext.close();
+  }
+});
