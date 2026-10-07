@@ -255,9 +255,11 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
     .toBeVisible();
 
   const restoreToken = " W18-restore-" + Date.now();
-  await context.setOffline(true);
-  // Offline HTTP does not, by itself, prove an established WebSocket died.
-  // Wait for the collaboration provider to acknowledge transport loss first.
+  // Browser offline emulation does not drop an established WebSocket, so the
+  // transport loss is injected host-side: stopping the collaboration service
+  // closes the real socket. Wait for the provider to acknowledge the loss
+  // before the offline write, so the draft stays device-local.
+  compose(["stop", "collab"]);
   await expect(page.getByRole("status").filter({ hasText: "Offline" }))
     .toBeVisible({ timeout: 20000 });
   await editor.click();
@@ -276,7 +278,8 @@ test("W18 recovers only explicit device-local unacknowledged drafts", async ({
 
   // Simulate loss of the renderer/tab before the provider can reconnect.
   await page.close();
-  await context.setOffline(false);
+  compose(["start", "collab"]);
+  await waitForCollabHealth();
 
   const recovered = await context.newPage();
   await recovered.goto(url);
