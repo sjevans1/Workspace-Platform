@@ -19,7 +19,7 @@
     "start:collab": "node --import tsx apps/collab/src/main.ts",
     "start:worker": "node --import tsx apps/worker/src/main.ts",
     "migrate": "node --import tsx packages/database/migrate.ts",
-    "typecheck": "npm run generate:integration-client && tsc --noEmit && npm run typecheck -w apps/web",
+    "typecheck": "npm run check:integration-client && tsc --noEmit && npm run typecheck -w apps/web",
     "build": "npm run build -w apps/web",
     "test": "node --import tsx --test --test-concurrency=1 --test-timeout=90000 tests/*.test.ts",
     "test:e2e": "playwright test",
