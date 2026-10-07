@@ -4369,12 +4369,20 @@ function dataRoutes(
       const jobId = id(r);
       const j = await one(
         q,
-        "SELECT id,user_id,resource_id,status FROM jobs WHERE id=$1 FOR UPDATE",
+        "SELECT id,user_id,resource_id,status FROM jobs WHERE id=$1",
         [jobId],
       );
       assert(j && j.user_id === a.user_id, 404, "Job not found");
       await requireAccess(q, a, j.resource_id);
       assert(j.status === "pending", 409, "Only queued jobs can be cancelled");
+      const cancelled = await one(
+        q,
+        "UPDATE jobs SET status='cancelled',cancelled_at=now(),completed_at=now()," +
+          " lease_token=NULL,lease_expires_at=NULL" +
+          " WHERE id=$1 AND status='pending' RETURNING id",
+        [jobId],
+      );
+      assert(cancelled, 409, "Only queued jobs can be cancelled");
       for (const artifact of (
         await q.query(
           "SELECT id,object_key FROM job_artifacts" +
@@ -4390,11 +4398,6 @@ function dataRoutes(
         );
         await q.query("DELETE FROM job_artifacts WHERE id=$1", [artifact.id]);
       }
-      await q.query(
-        "UPDATE jobs SET status='cancelled',cancelled_at=now(),completed_at=now()," +
-          " lease_token=NULL,lease_expires_at=NULL WHERE id=$1",
-        [jobId],
-      );
       await q.query(
         "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id,request_id)" +
           " VALUES($1,$2,$3,'job.cancelled',$4,$5)",
