@@ -5,6 +5,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  backupTables,
   compareBackups,
   encodeBackup,
   rotateBackups,
@@ -22,7 +23,10 @@ function archive(overrides: Partial<Archive> = {}): Archive {
     created_at: "2026-10-07T00:00:00.000Z",
     versions: ["001_initial.sql", "002_retention.sql"],
     key_fingerprint: fingerprint,
-    tables: { organisations: [{ id: "org-1" }], users: [] },
+    tables: {
+      ...Object.fromEntries(backupTables.map((table) => [table, []])),
+      organisations: [{ id: "org-1" }],
+    },
     objects: {
       "org-1/file-1": {
         sha256: createHash("sha256").update(bytes).digest("hex"),
