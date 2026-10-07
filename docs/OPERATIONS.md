@@ -184,6 +184,33 @@ docker compose start api collab worker
 
 The backup command refuses to replace an existing file. Choose a new dated filename for each run. The ops profile sets `WORKSPACE_MAINTENANCE=true`; it does not itself stop other services. Always perform the explicit stop first. The web/reverse proxy may remain up to show the maintenance connection failure. Legacy plaintext `openjm-backup-v1` archives are refused by default; use `ALLOW_LEGACY_PLAINTEXT_BACKUP=true` only for a controlled one-time restore of an older archive, then unset it immediately.
 
+### Verify and retain encrypted backups
+
+`verify` is a read-only integrity check. It never connects to the database or the object store, so it is safe to run on a schedule and from monitoring. It refuses an archive that was produced with a different `ENCRYPTION_KEY`, fails an attachment whose SHA-256 no longer matches, and reports the recorded schema versions, table and row counts, and object bytes so an operator can confirm the archive is the one they expect:
+
+```bash
+docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts verify /backups/workspace-backup-2026-10-07.json
+```
+
+`rotate` applies bounded retention. It decrypts and verifies every `*.json` file in the directory and deletes only the oldest files beyond `--keep`, newest first. A file that does not verify as an encrypted Workspace backup is reported and left untouched rather than deleted, and a retention count that is not a positive integer is refused, so the command cannot silently unbounded-delete a directory:
+
+```bash
+docker compose --profile ops run --rm ops node --import tsx scripts/backup.ts rotate /backups --keep 14
+```
+
+### Schedule backups with failure visibility
+
+Schedule the stop, backup, verify, rotate and start sequence so a failed run is visible rather than silent. Keep the schedule short enough that a daily retention window is honored, and treat any non-zero exit as an alert. A drop-in cron entry for a host that runs Compose from `/srv/workspace`:
+
+```cron
+# 02:15 daily; date-stamped archive, week-2 retention, failures surface in mail/log
+15 2 * * * cd /srv/workspace && ./scripts/backup-schedule.sh >> /var/log/workspace-backup.log 2>&1
+```
+
+`scripts/backup-schedule.sh` performs `docker compose stop api collab worker`, a dated encrypted `backup`, `verify`, `rotate --keep "${BACKUP_KEEP:-14}"` and `docker compose start` under `set -euo pipefail`, and always restarts the writers even when the backup fails. Provide `ENCRYPTION_KEY` and the database URL through the same protected environment the deployment uses; never place them in the crontab. The archive directory must be owned by the image's non-root `node` user (UID 1000), and the framework only encrypts the artifact: keep the directory and the off-host copy on encrypted storage, and store `.env` separately.
+
+Do not treat a green backup log as proof of recoverability. Pair the schedule with the periodic restore drill below, and confirm that `verify` succeeds for the archive you would actually depend on.
+
 ## Restore to an empty deployment
 
 Restore into a separate fresh deployment with the **same application/schema version** and original ENCRYPTION_KEY. The tool refuses to restore into any nonempty application database or overwrite existing object keys. Do not delete the old deployment as part of a recovery test.
