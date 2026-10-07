@@ -1,6 +1,7 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 const email = "browser@example.test",
   password = "browser-password-123";
 // Subsequent sequential tests reuse the genuine authenticated session instead
@@ -4073,14 +4074,23 @@ test("W19 offline in-flight edit is discarded after access revocation before rec
     await expect(partnerEditor).toContainText("Canonical before revocation");
     await expect(partnerEditor).toHaveAttribute("contenteditable", "true");
 
-    // Create an unacknowledged local edit under real browser offline mode.
-    await partnerContext.setOffline(true);
+    // Stop the real collaboration writer so the established WebSocket is
+    // actually severed. Browser offline emulation does not reliably drop an
+    // already-open socket, so it cannot prove this authority transition.
+    const compose = (args: string[]) =>
+      execFileSync("docker", ["compose", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    compose(["stop", "collab"]);
+    await expect(partner.getByRole("status").filter({ hasText: "Offline" }))
+      .toBeVisible({ timeout: 20000 });
+
     const forbidden = " OFFLINE_FORBIDDEN_" + randomUUID();
     await partnerEditor.click();
     await partner.keyboard.press("ControlOrMeta+End");
     await partner.keyboard.insertText(forbidden);
     await expect(partnerEditor).toContainText(forbidden);
-    await expect(partner.getByRole("status")).toContainText(/Offline/);
     await expect.poll(async () =>
       partner.evaluate(() =>
         Object.keys(localStorage).some((key) => key.startsWith("workspace-recovery:v1:"))
@@ -4097,7 +4107,7 @@ test("W19 offline in-flight edit is discarded after access revocation before rec
     await expect(access).toBeHidden();
 
     // Reconnect must fail closed: no replay, no retained local recovery material.
-    await partnerContext.setOffline(false);
+    compose(["start", "collab"]);
     await expect.poll(async () =>
       partner.evaluate(() =>
         Object.keys(localStorage).some((key) => key.startsWith("workspace-recovery:v1:"))
@@ -4110,7 +4120,12 @@ test("W19 offline in-flight edit is discarded after access revocation before rec
     expect(canonical.plain_text).not.toContain(forbidden);
     expect((await partner.request.get("/api/v1/resources/" + resource.id)).status()).toBe(404);
   } finally {
-    await partnerContext.setOffline(false);
+    try {
+      execFileSync("docker", ["compose", "start", "collab"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {}
     await partnerContext.close();
   }
 });
