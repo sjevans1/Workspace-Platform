@@ -897,6 +897,36 @@ nav button:hover,
   font-size: 11px;
   margin-top: 16px;
 }
+.recovery-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+  margin: 8px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.recovery-banner > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+.recovery-banner span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.recovery-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+@media (max-width: 640px) {
+  .recovery-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 .editor-state {
   display: flex;
   justify-content: flex-end;
