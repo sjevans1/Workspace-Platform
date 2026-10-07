@@ -156,3 +156,165 @@ test("Wave R R0 fault harness: browser reconnect and collaboration writer restar
   await expect(page.getByRole("status").filter({ hasText: "Saved" }))
     .toBeVisible();
 });
+
+
+test("W18 recovers only explicit device-local unacknowledged drafts", async ({
+  page,
+  context,
+}) => {
+  test.skip(
+    process.env.E2E_WAVE_R_HARNESS !== "1",
+    "W18 recovery acceptance runs only in the deployed Wave R step",
+  );
+  test.setTimeout(180000);
+
+  await login(page);
+  const meResponse = await page.request.get("/api/v1/me");
+  expect(meResponse.ok(), await meResponse.text()).toBeTruthy();
+  const me = await meResponse.json();
+  const headers = { "X-CSRF-Token": me.csrf };
+
+  const rootsResponse = await page.request.get("/api/v1/resources");
+  expect(rootsResponse.ok(), await rootsResponse.text()).toBeTruthy();
+  const roots = await rootsResponse.json();
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "space",
+      parent_id: roots[0].id,
+      title: "W18 recovery acceptance " + Date.now(),
+    },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const resourceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "page",
+      parent_id: space.id,
+      title: "W18 interrupted edit " + Date.now(),
+    },
+  });
+  expect(resourceResponse.ok(), await resourceResponse.text()).toBeTruthy();
+  const resource = await resourceResponse.json();
+  const url = "/?page=" + resource.id;
+  const contentUrl = "/api/v1/pages/" + resource.id + "/content";
+
+  await page.goto(url);
+  const editor = page.locator(".bn-editor");
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await page.keyboard.type("W18 acknowledged baseline.");
+  await expect(page.getByRole("status").filter({ hasText: "Saved" }))
+    .toBeVisible();
+
+  const restoreToken = " W18-restore-" + Date.now();
+  await context.setOffline(true);
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.insertText(restoreToken);
+  await expect.poll(() =>
+    page.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith("workspace-recovery:v1:")).length,
+    ),
+  ).toBeGreaterThan(0);
+
+  const beforeRestore = await page.request.get(contentUrl);
+  expect(beforeRestore.ok(), await beforeRestore.text()).toBeTruthy();
+  expect((await beforeRestore.json()).plain_text).not.toContain(restoreToken.trim());
+
+  // Simulate loss of the renderer/tab before the provider can reconnect.
+  await page.close();
+  await context.setOffline(false);
+
+  const recovered = await context.newPage();
+  await recovered.goto(url);
+  await expect(
+    recovered.getByText("Unsaved changes are available from this device.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  const canonicalBeforeRestore = await recovered.request.get(contentUrl);
+  expect(canonicalBeforeRestore.ok(), await canonicalBeforeRestore.text()).toBeTruthy();
+  expect((await canonicalBeforeRestore.json()).plain_text)
+    .not.toContain(restoreToken.trim());
+
+  await recovered.getByRole("button", { name: "Restore draft" }).click();
+  await expect(recovered.locator(".bn-editor")).toContainText(restoreToken.trim());
+  await expect.poll(async () => {
+    const response = await recovered.request.get(contentUrl);
+    if (!response.ok()) return "";
+    return (await response.json()).plain_text;
+  }, { timeout: 30000 }).toContain(restoreToken.trim());
+  await expect(recovered.getByRole("status").filter({ hasText: "Saved" }))
+    .toBeVisible();
+  await expect.poll(() =>
+    recovered.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith("workspace-recovery:v1:")).length,
+    ),
+  ).toBe(0);
+
+  // A later interrupted draft can be explicitly discarded and must never
+  // reach canonical state.
+  const discardToken = " W18-discard-" + Date.now();
+  await context.setOffline(true);
+  await recovered.locator(".bn-editor").click();
+  await recovered.keyboard.press("ControlOrMeta+End");
+  await recovered.keyboard.insertText(discardToken);
+  await expect.poll(() =>
+    recovered.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith("workspace-recovery:v1:")).length,
+    ),
+  ).toBeGreaterThan(0);
+  await recovered.close();
+  await context.setOffline(false);
+
+  const discarded = await context.newPage();
+  await discarded.goto(url);
+  await expect(discarded.getByRole("button", { name: "Discard draft" }))
+    .toBeVisible();
+  await discarded.getByRole("button", { name: "Discard draft" }).click();
+  await expect(
+    discarded.getByText("Unsaved changes are available from this device.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  const afterDiscard = await discarded.request.get(contentUrl);
+  expect(afterDiscard.ok(), await afterDiscard.text()).toBeTruthy();
+  expect((await afterDiscard.json()).plain_text)
+    .not.toContain(discardToken.trim());
+
+  // Explicit logout removes any remaining recovery material for this
+  // principal even when the affected page is no longer open.
+  const logoutToken = " W18-logout-" + Date.now();
+  await context.setOffline(true);
+  await discarded.locator(".bn-editor").click();
+  await discarded.keyboard.press("ControlOrMeta+End");
+  await discarded.keyboard.insertText(logoutToken);
+  await expect.poll(() =>
+    discarded.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith("workspace-recovery:v1:")).length,
+    ),
+  ).toBeGreaterThan(0);
+  await discarded.close();
+  await context.setOffline(false);
+
+  const logoutPage = await context.newPage();
+  await logoutPage.goto("/");
+  await expect(logoutPage.getByRole("button", { name: "Sign out" })).toBeVisible();
+  expect(await logoutPage.evaluate(() =>
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("workspace-recovery:v1:")).length,
+  )).toBeGreaterThan(0);
+  await logoutPage.getByRole("button", { name: "Sign out" }).click();
+  await expect(logoutPage.getByRole("button", { name: "Sign in", exact: true }))
+    .toBeVisible();
+  expect(await logoutPage.evaluate(() =>
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("workspace-recovery:v1:")).length,
+  )).toBe(0);
+});
