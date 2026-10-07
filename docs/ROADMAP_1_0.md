@@ -1,8 +1,9 @@
 # OpenJM Workspace — Standalone 1.0 delivery roadmap
 
-**Planning baseline:** 2026-10-01, `main` after merged PR #61 (`8597e404365fea8b4250af0377d5dfb6813c53da`).  
+**Current execution baseline:** 2026-10-06, `main` after merged W17 PR #158 (`6b7f60f422723ec19e8a5006f3033ab082d7e8b9`).  
 **Persistent tracker:** [Issue #62](https://github.com/sjevans1/Workspace-Platform/issues/62).  
-**Status:** Planning specification; **no unbuilt feature is claimed implemented**. `W##` identifiers below are *planned work packages*, **not assigned GitHub PR numbers**. When implemented, replace each tracker checkbox with a link to the real PR and its accepted CI run.
+**Bundled execution plan:** [DELIVERY_WAVES_1_0.md](DELIVERY_WAVES_1_0.md).  
+**Status:** Living delivery specification; accepted packages are recorded below and in Issue #62; **no unbuilt feature is claimed implemented**. `W##` identifiers below are *planned work packages*, **not assigned GitHub PR numbers**. When implemented, replace each tracker checkbox with a link to the real PR and its accepted CI run.
 
 ## 1. What "complete" means
 
@@ -92,7 +93,7 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 | Search/experience | W13 → W14 → W15 → W16 → W17 | Keep user-visible ACL guarantees; avoid conflicting edits to `Workspace.tsx` and navigation until main refreshed. |
 | Platform/release | W20 → W21/W22; W18/W19; W23/W24 → W25–W28 | No live OpenJM Enterprise AI runtime/dependency; use isolated test providers and data. |
 
-**Next sequence (Oct 2026):** finish W08d's bounded multiuser/snapshot-policy acceptance, then W09 typed CSV import and W02 tenant IdP activation in separately scoped PRs, with W03 identity provenance following W02. Never mix identity changes with database UI/security changes or merge without exact-head full CI.
+**Next sequence (Oct 2026):** execute **Wave R** from [DELIVERY_WAVES_1_0.md](DELIVERY_WAVES_1_0.md): W18 interrupted-edit recovery → W19 reconnect/collaboration fault reliability → the W24 capacity gates that qualify those behaviors. Reuse one fault/load harness and preserve independent W-ID acceptance evidence. Then proceed through bundled integration (W20–W22), operations/recovery (W23 + remaining W24), experience/packaging (W25–W26) and governance/release (W27–W28) waves. Older W02–W04/W08–W12 packages are closed by satisfying only their genuinely missing gates; do not rebuild accepted slices.
 
 ## 6. Mandatory definition of done — every implementation PR
 
@@ -110,7 +111,7 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 
 After every accepted merge, record the **W-ID, actual GitHub PR number, merge SHA, exact-head workflow run, post-merge status, user-visible acceptance evidence, and outstanding risks** in Issue #62 (one checkbox per W-ID). Update this roadmap when dependencies or scope genuinely change. `W##` numbering stays stable even if a package requires multiple real GitHub PRs. No promises based solely on unfinished tool sessions or local uncommitted work.
 
-**Project state (2026-10-06):** 5/28 W-items accepted (W01, W05, W06, W07, W13). W13 completed through [PR #131](https://github.com/sjevans1/Workspace-Platform/pull/131), merged `1f52e20f`, after exact-head `dac84130ee205917234132939ed7b120b4ba7ea6` verification runs [37406801853](https://github.com/sjevans1/Workspace-Platform/actions/runs/37406801853) and [37406802722](https://github.com/sjevans1/Workspace-Platform/actions/runs/37406802722) passed. W08a–W08c are accepted *slices* (PRs #70, #77, #78), but **W08 remains unchecked** until [W08d Issue #80](https://github.com/sjevans1/Workspace-Platform/issues/80) qualifies the single-node capacity and live-data reordering policy. The [live tracker #62](https://github.com/sjevans1/Workspace-Platform/issues/62) is authoritative; historical baseline PRs #59/#61 are not double-counted.
+**Project state (2026-10-06 after W17):** **9/28 W-items accepted**: W01, W05, W06, W07, W13, W14, W15, W16 and W17. W14 merged in PR #150 (`96f3067dba5f9dc0b207e85e76daaf6b1d000ef6`); W15 in PR #154 (`8af55db81b0fd7c454b95bbfa68960a96c2e19b9`); W16 in PR #156 (`e8864949b04a64a8c1ae86f4cd6d29e3406f6f13`); W17 in PR #158 (`6b7f60f422723ec19e8a5006f3033ab082d7e8b9`) after exact-head workflow 37531024966 succeeded on final head `13469db32b16fa03a17fa0511f81dac1624cdc29`. W08a–W08c are accepted *slices*, but W08 remains open for its remaining concurrency/capacity gate. W02–W04 and W08–W12 contain substantial accepted slices but remain formally open until their missing acceptance boundaries are proven. See [DELIVERY_WAVES_1_0.md](DELIVERY_WAVES_1_0.md) for the bundled closeout strategy. The [live tracker #62](https://github.com/sjevans1/Workspace-Platform/issues/62) remains the release tracker; historical baseline PRs #59/#61 are not double-counted.
 
 ## 8. Post-1.0 optional roadmap — explicitly outside release blocker list
 
