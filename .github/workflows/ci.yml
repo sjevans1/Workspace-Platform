@@ -247,8 +247,6 @@ jobs:
           # real collaboration writer restart, reconnect latency, Docker
           # CPU/RSS, PostgreSQL activity/locks and collab health.
           npx playwright test e2e/wave-r-capacity.spec.ts
-      - name: Verify isolated deployed restore drill
-        run: bash scripts/ci-restore-drill.sh
       - name: Verify application antivirus scan counters
         run: |
           token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"
@@ -279,6 +277,14 @@ jobs:
             }
             console.log("Verified encrypted attachment envelopes:", files.length);
           '
+      - name: Verify isolated deployed restore drill
+        run: |
+          # Runs after the deployed counter and ciphertext checks: the drill's
+          # explicit backup maintenance boundary stops and restarts api, collab
+          # and worker, and workspace_antivirus_scans_total is reported since
+          # process start, so restarting the API would reset the counters that
+          # the preceding step asserts.
+          bash scripts/ci-restore-drill.sh
       - name: Replenish browser rate-limit window without changing policy
         run: |
           # Chromium/Firefox and preceding deployed workflows share Caddy's
