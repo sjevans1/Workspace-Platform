@@ -22,12 +22,15 @@ const select: Property = {
 };
 
 test("W09d keys normalize deterministically for the supported scalar types", () => {
-  // Text and title keys ignore case, surrounding space and internal runs, and
-  // are compared in NFC.
-  assert.equal(normalizeKeyValue(text, "  AC-1  "), "ac-1");
-  assert.equal(normalizeKeyValue(text, "ac-1"), "ac-1");
-  assert.equal(normalizeKeyValue(text, "AC  1\tB"), "ac 1 b");
+  // Text and title keys ignore surrounding space and internal runs, are
+  // compared in NFC, and keep their case.
+  assert.equal(normalizeKeyValue(text, "  AC-1  "), "AC-1");
+  assert.equal(normalizeKeyValue(text, "AC-1"), "AC-1");
+  assert.equal(normalizeKeyValue(text, "AC  1\tB"), "AC 1 B");
   assert.equal(normalizeKeyValue(title, "Café"), normalizeKeyValue(text, "Cafe\u0301"));
+  // Case is significant, so these are different keys rather than one.
+  assert.notEqual(normalizeKeyValue(text, "AC-1"), normalizeKeyValue(text, "ac-1"));
+  assert.notEqual(normalizeKeyValue(title, "Café"), normalizeKeyValue(title, "CAFÉ"));
 
   // Numbers canonicalize, including signed zero and exponent input.
   assert.equal(normalizeKeyValue(number, "1.0"), "1");
@@ -114,7 +117,7 @@ test("W09d keyed idempotency binds every input that could change the operation",
   };
   const digest = keyedImportDigest(base);
   assert.match(digest, /^[a-f0-9]{64}$/);
-  assert.equal(KEY_NORMALIZATION_VERSION, 1);
+  assert.equal(KEY_NORMALIZATION_VERSION, 2);
 
   // Changing any single bound input under the same idempotency key must be a
   // different operation.

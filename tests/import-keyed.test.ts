@@ -153,14 +153,25 @@ test("W09d duplicate keys inside the source conflict for every occurrence", () =
   const plan = planKeyedImport({
     mode: "authorized-update",
     keyPropertyId: "code",
-    rows: [{ code: "x" }, { code: "X " }, { code: "y" }],
+    rows: [{ code: "x" }, { code: "x " }, { code: "y" }],
     targetProperties: properties,
     visible: [],
   });
-  // "x" and "X " normalize to the same key, so neither may update a record.
+  // "x" and "x " normalize to the same key, so neither may update a record.
   assert.deepEqual(countActions(plan), ["conflict", "conflict", "insert"]);
   assert.equal((plan.rows[0] as any).reason, "duplicate_key_in_source");
   assert.equal((plan.rows[1] as any).reason, "duplicate_key_in_source");
+
+  // Case is significant, so differently cased keys are separate rows and each
+  // is allowed to proceed on its own.
+  const cased = planKeyedImport({
+    mode: "authorized-update",
+    keyPropertyId: "code",
+    rows: [{ code: "x" }, { code: "X" }],
+    targetProperties: properties,
+    visible: [],
+  });
+  assert.deepEqual(countActions(cased), ["insert", "insert"]);
 });
 
 test("W09d a collision the caller cannot see is generic and non-enumerating", () => {
@@ -183,11 +194,11 @@ test("W09d a collision the caller cannot see is generic and non-enumerating", ()
 });
 
 test("W09d stored keys normalize by the same contract as source keys", () => {
-  // Stored values that differ only by case, spacing or numeric form match.
+  // Stored values that differ only by surrounding or repeated whitespace match.
   const plan = planKeyedImport({
     mode: "authorized-update",
     keyPropertyId: "code",
-    rows: [{ code: " ac-1 " }, { code: "2.50" }, { code: "2026-10-08" }],
+    rows: [{ code: " AC-1 " }, { code: "2.50" }, { code: "2026-10-08" }],
     targetProperties: properties,
     visible: [
       record({ code: "AC-1" }, 2),
@@ -199,6 +210,17 @@ test("W09d stored keys normalize by the same contract as source keys", () => {
   // actually holds that value; all three are text keys here.
   assert.equal(plan.rows[0].action, "update");
   assert.equal((plan.rows[0] as any).expected_revision, 2);
+
+  // A stored key that differs only by case is a different key, so the row is
+  // inserted rather than updating a record the operator did not name.
+  const cased = planKeyedImport({
+    mode: "authorized-update",
+    keyPropertyId: "code",
+    rows: [{ code: "ac-1" }],
+    targetProperties: properties,
+    visible: [record({ code: "AC-1" }, 2)],
+  });
+  assert.equal(cased.rows[0].action, "insert");
 
   // With number and date key properties the canonicalization still applies.
   const numeric = planKeyedImport({

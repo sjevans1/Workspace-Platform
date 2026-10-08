@@ -27,8 +27,9 @@ export const importMode = z.enum(importModes);
  * Property types accepted as an import key.
  *
  * Every entry has an exact, total comparison rule with no hidden structure:
- * title/text/select compare as normalized strings, number compares as a
- * canonical finite decimal, and date compares as an ISO calendar day.
+ * title/text/select compare as normalized strings (case sensitive), number
+ * compares as a canonical finite decimal, and date compares as an ISO calendar
+ * day.
  *
  * Deliberately excluded: relation, rollup and formula (values are derived from
  * other rows, so a key would change without the imported data changing),
@@ -51,8 +52,12 @@ export type SupportedKeyType = (typeof supportedKeyTypes)[number];
  * Bump when the normalization below changes meaning. The value is bound into
  * the idempotency digest, so a change to normalization cannot silently replay
  * under an old key.
+ *
+ * Version 2: text and title keys became case sensitive. Version 1 case folded
+ * them, which could merge two distinct records into one key and update a
+ * different record than the operator intended.
  */
-export const KEY_NORMALIZATION_VERSION = 1;
+export const KEY_NORMALIZATION_VERSION = 2;
 
 const isoDate = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -130,9 +135,12 @@ export function normalizeKeyValue(
       return text;
     }
     default:
-      // title, text. Case and internal whitespace are not significant, so two
-      // rows that differ only by them are the same key.
-      return text.toLowerCase();
+      // title, text. Case IS significant, because matching two records that
+      // differ only by case would update whichever the operator did not mean.
+      // Surrounding and repeated whitespace are still not significant, and the
+      // comparison is always in NFC. Unmatched keys insert instead, which fails
+      // safe. This is bound by KEY_NORMALIZATION_VERSION.
+      return text;
   }
 }
 
