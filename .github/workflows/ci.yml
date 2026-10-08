@@ -241,6 +241,8 @@ jobs:
           # real collaboration writer restart, reconnect latency, Docker
           # CPU/RSS, PostgreSQL activity/locks and collab health.
           npx playwright test e2e/wave-r-capacity.spec.ts
+      - name: Verify isolated deployed restore drill
+        run: bash scripts/ci-restore-drill.sh
       - name: Verify application antivirus scan counters
         run: |
           token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"
