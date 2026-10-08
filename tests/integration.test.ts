@@ -8036,6 +8036,160 @@ test("W09d native keyed preview is exact, non-enumerating and tenant-safe", asyn
   );
 });
 
+
+test("W09d worker binds accepted preview decisions and rolls back stale work", async () => {
+  const importer = await freshMemberActor("W09d worker importer");
+  const importSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W09d worker " + randomUUID().slice(0, 8),
+  });
+  await permissionPatch(
+    "/resources/" + importSpace.id + "/permissions",
+    { inherit: false, grants: [{ principal_id: importer.id, level: 3 }] },
+  );
+  const target = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: importSpace.id,
+    title: "W09d worker target",
+  });
+  const url = "/databases/" + target.id;
+  await ok("PATCH", url, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "code", name: "Code", type: "text" },
+      { id: "amount", name: "Amount", type: "number" },
+      { id: "due", name: "Due", type: "date" },
+    ],
+  });
+  const visible = await ok("POST", url + "/records", {
+    values: { name: "Visible", code: "AC-1", amount: 1, due: "2026-10-01" },
+  });
+
+  const previewFor = async (content: string) => {
+    const base = await ok("POST", "/imports/preview", {
+      parent_id: importSpace.id,
+      target_database_id: target.id,
+      content,
+    }, importer);
+    const keyed = await ok("POST", "/imports/preview", {
+      parent_id: importSpace.id,
+      target_database_id: target.id,
+      content,
+      mapping: base.mapping,
+      mode: "authorized-update",
+      key_property_id: "code",
+    }, importer);
+    return { base, keyed };
+  };
+  const requestFor = (
+    name: string,
+    content: string,
+    preview: any,
+    idempotency_key = randomUUID(),
+  ) => ({
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    format: "csv",
+    name,
+    content,
+    mapping: preview.base.mapping,
+    expected_schema_digest: preview.keyed.target.schema_digest,
+    existing_mode: "authorized-update",
+    key_property_id: "code",
+    keyed_plan_digest: preview.keyed.keyed.plan_digest,
+    idempotency_key,
+  });
+
+  const updateContent =
+    "Name,Code,Amount,Due\nUpdated visible,AC-1,2,2026-10-02\n";
+  const accepted = await previewFor(updateContent);
+  const replayKey = randomUUID();
+  const acceptedRequest = requestFor(
+    "W09d accepted update",
+    updateContent,
+    accepted,
+    replayKey,
+  );
+  const queued = await ok("POST", "/imports", acceptedRequest, importer);
+  await tick(db);
+  const completed = await ok("GET", "/jobs/" + queued.id, undefined, importer);
+  assert.equal(completed.status, "completed", JSON.stringify(completed.result));
+  const updated = await ok("GET", "/records/" + visible.id, undefined, importer);
+  assert.equal(updated.values.name, "Updated visible");
+  assert.equal(updated.revision, 2);
+  assert.deepEqual(
+    await ok("POST", "/imports", acceptedRequest, importer),
+    { id: queued.id, status: "completed" },
+  );
+
+  const staleBeforeSubmit = await previewFor(updateContent);
+  await ok("PATCH", "/records/" + visible.id, {
+    values: { name: "Owner changed after preview" },
+    expected_revision: 2,
+  });
+  const staleSubmit = await req(
+    "POST",
+    "/imports",
+    requestFor(
+      "W09d stale before submit",
+      updateContent,
+      staleBeforeSubmit,
+    ),
+    importer,
+  );
+  assert.equal(staleSubmit.statusCode, 409, staleSubmit.body);
+  assert.match(staleSubmit.body, /preview changed/i);
+
+  const workerContent =
+    "Name,Code,Amount,Due\n" +
+    "Worker stale,AC-1,5,2026-10-05\n" +
+    "Must roll back,FRESH-W09D,6,2026-10-06\n";
+  const workerPreview = await previewFor(workerContent);
+  const workerJob = await ok(
+    "POST",
+    "/imports",
+    requestFor("W09d worker revision fence", workerContent, workerPreview),
+    importer,
+  );
+  await ok("PATCH", "/records/" + visible.id, {
+    values: { name: "Changed after queue" },
+    expected_revision: 3,
+  });
+  await tick(db);
+  const workerFailed = await ok("GET", "/jobs/" + workerJob.id, undefined, importer);
+  assert.equal(workerFailed.status, "failed");
+  assert.match(workerFailed.result.error, /preview changed/i);
+  const rowsAfterRevisionFailure = await ok("GET", url + "/records", undefined, importer);
+  assert.equal(
+    rowsAfterRevisionFailure.some((row: any) => row.values.code === "FRESH-W09D"),
+    false,
+    "worker-time revision conflict must roll back the fresh insert",
+  );
+
+  const aclContent =
+    "Name,Code,Amount,Due\nACL stale,AC-1,7,2026-10-07\n";
+  const aclPreview = await previewFor(aclContent);
+  const aclJob = await ok(
+    "POST",
+    "/imports",
+    requestFor("W09d ACL fence", aclContent, aclPreview),
+    importer,
+  );
+  await permissionPatch(
+    "/resources/" + visible.id + "/permissions",
+    { inherit: false, grants: [{ principal_id: importer.id, level: 0 }] },
+  );
+  await tick(db);
+  const aclFailed = await ok("GET", "/jobs/" + aclJob.id, undefined, importer);
+  assert.equal(aclFailed.status, "failed");
+  assert.match(aclFailed.result.error, /preview changed|conflicting row/i);
+  assert.equal(
+    (await req("GET", "/records/" + visible.id, undefined, importer)).statusCode,
+    404,
+  );
+});
+
 test("W12b notification receipts require current recipient and page access", async () => {
   // Prior integration scenarios revoke their shared member session. Use a
   // dedicated active actor so this security proof is independent of test order.
