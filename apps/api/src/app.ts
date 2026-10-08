@@ -92,7 +92,7 @@ import {
   normalizeKeyValue,
   resolveKeyProperty,
 } from "../../../packages/imports/keys.ts";
-import { planKeyedImport } from "../../../packages/imports/keyed.ts";
+import { keyedDecisionSet, keyedImportDigest, planKeyedImport } from "../../../packages/imports/keyed.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -4148,10 +4148,20 @@ function dataRoutes(
           visible: matches.visible,
           restrictedKeys: matches.restrictedKeys,
         });
+        const planDigest = keyedImportDigest({
+          mode: plan.mode,
+          key_property_id: keyProperty.id,
+          target_database_id: target.id,
+          schema_digest: csvSchemaDigest(schema.properties),
+          content_hash: createHash("sha256").update(request.content).digest("hex"),
+          mapping: request.mapping,
+          decision_set: keyedDecisionSet(plan),
+        });
         keyed = {
           mode: plan.mode,
           key_property_id: plan.key_property_id,
           normalization_version: plan.normalization_version,
+          plan_digest: planDigest,
           key_property: {
             id: keyProperty.id,
             name: keyProperty.name,
@@ -4202,6 +4212,10 @@ function dataRoutes(
             .string()
             .regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/)
             .optional(),
+          keyed_plan_digest: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
           idempotency_key: z
             .string()
             .regex(/^[A-Za-z0-9_-]{16,128}$/)
@@ -4235,16 +4249,22 @@ function dataRoutes(
     const mode = rest.existing_mode || "append";
     if (mode === "append")
       assert(
-        rest.key_property_id === undefined,
+        rest.key_property_id === undefined && rest.keyed_plan_digest === undefined,
         400,
-        "Append mode does not take a key property",
+        "Append mode does not take keyed import controls",
       );
-    else
+    else {
       assert(
         rest.key_property_id,
         400,
         "Keyed import modes require an explicit key property",
       );
+      assert(
+        rest.keyed_plan_digest,
+        400,
+        "Keyed import modes require the accepted preview plan digest",
+      );
+    }
     // Only a target-database import carries a resolved mode. A new-database
     // import keeps its previous payload shape, which the worker asserts on.
     const payload = v.target_database_id
@@ -4318,6 +4338,59 @@ function dataRoutes(
         409,
         "Target schema changed; preview again",
       );
+      if (mode !== "append") {
+        const keyProperty = resolveKeyProperty(
+          definition.properties,
+          v.key_property_id!,
+        );
+        const prepared = prepareCsvIntoExisting(
+          v.content,
+          v.mapping!,
+          definition.properties,
+        );
+        const keys: string[] = [];
+        for (const values of prepared.rows) {
+          try {
+            const normalized = normalizeKeyValue(
+              keyProperty,
+              values[keyProperty.id],
+            );
+            if (normalized) keys.push(normalized);
+          } catch {
+            // Malformed keys are represented as conflicts in the plan.
+          }
+        }
+        const matches = await resolveKeyedMatches(
+          q,
+          a,
+          v.target_database_id,
+          keyProperty,
+          keys,
+          mode === "authorized-update" ? 3 : 1,
+        );
+        const plan = planKeyedImport({
+          mode,
+          rows: prepared.rows,
+          targetProperties: definition.properties,
+          keyPropertyId: keyProperty.id,
+          visible: matches.visible,
+          restrictedKeys: matches.restrictedKeys,
+        });
+        const currentPlanDigest = keyedImportDigest({
+          mode,
+          key_property_id: keyProperty.id,
+          target_database_id: v.target_database_id,
+          schema_digest: v.expected_schema_digest!,
+          content_hash: createHash("sha256").update(v.content).digest("hex"),
+          mapping: v.mapping,
+          decision_set: keyedDecisionSet(plan),
+        });
+        assert(
+          currentPlanDigest === v.keyed_plan_digest,
+          409,
+          "Import preview changed; preview again",
+        );
+      }
     }
     const jid = randomUUID();
     if (!idempotency_key) {
