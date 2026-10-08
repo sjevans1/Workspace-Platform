@@ -42,7 +42,11 @@ const REQUEST_BUDGET_PER_MINUTE = 240;
 
 const requestStarts: number[] = [];
 
-async function paced<T>(call: () => Promise<T>): Promise<T> {
+// Reserve a slot in the rolling per-principal request budget. This is the
+// client-side pacing rule, not part of the system under test, so a measurement
+// must time only the request that follows it. The wait it imposes is recorded
+// separately as pacingQueueMs.
+async function acquireRequestSlot(): Promise<void> {
   for (;;) {
     const now = Date.now();
     while (requestStarts.length && now - requestStarts[0] > 60_000) {
@@ -50,12 +54,17 @@ async function paced<T>(call: () => Promise<T>): Promise<T> {
     }
     if (requestStarts.length < REQUEST_BUDGET_PER_MINUTE) {
       requestStarts.push(now);
-      break;
+      return;
     }
     await new Promise((resolve) =>
       setTimeout(resolve, 60_000 - (now - requestStarts[0]) + 5),
     );
   }
+}
+
+// Convenience for setup calls whose pacing wait is not a measurement.
+async function paced<T>(call: () => Promise<T>): Promise<T> {
+  await acquireRequestSlot();
   return call();
 }
 
@@ -226,6 +235,7 @@ async function runSession(
   context: BrowserContext,
   pageId: string,
   samples: Record<string, number[]>,
+  queueWaits: Record<string, number[]>,
   counters: { rateLimited: number; clientErrors: string[] },
 ) {
   const request = context.request;
@@ -234,9 +244,15 @@ async function runSession(
   const headers = { "X-CSRF-Token": (await me.json()).csrf };
 
   const measure = async (name: string, call: () => Promise<Response>) => {
+    // Time only the request. The pacing wait is captured separately so a
+    // rate-limit queue cannot be mistaken for server latency.
+    const queuedAt = performance.now();
+    await acquireRequestSlot();
     const started = performance.now();
-    const response = await paced(call);
-    (samples[name] ||= []).push(performance.now() - started);
+    const response = await call();
+    const finished = performance.now();
+    (samples[name] ||= []).push(finished - started);
+    (queueWaits[name] ||= []).push(started - queuedAt);
     if (response.status() === 429) {
       counters.rateLimited += 1;
       return response;
@@ -307,6 +323,7 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
     const contexts: BrowserContext[] = [];
     const pageIds: string[] = [];
     const samples: Record<string, number[]> = {};
+    const queueWaits: Record<string, number[]> = {};
     let baselineDocker: Record<string, unknown> = {};
     let peakDocker: Record<string, unknown> = {};
     let baselinePostgres: Record<string, unknown> = {};
@@ -334,7 +351,7 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
       const started = performance.now();
       await Promise.all(
         contexts.map((context, index) =>
-          runSession(context, pageIds[index], samples, counts).catch((error) => {
+          runSession(context, pageIds[index], samples, queueWaits, counts).catch((error) => {
             counts.clientErrors.push(`level=${level} session=${index}: ${String(error).slice(0, 160)}`);
           }),
         ),
@@ -344,10 +361,12 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
       peakPostgres = postgresStats();
 
       const latencies: Record<string, ReturnType<typeof summarise>> = {};
+      const pacingQueueMs: Record<string, ReturnType<typeof summarise>> = {};
       let totalOperations = 0;
       for (const name of OPERATIONS) {
         const values = samples[name] || [];
         latencies[name] = summarise(values);
+        pacingQueueMs[name] = summarise(queueWaits[name] || []);
         totalOperations += values.length;
       }
 
@@ -360,6 +379,7 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
           ? Number((totalOperations / elapsedSeconds).toFixed(2))
           : 0,
         latencyMs: latencies,
+        pacingQueueMs,
         rateLimitedResponses: counts.rateLimited - rateLimitedBefore,
         docker: { baseline: baselineDocker, peak: peakDocker },
         postgres: { baseline: baselinePostgres, peak: peakPostgres },
@@ -404,7 +424,10 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
         note:
           "All sessions authenticate as one principal and share that principal's " +
           "read budget, so the workload is paced inside the unchanged production " +
-          "rate limiter. Rate-limited responses: " + counts.rateLimited,
+          "rate limiter. Rate-limited responses: " + counts.rateLimited +
+          ". latencyMs measures only the request itself; the pacing wait is " +
+          "reported separately as pacingQueueMs, while elapsedSeconds and " +
+          "throughput include it.",
       },
       note:
         "Runs against the already-deployed production-like Compose stack; " +
