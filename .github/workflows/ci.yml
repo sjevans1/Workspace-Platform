@@ -241,6 +241,17 @@ jobs:
           # real collaboration writer restart, reconnect latency, Docker
           # CPU/RSS, PostgreSQL activity/locks and collab health.
           npx playwright test e2e/wave-r-capacity.spec.ts
+      - name: Qualify W24 whole-stack capacity
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_W24_WHOLE_STACK: "1"
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Measured CI-host evidence only: 1/5/10/25 concurrent sessions over
+          # the mixed read/write workload, capturing host characteristics,
+          # container CPU/RSS, PostgreSQL connections and lock pressure, worker
+          # and queue backlog. Writes capacity-results/w24-reference-host.json.
+          npx playwright test e2e/w24-capacity.spec.ts
       - name: Verify isolated deployed restore drill
         run: bash scripts/ci-restore-drill.sh
       - name: Verify application antivirus scan counters
