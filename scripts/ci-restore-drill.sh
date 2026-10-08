@@ -17,6 +17,12 @@ RECOVERY_HTTPS_PORT="${RECOVERY_HTTPS_PORT:-8444}"
 
 test -f "$SOURCE_ENV"
 mkdir -p "$BACKUP_DIR"
+# The ops container runs as the non-root image user (USER node). A previous
+# Compose bind-mount of ./backups can materialize this directory as root, which
+# leaves it unwritable for that user even though the runner created it here, so
+# grant write access explicitly. This is a disposable CI directory that only
+# ever holds an encrypted artifact, and the runner provides passwordless sudo.
+sudo chmod 0777 "$BACKUP_DIR"
 rm -f "$BACKUP_DIR/$BACKUP_FILE" "$RECOVERY_ENV"
 cp "$SOURCE_ENV" "$RECOVERY_ENV"
 
