@@ -10,6 +10,8 @@ import {
   visibleDirectRecordChildren,
   directChildCanReadSql,
 } from "../../../packages/permissions/index.ts";
+import { normalizeKeyValue } from "../../../packages/imports/keys.ts";
+import type { VisibleRecord } from "../../../packages/imports/keyed.ts";
 import {
   assert,
   json,
@@ -704,4 +706,87 @@ export async function seedDemo(q: Query, a: Actor, w: string) {
       priority: "High",
       assignee: a.user_id,
     });
+}
+
+/**
+ * W09d: resolve which records in a target database match the supplied import
+ * keys, and which of those the actor may act on.
+ *
+ * Visibility uses the same rules as the rest of the product, so a keyed import
+ * can never see or write more than the actor can elsewhere. A key that collides
+ * with a record the actor may not act on is returned in restrictedKeys and is
+ * not resolved any further, which is what prevents a collision from becoming an
+ * existence oracle. Callers must not report anything about a restricted key
+ * beyond the fact that it conflicted.
+ *
+ * `required` is 3 (write) for modes that update, and 1 (read) for modes that
+ * only need to know whether a record exists.
+ */
+export const KEYED_IMPORT_SCAN_LIMIT = 20000;
+
+export async function resolveKeyedMatches(
+  q: Query,
+  a: Actor,
+  targetDatabaseId: string,
+  keyProperty: Property,
+  keys: Iterable<string>,
+  required = 3,
+) {
+  const wanted = new Set<string>();
+  for (const key of keys) wanted.add(key);
+  const restrictedKeys = new Set<string>();
+  const visible: VisibleRecord[] = [];
+  if (!wanted.size) return { visible, restrictedKeys };
+
+  // One bounded ordered read of the target's stored keys, then matching in
+  // memory. Normalizing in SQL would duplicate the normalization contract and
+  // let the two drift apart.
+  const rows = (
+    await q.query(
+      "SELECT resource_id,revision,values->>$2 AS key FROM database_records" +
+        " WHERE database_id=$1 ORDER BY resource_id LIMIT $3",
+      [targetDatabaseId, keyProperty.id, KEYED_IMPORT_SCAN_LIMIT + 1],
+    )
+  ).rows;
+  assert(
+    rows.length <= KEYED_IMPORT_SCAN_LIMIT,
+    400,
+    "Target database is larger than the keyed import scan limit; split the import",
+  );
+
+  const matched = new Map<
+    string,
+    Array<{ resource_id: string; revision: number }>
+  >();
+  for (const row of rows) {
+    if (row.key === null || row.key === undefined) continue;
+    let normalized: string | null = null;
+    try {
+      normalized = normalizeKeyValue(keyProperty, row.key);
+    } catch {
+      // A stored value that cannot be normalized never matches, so a malformed
+      // stored key cannot swallow an incoming row.
+      continue;
+    }
+    if (!normalized || !wanted.has(normalized)) continue;
+    const bucket = matched.get(normalized) || [];
+    bucket.push({ resource_id: row.resource_id, revision: Number(row.revision) });
+    matched.set(normalized, bucket);
+  }
+
+  // Only keys that actually matched are probed per record, so the number of
+  // access checks is bounded by the import, not by the size of the database.
+  for (const [key, records] of matched)
+    for (const record of records) {
+      const level = await access(q, a, record.resource_id);
+      if (level >= required)
+        visible.push({
+          resource_id: record.resource_id,
+          revision: record.revision,
+          values: { [keyProperty.id]: key },
+        });
+      else restrictedKeys.add(key);
+    }
+
+  return { visible, restrictedKeys };
 }

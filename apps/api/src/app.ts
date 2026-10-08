@@ -85,7 +85,14 @@ import {
   csvMappingSchema,
   previewCsvImport,
   csvSchemaDigest,
+  prepareCsvIntoExisting,
 } from "../../../packages/imports/csv.ts";
+import {
+  importMode,
+  normalizeKeyValue,
+  resolveKeyProperty,
+} from "../../../packages/imports/keys.ts";
+import { planKeyedImport } from "../../../packages/imports/keyed.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -122,6 +129,7 @@ import { registerScim, setScimGroupRoleMapping } from "./scim.ts";
 import {
   createResource,
   createRecord,
+  resolveKeyedMatches,
   records,
   replaceDocument,
   validatePeople,
@@ -4048,6 +4056,13 @@ function dataRoutes(
             parent_id: uuid,
             content: z.string().max(2097152),
             target_database_id: uuid.optional(),
+            // W09d keyed modes. Absent mode stays append, which is key blind.
+            mode: importMode.optional(),
+            key_property_id: z
+              .string()
+              .regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/)
+              .optional(),
+            mapping: csvMappingSchema.optional(),
           })
           .strict(),
         r,
@@ -4090,6 +4105,67 @@ function dataRoutes(
             }
           : { ...m, skip: true };
       });
+      // W09d: a keyed mode reports the governed plan it would apply. The plan is
+      // built from records the actor may act on, and a key colliding with a
+      // record outside that set is reported only as a restricted conflict, with
+      // no key, identifier, revision or count of matching rows disclosed.
+      const mode = request.mode || "append";
+      let keyed: Record<string, unknown> | undefined;
+      if (mode !== "append") {
+        assert(request.mapping, 400, "Keyed import modes require an explicit mapping");
+        assert(request.key_property_id, 400, "Keyed import modes require a key property");
+        const keyProperty = resolveKeyProperty(
+          schema.properties,
+          request.key_property_id!,
+        );
+        const parsed = prepareCsvIntoExisting(
+          request.content,
+          request.mapping!,
+          schema.properties,
+        );
+        const keys: string[] = [];
+        for (const values of parsed.rows) {
+          try {
+            const normalized = normalizeKeyValue(keyProperty, values[keyProperty.id]);
+            if (normalized) keys.push(normalized);
+          } catch {
+            // Malformed keys are planned as conflicts; they are not looked up.
+          }
+        }
+        const matches = await resolveKeyedMatches(
+          q,
+          a,
+          target.id,
+          keyProperty,
+          keys,
+          mode === "authorized-update" ? 3 : 1,
+        );
+        const plan = planKeyedImport({
+          mode,
+          rows: parsed.rows,
+          targetProperties: schema.properties,
+          keyPropertyId: keyProperty.id,
+          visible: matches.visible,
+          restrictedKeys: matches.restrictedKeys,
+        });
+        keyed = {
+          mode: plan.mode,
+          key_property_id: plan.key_property_id,
+          normalization_version: plan.normalization_version,
+          key_property: {
+            id: keyProperty.id,
+            name: keyProperty.name,
+            type: keyProperty.type,
+          },
+          counts: plan.counts,
+          // Applying updates always needs explicit confirmation.
+          needs_confirmation: plan.counts.update > 0,
+          // A bounded, ordered sample of the planned actions. Update entries may
+          // name the visible record they would change; restricted conflicts are
+          // indistinguishable from one another.
+          decisions: plan.rows.slice(0, 50),
+        };
+      }
       return {
         ...preview,
         mapping: suggestions,
@@ -4102,6 +4178,7 @@ function dataRoutes(
             type: p.type,
           })),
         },
+        keyed,
       };
     },
     "databases.write",
