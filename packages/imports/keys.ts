@@ -78,12 +78,6 @@ export function resolveKeyProperty(
     400,
     "Import key must be one of " + supportedKeyTypes.join(", "),
   );
-  if (property!.type === "select")
-    assert(
-      Array.isArray(property!.options) && property!.options.length > 0,
-      400,
-      "Select key property must define options",
-    );
   return property!;
 }
 
