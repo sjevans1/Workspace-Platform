@@ -89,10 +89,11 @@ import {
 } from "../../../packages/imports/csv.ts";
 import {
   importMode,
+  keyedImportDigest,
   normalizeKeyValue,
   resolveKeyProperty,
 } from "../../../packages/imports/keys.ts";
-import { keyedDecisionSet, keyedImportDigest, planKeyedImport } from "../../../packages/imports/keyed.ts";
+import { keyedDecisionSet, planKeyedImport } from "../../../packages/imports/keyed.ts";
 import {
   templates,
   blocksToMarkdown,
