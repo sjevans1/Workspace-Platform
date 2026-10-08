@@ -122,16 +122,6 @@ export function normalizeKeyValue(
       );
       return day;
     }
-    case "select": {
-      // Exact option value in NFC. Case and whitespace are preserved.
-      const options = property.options || [];
-      assert(
-        options.includes(nfc),
-        400,
-        "Import key select value is not one of the property options",
-      );
-      return nfc;
-    }
     default:
       // title, text. NFC only: case and every whitespace character are part of
       // the identity, so "AC-1", "ac-1" and "AC-1 " are three different keys.
