@@ -167,7 +167,7 @@ function backlogStats() {
       "'webhook_pending',(SELECT count(*) FROM webhook_deliveries WHERE status='pending'),",
       "'webhook_dead',(SELECT count(*) FROM webhook_deliveries WHERE status='dead'),",
       "'outbox_pending',(SELECT count(*) FROM event_outbox WHERE dispatched_at IS NULL),",
-      "'object_deletions_pending',(SELECT count(*) FROM object_deletions WHERE deleted_at IS NULL)",
+      "'object_deletions_pending',(SELECT count(*) FROM object_deletions WHERE status NOT IN ('completed','dead'))",
       ")::text;",
     ].join(""),
   );
