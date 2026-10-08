@@ -4237,7 +4237,11 @@ function dataRoutes(
         400,
         "Keyed import modes require an explicit key property",
       );
-    const payload = { ...rest, existing_mode: mode };
+    // Only a target-database import carries a resolved mode. A new-database
+    // import keeps its previous payload shape, which the worker asserts on.
+    const payload = v.target_database_id
+      ? { ...rest, existing_mode: mode }
+      : rest;
     // Bind the replay identity to *all* validated import parameters and the
     // signed-in principal. CSV bytes are hashed, never logged in a response.
     const digest = idempotency_key
