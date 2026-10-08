@@ -11,12 +11,21 @@ import os from "node:os";
 
 // W24 whole-stack qualification.
 //
-// Wave R qualified collaboration reconnection only. This harness measures the
-// wider system on the same reference CI host and the same deployment stack:
-// API latency and throughput for representative operations, container CPU/RSS,
-// PostgreSQL connections and lock pressure, worker and queue backlog, and the
-// antivirus/encrypted-storage path. It reuses the Wave R helpers and the
-// existing deployed Compose stack rather than introducing a new load framework.
+// Wave R qualified collaboration reconnection only, which does not satisfy full
+// W24. This harness measures the wider system on the same reference CI host and
+// the same deployed production-like Compose stack: API latency and throughput
+// for representative operations, container CPU/RSS, PostgreSQL connections and
+// lock pressure, worker and queue backlog, and the antivirus/encrypted-storage
+// path. It reuses the Wave R helpers and deployment rather than introducing a
+// new load framework.
+//
+// Two deliberate constraints:
+//  1. Every session authenticates as the same principal, whose reads share one
+//     per-principal budget under the production rate limiter. The workload is
+//     therefore paced inside that budget instead of tripping 429s. The limiter
+//     itself is production policy and is not changed here.
+//  2. The workload is bounded so the deployed acceptance job still fits its
+//     wall-clock budget on a GitHub-hosted runner.
 //
 // The numbers it produces are CI-host qualification evidence for one runner
 // class, not a universal production SLO.
@@ -24,7 +33,31 @@ import os from "node:os";
 const email = "browser@example.test";
 const password = "browser-password-123";
 const LEVELS = [1, 5, 10, 25];
-const ITERATIONS = 3;
+const ITERATIONS = 2;
+
+// The deployment allows 300 requests/minute per authenticated principal. Stay
+// under it with headroom so the measurement reflects the system rather than the
+// limiter, and record any 429 as explicit evidence rather than hiding it.
+const REQUEST_BUDGET_PER_MINUTE = 240;
+
+const requestStarts: number[] = [];
+
+async function paced<T>(call: () => Promise<T>): Promise<T> {
+  for (;;) {
+    const now = Date.now();
+    while (requestStarts.length && now - requestStarts[0] > 60_000) {
+      requestStarts.shift();
+    }
+    if (requestStarts.length < REQUEST_BUDGET_PER_MINUTE) {
+      requestStarts.push(now);
+      break;
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, 60_000 - (now - requestStarts[0]) + 5),
+    );
+  }
+  return call();
+}
 
 function compose(args: string[]) {
   return execFileSync("docker", ["compose", ...args], {
@@ -42,7 +75,10 @@ async function login(page: Page) {
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await signIn.click();
-  await expect(heading).toBeVisible();
+  // This step runs only after the shared sign-in budget has been replenished,
+  // so a single attempt is expected to succeed. Retrying here would spend more
+  // of the strict production sign-in budget rather than prove the window.
+  await expect(heading).toBeVisible({ timeout: 30000 });
 }
 
 function hostCharacteristics() {
@@ -168,16 +204,20 @@ const OPERATIONS = [
   "update",
 ] as const;
 
+type Response = { ok(): boolean; status(): number; text(): Promise<string> };
+
 async function createSessionPage(
   request: BrowserContext["request"],
+  csrf: string,
   parentId: string,
   label: string,
 ) {
-  const me = await (await request.get("/api/v1/me")).json();
-  const response = await request.post("/api/v1/resources", {
-    headers: { "X-CSRF-Token": me.csrf },
-    data: { kind: "page", parent_id: parentId, title: label },
-  });
+  const response = await paced(() =>
+    request.post("/api/v1/resources", {
+      headers: { "X-CSRF-Token": csrf },
+      data: { kind: "page", parent_id: parentId, title: label },
+    }),
+  );
   expect(response.ok(), await response.text()).toBeTruthy();
   return (await response.json()).id as string;
 }
@@ -186,20 +226,29 @@ async function runSession(
   context: BrowserContext,
   pageId: string,
   samples: Record<string, number[]>,
+  counters: { rateLimited: number; clientErrors: string[] },
 ) {
   const request = context.request;
-  const me = await (await request.get("/api/v1/me")).json();
-  const headers = { "X-CSRF-Token": me.csrf };
+  const me = await paced(() => request.get("/api/v1/me"));
+  expect(me.ok(), await me.text()).toBeTruthy();
+  const headers = { "X-CSRF-Token": (await me.json()).csrf };
+
+  const measure = async (name: string, call: () => Promise<Response>) => {
+    const started = performance.now();
+    const response = await paced(call);
+    (samples[name] ||= []).push(performance.now() - started);
+    if (response.status() === 429) {
+      counters.rateLimited += 1;
+      return response;
+    }
+    if (!response.ok()) {
+      counters.clientErrors.push(`${name}: ${response.status()}`);
+      return response;
+    }
+    return response;
+  };
 
   for (let i = 0; i < ITERATIONS; i++) {
-    const measure = async (name: string, call: () => Promise<{ ok(): boolean; status(): number; text(): Promise<string> }>) => {
-      const started = performance.now();
-      const response = await call();
-      (samples[name] ||= []).push(performance.now() - started);
-      expect(response.ok(), `${name}: ${response.status()} ${await response.text()}`).toBeTruthy();
-      return response;
-    };
-
     await measure("list", () => request.get("/api/v1/resources"));
     await measure("recent", () => request.get("/api/v1/resources?recent=true"));
     await measure("detail", () => request.get(`/api/v1/resources/${pageId}`));
@@ -245,9 +294,10 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
   });
   expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
   const space = await spaceResponse.json();
+  const csrf = me.csrf;
 
   const levels: Record<string, unknown>[] = [];
-  const errors: string[] = [];
+  const counts = { rateLimited: 0, clientErrors: [] as string[] };
 
   for (const level of LEVELS) {
     const contexts: BrowserContext[] = [];
@@ -258,6 +308,7 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
     let baselinePostgres: Record<string, unknown> = {};
     let peakPostgres: Record<string, unknown> = {};
     const backlogBefore = backlogStats();
+    const rateLimitedBefore = counts.rateLimited;
 
     try {
       for (let i = 0; i < level; i++) {
@@ -265,7 +316,12 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
         await context.addCookies(cookies);
         contexts.push(context);
         pageIds.push(
-          await createSessionPage(context.request, space.id, `W24 s${i} ${Date.now()}`),
+          await createSessionPage(
+            context.request,
+            csrf,
+            space.id,
+            `W24 s${i} ${Date.now()}`,
+          ),
         );
       }
 
@@ -274,8 +330,8 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
       const started = performance.now();
       await Promise.all(
         contexts.map((context, index) =>
-          runSession(context, pageIds[index], samples).catch((error) => {
-            errors.push(`level=${level} session=${index}: ${String(error).slice(0, 200)}`);
+          runSession(context, pageIds[index], samples, counts).catch((error) => {
+            counts.clientErrors.push(`level=${level} session=${index}: ${String(error).slice(0, 160)}`);
           }),
         ),
       );
@@ -300,18 +356,24 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
           ? Number((totalOperations / elapsedSeconds).toFixed(2))
           : 0,
         latencyMs: latencies,
+        rateLimitedResponses: counts.rateLimited - rateLimitedBefore,
         docker: { baseline: baselineDocker, peak: peakDocker },
         postgres: { baseline: baselinePostgres, peak: peakPostgres },
         backlogBefore,
         backlogAfter: backlogStats(),
-        sampleErrors: errors.filter((entry) => entry.startsWith(`level=${level} `)),
       });
     } finally {
       for (const context of contexts) await context.close();
     }
   }
 
-  expect(errors, errors.join("\n")).toEqual([]);
+  // A 429 means the workload exceeded the production limiter, which would
+  // invalidate the latency evidence rather than the product. Fail loudly.
+  expect(
+    counts.rateLimited,
+    `workload exceeded the production rate limiter ${counts.rateLimited} times`,
+  ).toBe(0);
+  expect(counts.clientErrors, counts.clientErrors.join("\n")).toEqual([]);
 
   const artifact = {
     format: "workspace-w24-capacity-v1",
@@ -333,13 +395,20 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
         "PATCH /api/v1/resources/:id",
       ],
       dataset: "fresh space with one page per concurrent session",
+      pacing: {
+        requestBudgetPerMinute: REQUEST_BUDGET_PER_MINUTE,
+        note:
+          "All sessions authenticate as one principal and share that principal's " +
+          "read budget, so the workload is paced inside the unchanged production " +
+          "rate limiter. Rate-limited responses: " + counts.rateLimited,
+      },
       note:
         "Runs against the already-deployed production-like Compose stack; " +
-        "reuses the Wave R capacity helpers and the Wave R harness deployment.",
+        "reuses the Wave R capacity helpers and harness deployment. Bounded so " +
+        "the deployed acceptance job fits a hosted-runner wall-clock budget.",
     },
     levels,
     maximumTestedConcurrency: Math.max(...LEVELS),
-    errors,
   };
 
   await mkdir("capacity-results", { recursive: true });
