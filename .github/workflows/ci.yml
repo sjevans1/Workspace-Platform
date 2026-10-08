@@ -83,7 +83,13 @@ jobs:
       - run: npm run build
   deployment:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The deployed acceptance job now hosts the whole-stack W24 qualification in
+    # addition to deployment, the browser workflow, the Wave R harness, the
+    # W24-R collaboration capacity run, the isolated restore drill, the
+    # malware/storage checks, accessibility and trusted TLS, which together
+    # exceed the previous 30-minute allowance on a hosted runner. This raises
+    # only the CI wall-clock budget; no product or security limit changes.
+    timeout-minutes: 45
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -271,6 +277,14 @@ jobs:
             }
             console.log("Verified encrypted attachment envelopes:", files.length);
           '
+      - name: Verify isolated deployed restore drill
+        run: |
+          # Runs after the deployed counter and ciphertext checks: the drill's
+          # explicit backup maintenance boundary stops and restarts api, collab
+          # and worker, and workspace_antivirus_scans_total is reported since
+          # process start, so restarting the API would reset the counters that
+          # the preceding step asserts.
+          bash scripts/ci-restore-drill.sh
       - name: Replenish browser rate-limit window without changing policy
         run: |
           # Chromium/Firefox and preceding deployed workflows share Caddy's
@@ -313,6 +327,21 @@ jobs:
           done
           echo "Sign-in rate-limit window did not recover" >&2
           exit 1
+      - name: Qualify W24 whole-stack capacity
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_W24_WHOLE_STACK: "1"
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Runs immediately after the replenished shared rate-limit window and
+          # before the stack is reconfigured for TLS, because the sign-in route
+          # keeps its own strict production budget that the preceding browser
+          # workflows exhaust. Measured CI-host evidence only: 1/5/10/25
+          # concurrent sessions over the mixed read/write workload, capturing
+          # host characteristics, container CPU/RSS, PostgreSQL connections and
+          # lock pressure, worker and queue backlog. Writes
+          # capacity-results/w24-reference-host.json.
+          npx playwright test e2e/w24-capacity.spec.ts
       - name: Verify keyboard accessibility in Chromium and Firefox
         run: |
           E2E_BASE_URL=http://localhost:8080           E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"           npx playwright test --config=playwright.compat.config.ts

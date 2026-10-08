@@ -8,7 +8,7 @@ Only BlockNote Core, React, Mantine and server utilities are used. No @blocknote
 
 ## Infrastructure
 
-PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and SeaweedFS use Apache-2.0. Container images carry additional base-system notices. Preserve those notices and generate a container SBOM for each customer release. Node.js includes MIT and third-party notices in its official image. ClamAV 1.5.4 is distributed under GNU GPL v2 in the official Cisco-Talos source tree and is shipped here as a separate, unmodified scanner service. Customer release packaging must preserve the image's license/notices and retain or provide access to the exact corresponding ClamAV source for the distributed image version/digest, including applicable bundled-component notices. The npm license generator does not cover this container dependency.
+PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and SeaweedFS use Apache-2.0. Container images carry additional base-system notices. Preserve those notices and generate a container SBOM for each customer release. Node.js includes MIT and third-party notices in its official image.
 
 ## npm inventory
 
@@ -143,15 +143,15 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | @lukeed/ms | 2.0.2 | MIT | [license](docs/licenses/9a9edad7baae5262.txt) |
 | @mantine/core | 9.6.3 | MIT | [LICENSE](docs/licenses/61c765e625bc25d5.txt) |
 | @mantine/hooks | 9.6.3 | MIT | [LICENSE](docs/licenses/61c765e625bc25d5.txt) |
-| @next/env | 16.3.6 | MIT | See upstream package and bundled dependency files |
-| @next/swc-darwin-arm64 | 16.3.6 | MIT | Not installed on this platform |
-| @next/swc-darwin-x64 | 16.3.6 | MIT | Not installed on this platform |
-| @next/swc-linux-arm64-gnu | 16.3.6 | MIT | Not installed on this platform |
-| @next/swc-linux-arm64-musl | 16.3.6 | MIT | Not installed on this platform |
-| @next/swc-linux-x64-gnu | 16.3.6 | MIT | See upstream package and bundled dependency files |
-| @next/swc-linux-x64-musl | 16.3.6 | MIT | See upstream package and bundled dependency files |
-| @next/swc-win32-arm64-msvc | 16.3.6 | MIT | Not installed on this platform |
-| @next/swc-win32-x64-msvc | 16.3.6 | MIT | Not installed on this platform |
+| @next/env | 16.3.8 | MIT | See upstream package and bundled dependency files |
+| @next/swc-darwin-arm64 | 16.3.8 | MIT | Not installed on this platform |
+| @next/swc-darwin-x64 | 16.3.8 | MIT | Not installed on this platform |
+| @next/swc-linux-arm64-gnu | 16.3.8 | MIT | Not installed on this platform |
+| @next/swc-linux-arm64-musl | 16.3.8 | MIT | Not installed on this platform |
+| @next/swc-linux-x64-gnu | 16.3.8 | MIT | See upstream package and bundled dependency files |
+| @next/swc-linux-x64-musl | 16.3.8 | MIT | See upstream package and bundled dependency files |
+| @next/swc-win32-arm64-msvc | 16.3.8 | MIT | Not installed on this platform |
+| @next/swc-win32-x64-msvc | 16.3.8 | MIT | Not installed on this platform |
 | @pinojs/redact | 0.4.0 | MIT | [LICENSE](docs/licenses/58d4023bfbed5fb5.txt) |
 | @playwright/test | 1.63.0 | Apache-2.0 | [LICENSE](docs/licenses/45873d00a0dd2435.txt), [NOTICE](docs/licenses/6d602191187b35b9.txt) |
 | @shikijs/types | 4.4.3 | MIT | [LICENSE](docs/licenses/7a9d8d01038aeacf.txt) |
@@ -250,6 +250,7 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | fastify | 5.12.5 | MIT | [LICENSE](docs/licenses/23c9186385917145.txt) |
 | fastify-plugin | 6.0.0 | MIT | [LICENSE](docs/licenses/ba9677e5a34c2738.txt) |
 | fastq | 1.20.3 | ISC | [LICENSE](docs/licenses/c3367f6d01a79d36.txt) |
+| fflate | 0.8.3 | MIT | [LICENSE](docs/licenses/0a1df3a083d0c010.txt) |
 | find-my-way | 9.9.0 | MIT | [LICENSE](docs/licenses/693f9539655acc18.txt) |
 | fsevents | 2.3.3 | MIT | Not installed on this platform |
 | get-nonce | 1.0.1 | MIT | [LICENSE](docs/licenses/acf3b087b348d2f2.txt) |
@@ -285,7 +286,7 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | minipass | 7.1.3 | BlueOak-1.0.0 | [LICENSE.md](docs/licenses/8a1af140fdfbf5af.txt) |
 | ms | 2.1.3 | MIT | [license.md](docs/licenses/1662fae9b5314d11.txt) |
 | nanoid | 3.3.19 | MIT | [LICENSE](docs/licenses/da4db1480d9beea3.txt) |
-| next | 16.3.6 | MIT | [license.md](docs/licenses/ee765244e2d59f52.txt) |
+| next | 16.3.8 | MIT | [license.md](docs/licenses/ee765244e2d59f52.txt) |
 | oauth4webapi | 3.8.8 | MIT | [LICENSE.md](docs/licenses/81e7b4b0196e8caa.txt) |
 | on-exit-leak-free | 2.1.2 | MIT | [LICENSE](docs/licenses/47404ffc18f12678.txt) |
 | openapi-types | 12.1.3 | MIT | [LICENSE](docs/licenses/a5b243ddbec533f2.txt) |
@@ -312,7 +313,7 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | postgres-bytea | 1.0.1 | MIT | [license](docs/licenses/f057f36739d53d22.txt) |
 | postgres-date | 1.0.7 | MIT | [license](docs/licenses/f057f36739d53d22.txt) |
 | postgres-interval | 1.2.0 | MIT | [license](docs/licenses/f057f36739d53d22.txt) |
-| prettier | 3.6.2 | MIT | [LICENSE](docs/licenses/b0f2417199889f1c.txt) |
+| prettier | 3.9.9 | MIT | [LICENSE](docs/licenses/b0f2417199889f1c.txt) |
 | process-warning | 4.0.1 | MIT | [LICENSE](docs/licenses/d9726abc9eff9496.txt) |
 | process-warning | 5.1.0 | MIT | [LICENSE](docs/licenses/8d3c1dd501e05640.txt) |
 | prosemirror-changeset | 2.4.4 | MIT | [LICENSE](docs/licenses/7543dfe82fa61d5b.txt) |
@@ -355,7 +356,7 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | setprototypeof | 1.2.0 | ISC | [LICENSE](docs/licenses/76d6d1ea0c268da3.txt) |
 | sharp | 0.35.5 | Apache-2.0 | [LICENSE](docs/licenses/73ba74dfaa520b49.txt) |
 | sonic-boom | 4.2.1 | MIT | [LICENSE](docs/licenses/db5c3795cb080810.txt) |
-| source-map-js | 1.2.1 | BSD-3-Clause | [LICENSE](docs/licenses/6cb0631f71c77497.txt) |
+| source-map-js | 1.2.2 | BSD-3-Clause | [LICENSE](docs/licenses/6cb0631f71c77497.txt) |
 | split2 | 4.2.0 | ISC | [LICENSE](docs/licenses/c372ef2fa1dfcb12.txt) |
 | standard-as-callback | 2.1.0 | MIT | [LICENSE](docs/licenses/a1de72eb7bdf08c1.txt) |
 | statuses | 2.0.2 | MIT | [LICENSE](docs/licenses/512cfa4d5e7a7569.txt) |
@@ -388,7 +389,7 @@ PostgreSQL uses the PostgreSQL License; Valkey uses BSD-3-Clause; Caddy and Seaw
 | xmlchars | 2.2.0 | MIT | [LICENSE](docs/licenses/45d196313c2647d3.txt) |
 | xtend | 4.0.2 | MIT | [LICENSE](docs/licenses/82e67379203d5794.txt) |
 | y-prosemirror | 1.3.7 | MIT | [LICENSE](docs/licenses/5446db1e43fe52fa.txt) |
-| y-protocols | 1.0.6 | MIT | [LICENSE](docs/licenses/5446db1e43fe52fa.txt) |
+| y-protocols | 1.0.7 | MIT | [LICENSE](docs/licenses/5446db1e43fe52fa.txt) |
 | yaml | 2.9.1 | ISC | [LICENSE](docs/licenses/5bba27375d93e911.txt) |
 | yjs | 13.6.33 | MIT | [LICENSE](docs/licenses/341baa53605ed85d.txt) |
 | zod | 4.6.5 | MIT | [LICENSE](docs/licenses/3f1189b28e3866e0.txt) |
