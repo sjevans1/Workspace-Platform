@@ -4230,7 +4230,9 @@ function dataRoutes(
         400,
         "Existing imports require an explicit mode",
       );
-    const mode = rest.existing_mode;
+    // A new-database import has no mode and stays append. A target-database
+    // import always has one, because the assertion above requires it.
+    const mode = rest.existing_mode || "append";
     if (mode === "append")
       assert(
         rest.key_property_id === undefined,
