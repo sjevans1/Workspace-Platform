@@ -4197,7 +4197,11 @@ function dataRoutes(
             .string()
             .regex(/^[a-f0-9]{64}$/)
             .optional(),
-          existing_mode: z.literal("append").optional(),
+          existing_mode: importMode.optional(),
+          key_property_id: z
+            .string()
+            .regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/)
+            .optional(),
           idempotency_key: z
             .string()
             .regex(/^[A-Za-z0-9_-]{16,128}$/)
@@ -4216,7 +4220,24 @@ function dataRoutes(
       "CSV-specific options require CSV format",
     );
     const parent = await requireAccess(q, a, v.parent_id, 3);
-    const { idempotency_key, ...payload } = v;
+    const { idempotency_key, ...rest } = v;
+    // Absent mode stays append, and append stays key blind. Resolving the mode
+    // once keeps the replay digest identical for an explicit and an implicit
+    // append.
+    const mode = rest.existing_mode || "append";
+    if (mode === "append")
+      assert(
+        rest.key_property_id === undefined,
+        400,
+        "Append mode does not take a key property",
+      );
+    else
+      assert(
+        rest.key_property_id,
+        400,
+        "Keyed import modes require an explicit key property",
+      );
+    const payload = { ...rest, existing_mode: mode };
     // Bind the replay identity to *all* validated import parameters and the
     // signed-in principal. CSV bytes are hashed, never logged in a response.
     const digest = idempotency_key
@@ -4238,10 +4259,9 @@ function dataRoutes(
       assert(
         v.format === "csv" &&
           v.mapping &&
-          v.existing_mode === "append" &&
           v.expected_schema_digest,
         400,
-        "Existing imports require explicit append mode, mapping and schema digest",
+        "Existing imports require explicit mode, mapping and schema digest",
       );
       const target = await requireAccess(q, a, v.target_database_id, 3);
       assert(
