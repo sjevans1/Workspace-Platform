@@ -27,9 +27,9 @@ export const importMode = z.enum(importModes);
  * Property types accepted as an import key.
  *
  * Every entry has an exact, total comparison rule with no hidden structure:
- * title/text/select compare as normalized strings (case sensitive), number
- * compares as a canonical finite decimal, and date compares as an ISO calendar
- * day.
+ * title/text/select compare as exact NFC strings (case and whitespace
+ * significant), number compares as a canonical finite decimal, and date
+ * compares as an ISO calendar day.
  *
  * Deliberately excluded: relation, rollup and formula (values are derived from
  * other rows, so a key would change without the imported data changing),
@@ -53,11 +53,14 @@ export type SupportedKeyType = (typeof supportedKeyTypes)[number];
  * the idempotency digest, so a change to normalization cannot silently replay
  * under an old key.
  *
- * Version 2: text and title keys became case sensitive. Version 1 case folded
- * them, which could merge two distinct records into one key and update a
- * different record than the operator intended.
+ * Version 3: identity became exact NFC. Title, text and select keys preserve
+ * case and every whitespace character, so only byte-equal values (modulo
+ * Unicode normalization) match. Version 2 preserved case but still collapsed
+ * surrounding and repeated whitespace, which merged values the approved
+ * safe-exact contract treats as distinct. Blankness is still decided separately,
+ * before normalization.
  */
-export const KEY_NORMALIZATION_VERSION = 2;
+export const KEY_NORMALIZATION_VERSION = 3;
 
 const isoDate = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -107,40 +110,44 @@ export function normalizeKeyValue(
     "Import key must be one of " + supportedKeyTypes.join(", "),
   );
   const raw = value === null || value === undefined ? "" : String(value);
-  const text = raw.normalize("NFC").trim().replace(/\s+/g, " ");
-  if (!text) return null;
+  const nfc = raw.normalize("NFC");
+  // Blankness is decided on its own, before any normalization for matching, so
+  // a value that is only whitespace is missing rather than a key.
+  if (!nfc.trim()) return null;
   switch (property.type) {
     case "number": {
-      const num = Number(text);
+      // Canonical parsing: the numeric value is the identity.
+      const num = Number(nfc.trim());
       assert(Number.isFinite(num), 400, "Import key number is not finite");
       return Object.is(num, -0) ? "0" : String(num);
     }
     case "date": {
+      // Canonical parsing: the calendar day is the identity.
+      const day = nfc.trim();
       assert(
-        isoDate.test(text) &&
-          !Number.isNaN(Date.parse(text)) &&
-          new Date(text).toISOString().slice(0, 10) === text,
+        isoDate.test(day) &&
+          !Number.isNaN(Date.parse(day)) &&
+          new Date(day).toISOString().slice(0, 10) === day,
         400,
         "Import key date must be YYYY-MM-DD",
       );
-      return text;
+      return day;
     }
     case "select": {
+      // Exact option value in NFC. Case and whitespace are preserved.
       const options = property.options || [];
       assert(
-        options.includes(text),
+        options.includes(nfc),
         400,
         "Import key select value is not one of the property options",
       );
-      return text;
+      return nfc;
     }
     default:
-      // title, text. Case IS significant, because matching two records that
-      // differ only by case would update whichever the operator did not mean.
-      // Surrounding and repeated whitespace are still not significant, and the
-      // comparison is always in NFC. Unmatched keys insert instead, which fails
-      // safe. This is bound by KEY_NORMALIZATION_VERSION.
-      return text;
+      // title, text. NFC only: case and every whitespace character are part of
+      // the identity, so "AC-1", "ac-1" and "AC-1 " are three different keys.
+      // Unmatched keys insert instead, which fails safe.
+      return nfc;
   }
 }
 

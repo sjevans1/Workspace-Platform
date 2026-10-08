@@ -22,14 +22,16 @@ const select: Property = {
 };
 
 test("W09d keys normalize deterministically for the supported scalar types", () => {
-  // Text and title keys ignore surrounding space and internal runs, are
-  // compared in NFC, and keep their case.
-  assert.equal(normalizeKeyValue(text, "  AC-1  "), "AC-1");
+  // Title and text keys are exact NFC: case and every whitespace character are
+  // part of the identity.
   assert.equal(normalizeKeyValue(text, "AC-1"), "AC-1");
-  assert.equal(normalizeKeyValue(text, "AC  1\tB"), "AC 1 B");
+  assert.equal(normalizeKeyValue(text, "  AC-1  "), "  AC-1  ");
+  assert.equal(normalizeKeyValue(text, "AC  1\tB"), "AC  1\tB");
   assert.equal(normalizeKeyValue(title, "Café"), normalizeKeyValue(text, "Cafe\u0301"));
-  // Case is significant, so these are different keys rather than one.
+  // Case and whitespace are both significant, so none of these are one key.
   assert.notEqual(normalizeKeyValue(text, "AC-1"), normalizeKeyValue(text, "ac-1"));
+  assert.notEqual(normalizeKeyValue(text, "AC-1"), normalizeKeyValue(text, "AC-1 "));
+  assert.notEqual(normalizeKeyValue(text, "AC 1"), normalizeKeyValue(text, "AC  1"));
   assert.notEqual(normalizeKeyValue(title, "Café"), normalizeKeyValue(title, "CAFÉ"));
 
   // Numbers canonicalize, including signed zero and exponent input.
@@ -59,6 +61,10 @@ test("W09d keys treat absent and blank values as missing, not as a match", () =>
     // key that matches another sparse row.
     assert.equal(normalizeKeyValue(text, null), normalizeKeyValue(text, undefined));
   }
+  // Blankness is decided on its own. A value that merely contains whitespace is
+  // not blank, and that whitespace stays part of the key.
+  assert.equal(normalizeKeyValue(text, " a "), " a ");
+  assert.notEqual(normalizeKeyValue(text, " a "), normalizeKeyValue(text, "a"));
 });
 
 test("W09d keys reject malformed values and non-finite numbers", () => {
@@ -117,7 +123,7 @@ test("W09d keyed idempotency binds every input that could change the operation",
   };
   const digest = keyedImportDigest(base);
   assert.match(digest, /^[a-f0-9]{64}$/);
-  assert.equal(KEY_NORMALIZATION_VERSION, 2);
+  assert.equal(KEY_NORMALIZATION_VERSION, 3);
 
   // Changing any single bound input under the same idempotency key must be a
   // different operation.
