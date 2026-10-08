@@ -4221,10 +4221,16 @@ function dataRoutes(
     );
     const parent = await requireAccess(q, a, v.parent_id, 3);
     const { idempotency_key, ...rest } = v;
-    // Absent mode stays append, and append stays key blind. Resolving the mode
-    // once keeps the replay digest identical for an explicit and an implicit
-    // append.
-    const mode = rest.existing_mode || "append";
+    // Existing-database imports have always required an explicit mode. Preserve
+    // that accepted W09b safety contract: absence must not silently become
+    // append. New-database imports retain their previous payload shape.
+    if (v.target_database_id)
+      assert(
+        rest.existing_mode !== undefined,
+        400,
+        "Existing imports require an explicit mode",
+      );
+    const mode = rest.existing_mode;
     if (mode === "append")
       assert(
         rest.key_property_id === undefined,
