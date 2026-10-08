@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { prepareCsvImport, prepareCsvIntoExisting, csvSchemaDigest } from "../../../packages/imports/csv.ts";
 import type { ImportMode } from "../../../packages/imports/keys.ts";
 import { normalizeKeyValue, resolveKeyProperty } from "../../../packages/imports/keys.ts";
-import { planKeyedImport } from "../../../packages/imports/keyed.ts";
+import { keyedDecisionSet, keyedImportDigest, planKeyedImport } from "../../../packages/imports/keyed.ts";
 import { Database, one } from "../../../packages/database/index.ts";
 import { decrypt, emit, signature } from "../../../packages/events/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
@@ -454,6 +454,19 @@ export async function tick(
                 visible: matches.visible,
                 restrictedKeys: matches.restrictedKeys,
               });
+              assert(typeof p.keyed_plan_digest === "string",400,
+                "Keyed import requires an accepted preview plan digest");
+              const currentPlanDigest = keyedImportDigest({
+                mode,
+                key_property_id: keyProperty.id,
+                target_database_id: target.id,
+                schema_digest: p.expected_schema_digest,
+                content_hash: createHash("sha256").update(p.content).digest("hex"),
+                mapping: p.mapping,
+                decision_set: keyedDecisionSet(plan),
+              });
+              assert(currentPlanDigest === p.keyed_plan_digest,409,
+                "Import preview changed; preview again");
               // A missing, malformed or duplicated key, an ambiguous identity,
               // and a collision outside the actor's access all fail the whole
               // job before anything is written. The restricted case deliberately
