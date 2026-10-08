@@ -260,7 +260,7 @@ async function runSession(
     );
     await measure(
       "export",
-      () => request.get(`/api/v1/resources/${pageId}/export?format=csv`),
+      () => request.get(`/api/v1/resources/${pageId}/export?format=markdown`),
     );
     await measure("update", () =>
       request.patch(`/api/v1/resources/${pageId}`, {
@@ -395,7 +395,7 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
         "GET /api/v1/pages/:id/content",
         "GET /api/v1/search?q=",
         "GET /api/v1/resources/:id/permissions",
-        "GET /api/v1/resources/:id/export?format=csv",
+        "GET /api/v1/resources/:id/export?format=markdown",
         "PATCH /api/v1/resources/:id",
       ],
       dataset: "fresh space with one page per concurrent session",
