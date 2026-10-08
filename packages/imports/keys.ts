@@ -55,7 +55,7 @@ export type SupportedKeyType = (typeof supportedKeyTypes)[number];
  * safe-exact contract treats as distinct. Blankness is still decided separately,
  * before normalization.
  */
-export const KEY_NORMALIZATION_VERSION = 3;
+export const KEY_NORMALIZATION_VERSION = 4;
 
 const isoDate = /^\d{4}-\d{2}-\d{2}$/;
 
