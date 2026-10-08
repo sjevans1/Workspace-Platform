@@ -33,19 +33,14 @@ export const importMode = z.enum(importModes);
  *
  * Deliberately excluded: relation, rollup and formula (values are derived from
  * other rows, so a key would change without the imported data changing),
+ * title (CSV title conversion trims and therefore cannot preserve exact
+ * identity), select (CSV mapping does not yet support select values),
  * multi_select (no total order), person (identity is a membership, not a
- * value), status (option sets are edited through their own lifecycle, so key
- * stability needs its own reviewed decision), checkbox (two values cannot
- * identify a row) and url/email (string keys, but their normalization needs an
- * explicit decision about case and trailing slashes).
+ * value), status (option sets have their own lifecycle), checkbox (two values
+ * cannot identify a row), and url/email (normalization needs a separately
+ * reviewed contract).
  */
-export const supportedKeyTypes = [
-  "title",
-  "text",
-  "number",
-  "date",
-  "select",
-] as const;
+export const supportedKeyTypes = ["text", "number", "date"] as const;
 export type SupportedKeyType = (typeof supportedKeyTypes)[number];
 
 /**
