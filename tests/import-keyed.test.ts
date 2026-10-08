@@ -40,6 +40,7 @@ test("W09d append stays key-blind and unchanged", () => {
         mode: "append",
         rows: [{ code: "a" }],
         targetProperties: properties,
+        visible: [],
         keyPropertyId: "code",
       }),
     /Append mode does not take a key property/,
@@ -266,7 +267,13 @@ test("W09d a keyed operation is bound to its decisions for idempotent replay", (
 
 test("W09d keyed modes refuse a key property that is absent or unsuitable", () => {
   assert.throws(
-    () => planKeyedImport({ mode: "skip-existing", rows: [], targetProperties: properties }),
+    () =>
+      planKeyedImport({
+        mode: "skip-existing",
+        rows: [],
+        targetProperties: properties,
+        visible: [],
+      }),
     /require a key property/,
   );
   assert.throws(
@@ -276,6 +283,7 @@ test("W09d keyed modes refuse a key property that is absent or unsuitable", () =
         keyPropertyId: "missing",
         rows: [],
         targetProperties: properties,
+        visible: [],
       }),
     /not in the target schema/,
   );
@@ -285,6 +293,7 @@ test("W09d keyed modes refuse a key property that is absent or unsuitable", () =
         mode: "skip-existing",
         keyPropertyId: "rel",
         rows: [],
+        visible: [],
         targetProperties: [
           ...properties,
           { id: "rel", name: "Rel", type: "relation", target_database_id: "00000000-0000-0000-0000-000000000000" },
