@@ -275,6 +275,10 @@ test("W24 measures whole-stack capacity for 1/5/10/25 concurrent sessions", asyn
   page,
   browser,
 }) => {
+  // Matches the accepted W24-R capacity harness. This test intentionally
+  // measures four concurrency levels under the unchanged production rate
+  // limiter, so the suite-wide 90s browser timeout is not a valid bound.
+  test.setTimeout(12 * 60 * 1000);
   test.skip(
     process.env.E2E_W24_WHOLE_STACK !== "1",
     "W24 whole-stack capacity evidence runs only in the dedicated deployed acceptance step",
