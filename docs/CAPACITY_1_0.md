@@ -286,7 +286,9 @@ keyset batches, so the measurement covers the bounded path rather than the
 synchronous 10,000-row export.
 
 The backend job prints one line prefixed `W09E_EXPORT_BENCH` with the captured
-figures. Values from the accepted exact head are recorded below.
+figures. The values below were captured from the native backend job on head
+`85449db` (Actions run `37902845224`); the export code is unchanged since that
+run.
 
 | Property | Measured |
 | --- | --- |
@@ -295,11 +297,12 @@ figures. Values from the accepted exact head are recorded below.
 | CSV batches | 21 |
 | CSV artifact bytes | 286,720 |
 | JSON artifact bytes | 786,755 |
-| CSV export duration | to be captured from the accepted run |
-| Peak worker RSS | to be captured from the accepted run |
-| PostgreSQL connections before | to be captured from the accepted run |
-| PostgreSQL connections after | to be captured from the accepted run |
-| PostgreSQL locks observed | to be captured from the accepted run |
+| CSV export duration | 393 ms |
+| Whole export scenario elapsed | 874 ms |
+| Peak worker RSS | 525,869,056 bytes (about 501 MiB, upper bound incl. harness) |
+| PostgreSQL connections before | 12 total, 11 idle, 0 waiting |
+| PostgreSQL connections after | 12 total, 10 idle, 0 waiting |
+| PostgreSQL locks observed | 3 |
 
 ### Scope and limitations
 
