@@ -1,4 +1,5 @@
-FROM clamav/clamav:1.5.4-debian13-slim
+# CI-H1: ClamAV base from the GHCR mirror, pinned by immutable digest.
+FROM ghcr.io/sjevans1/workspace-ci-mirror-clamav@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
 
 USER root
 RUN apt-get update \

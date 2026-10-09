@@ -8,11 +8,6 @@ name: Mirror upstream images to GHCR
 # promotes. Promoting a new upstream digest is a reviewed change to
 # ci/ghcr-mirror-manifest.json followed by full acceptance.
 on:
-  # Temporary: lets this branch populate GHCR before the workflow exists on the
-  # default branch. Removed before merge; the final workflow keeps only
-  # workflow_dispatch and the weekly verify schedule.
-  push:
-    branches: [feature/ci-h1-ghcr-mirror]
   workflow_dispatch:
     inputs:
       refresh:

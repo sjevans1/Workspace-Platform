@@ -37,7 +37,7 @@ x-app: &app
   cap_drop: [ALL]
 services:
   postgres:
-    image: postgres:17.11-bookworm
+    image: ghcr.io/sjevans1/workspace-ci-mirror-postgres@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
     environment:
       POSTGRES_DB: workspace
       POSTGRES_USER: postgres
@@ -170,7 +170,7 @@ services:
     depends_on:
       api: { condition: service_healthy }
   caddy:
-    image: caddy:2.11.4-alpine
+    image: ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     environment:
       CADDY_ADDRESS: ${CADDY_ADDRESS:-:80}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}

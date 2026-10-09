@@ -21,9 +21,12 @@
       "mediaType": "application/vnd.oci.image.index.v1+json",
       "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-node",
       "mirrorTag": "24-trixie-slim",
-      "mirrorDigest": null,
+      "mirrorDigest": "sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66",
       "refreshDate": "2026-10-09",
-      "consumers": ["Dockerfile"]
+      "consumers": [
+        "Dockerfile"
+      ],
+      "digestVerifiedEqual": true
     },
     {
       "name": "postgres",
@@ -34,9 +37,13 @@
       "mediaType": "application/vnd.oci.image.index.v1+json",
       "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-postgres",
       "mirrorTag": "17.11-bookworm",
-      "mirrorDigest": null,
+      "mirrorDigest": "sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826",
       "refreshDate": "2026-10-09",
-      "consumers": ["compose.yaml", ".github/workflows/ci.yml"]
+      "consumers": [
+        "compose.yaml",
+        ".github/workflows/ci.yml"
+      ],
+      "digestVerifiedEqual": true
     },
     {
       "name": "clamav",
@@ -47,9 +54,12 @@
       "mediaType": "application/vnd.oci.image.index.v1+json",
       "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-clamav",
       "mirrorTag": "1.5.4-debian13-slim",
-      "mirrorDigest": null,
+      "mirrorDigest": "sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578",
       "refreshDate": "2026-10-09",
-      "consumers": ["Dockerfile.clamav"]
+      "consumers": [
+        "Dockerfile.clamav"
+      ],
+      "digestVerifiedEqual": true
     },
     {
       "name": "caddy",
@@ -60,9 +70,12 @@
       "mediaType": "application/vnd.oci.image.index.v1+json",
       "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-caddy",
       "mirrorTag": "2.11.4-alpine",
-      "mirrorDigest": null,
+      "mirrorDigest": "sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b",
       "refreshDate": "2026-10-09",
-      "consumers": ["compose.yaml"]
+      "consumers": [
+        "compose.yaml"
+      ],
+      "digestVerifiedEqual": true
     },
     {
       "name": "seaweedfs",
@@ -73,9 +86,12 @@
       "mediaType": "application/vnd.oci.image.index.v1+json",
       "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs",
       "mirrorTag": "4.47",
-      "mirrorDigest": null,
+      "mirrorDigest": "sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882",
       "refreshDate": "2026-10-09",
-      "consumers": [".github/workflows/ci.yml"]
+      "consumers": [
+        ".github/workflows/ci.yml"
+      ],
+      "digestVerifiedEqual": true
     }
   ],
   "excluded": [
@@ -83,5 +99,7 @@
       "image": "ghcr.io/valkey-io/valkey:8.1.10-alpine",
       "reason": "already repository-consumed from GHCR; unchanged by CI-H1"
     }
-  ]
+  ],
+  "refreshDate": "2026-10-09",
+  "lastMirrorRun": "37997268157"
 }
