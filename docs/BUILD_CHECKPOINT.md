@@ -14,6 +14,15 @@ Older W02–W04 and W08–W12 packages remain formally open only for their unpro
 
 Standalone boundary remains non-negotiable: Workspace operates independently; no mandatory OpenJM Enterprise AI code, runtime, credentials, data, model or service dependency.
 
+## Wave O closeout — 9 October 2026
+
+Wave O merged its W09 slices after this checkpoint:
+
+- **W09d governed keyed imports** — PR #173, merge `8e0126918c88c0eb237740f1b019aa4e25f1f529`; exact-head run `37898878592` green (backend + deployment); post-merge main run `37901677754` SUCCESS.
+- **W09e durable, bounded database export** — PR #177, merge `c940de67fff37c3c94e0e3a3dfff5ee3d6ca8889`; exact-head run `37905292425` green (native backend 10k export + deployed browser journey).
+
+The current accepted-versus-outstanding matrix is [WAVE_X_IMPLEMENTATION_PLAN.md](WAVE_X_IMPLEMENTATION_PLAN.md) section 2. Wave X (W25/W26) is the next tranche.
+
 ## Historical checkpoint trail
 
 Build the self-hosted OpenJM Workspace first pass from the Astra handoff. The user authorized implementation and GitHub commits/pushes, and requested incremental checkpoints to preserve continuity. Keep working without unnecessary confirmation. This is an executable alpha; see ACCEPTANCE.md for unfinished MVP requirements. Do not use Sites or connect a production Intelligence deployment without its configuration.

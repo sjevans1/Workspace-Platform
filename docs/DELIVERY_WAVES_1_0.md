@@ -110,6 +110,16 @@ Primary packages: **W23 + remaining W24**, with closure of W08/W09 operational-s
 - Worker backlog, object storage, antivirus and database pressure.
 - Close residual W08 concurrency/capacity and W09 process-failure gates using the same evidence instead of duplicating load frameworks.
 
+### Wave O closure (2026-10-09)
+
+Wave O's **W09** scope is closed by this tranche; the W23/W24 items remain tracked in [#167](https://github.com/sjevans1/Workspace-Platform/issues/167) and are not claimed complete here.
+
+- **W09 process reliability** was accepted in PR #169.
+- **W09d governed keyed imports** accepted in PR #173 (merge `8e0126918c88c0eb237740f1b019aa4e25f1f529`, exact-head run `37898878592`; post-merge main run `37901677754` SUCCESS).
+- **W09e durable, bounded database export** accepted in PR #177 (merge `c940de67fff37c3c94e0e3a3dfff5ee3d6ca8889`, exact-head run `37905292425`). Reuses the accepted lease/artifact/storage machinery; see [DURABLE_EXPORT.md](DURABLE_EXPORT.md) and the W09e section of [CAPACITY_1_0.md](CAPACITY_1_0.md).
+- W23 scheduled backups/restore drill and the W24 whole-stack capacity qualification are tracked in [#167](https://github.com/sjevans1/Workspace-Platform/issues/167) and [CAPACITY_1_0.md](CAPACITY_1_0.md); this closeout does not claim them complete. It closes the **W09** process-failure and large-export gates.
+- Residual **W08 live-reordering/named-host capacity** remains open and is not a W09 dependency.
+
 ## Wave X — experience and commercial packaging
 
 Primary packages: **W25 + W26**, plus residual W02–W04/W10–W12 product-completeness items that must be user-visible for release.
@@ -143,7 +153,7 @@ The following packages have substantial accepted implementation but remain forma
 - W02–W03 tenant IdP activation/provenance/logout.
 - W04 account recovery and optional invite mail.
 - W08 final live-reordering/named-host capacity acceptance.
-- W09 crash-safe jobs, cancellation, governed upsert/dedupe and large streaming export.
+- W09 crash-safe jobs, cancellation, governed upsert/dedupe and large streaming export. **Closed**: W09d (#173) and W09e (#177) accepted; process reliability accepted in #169.
 - W10 final collaboration/media/revocation reliability.
 - W11 comments/mentions package-level reconnect/revocation acceptance.
 - W12 notifications package-level retention/pagination/revocation acceptance.
