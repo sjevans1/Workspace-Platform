@@ -45,8 +45,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # W09e adds a 10k-row durable export qualification (two full exports plus
+      # reclaim/cancel/expiry scenarios) to the native suite. This raises only
+      # the wall-clock budget for this step; no product or security limit
+      # changes and no test is skipped.
       - run: npm test
-        timeout-minutes: 3
+        timeout-minutes: 8
       - name: Verify CI event orchestrator
         run: npm run test:ci-orchestrator
       - name: Verify production S3 acceptance harness
