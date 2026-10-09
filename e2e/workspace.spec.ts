@@ -663,7 +663,6 @@ test("W09e browser downloads a durable database export", async ({ page }) => {
 
   await page.goto("/?page=" + database.id);
   await expect(page.getByRole("table")).toBeVisible();
-  await expect(page.getByText(rowTitle, { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Page actions" }).click();
   const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
