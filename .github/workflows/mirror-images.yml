@@ -8,6 +8,11 @@ name: Mirror upstream images to GHCR
 # promotes. Promoting a new upstream digest is a reviewed change to
 # ci/ghcr-mirror-manifest.json followed by full acceptance.
 on:
+  # Temporary: lets this branch populate GHCR before the workflow exists on the
+  # default branch. Removed before merge; the final workflow keeps only
+  # workflow_dispatch and the weekly verify schedule.
+  push:
+    branches: [feature/ci-h1-ghcr-mirror]
   workflow_dispatch:
     inputs:
       refresh:
@@ -42,10 +47,27 @@ jobs:
         run: |
           set -euo pipefail
           mode="--verify"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.refresh }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
+            mode="--mirror"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.refresh }}" = "true" ]; then
             mode="--mirror"
           fi
           node scripts/ci/ghcr-mirror.mjs "$mode" --report mirror-report.json
+      - name: Publish mirror packages (best effort, for anonymous CI pulls)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The backend job starts postgres/seaweedfs as GitHub Actions service
+          # containers, which pull BEFORE any step can authenticate. Those
+          # mirrors therefore need to be publicly pullable. This is best effort:
+          # if the token cannot change visibility, the CI jobs additionally log
+          # in to GHCR before every non-service pull.
+          for pkg in node postgres clamav caddy seaweedfs; do
+            gh api --method PATCH "/user/packages/container/workspace-ci-mirror-${pkg}" \
+              -f visibility=public >/dev/null 2>&1 \
+              && echo "public: workspace-ci-mirror-${pkg}" \
+              || echo "could not set visibility for workspace-ci-mirror-${pkg} (continuing)"
+          done
       - name: Upload mirror report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
