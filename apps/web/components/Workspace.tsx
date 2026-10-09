@@ -33,7 +33,7 @@ import {
   date,
 } from "../lib/api";
 import { clearPrincipalWorkspaceDrafts } from "../lib/recovery-drafts";
-import { Modal, Empty, Spinner, Field } from "./common";
+import { Modal, Empty, Spinner, Field, FeatureExample } from "./common";
 import Resource from "./Resource";
 import NotificationInbox from "./NotificationInbox";
 import Settings from "./Settings";
@@ -574,6 +574,19 @@ function Dashboard({
               ? "Restore a parent before restoring its nested pages."
               : "Pick up where you left off."}
       </p>
+      <FeatureExample
+        feature={
+          screen === "home"
+            ? "home"
+            : screen === "favourites"
+              ? "favourites"
+              : screen === "templates"
+                ? "templates"
+                : screen === "trash"
+                  ? "trash"
+                  : "recent"
+        }
+      />
       {screen === "home" && (
         <div className="hero">
           <div>
@@ -831,6 +844,7 @@ function SearchDialog({ close }: { close: () => void }) {
   };
   return (
     <Modal title="Search your workspace" close={close}>
+      <FeatureExample feature="search" compact />
       <div className="search-field">
         <Search size={20} aria-hidden="true" />
         <input
@@ -1098,6 +1112,7 @@ function CreateDialog({
       title={importing ? "Import your work" : "Create something new"}
       close={close}
     >
+      <FeatureExample feature={importing ? "import" : "create"} compact />
       <form onSubmit={submit} className="form">
         {!(importing && file?.name.toLowerCase().endsWith(".zip")) && (
           <Field label="Name">
