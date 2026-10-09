@@ -14,7 +14,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { api, run, notify, go, changed } from "../lib/api";
-import { Modal, Field, Empty } from "./common";
+import { Modal, Field, Empty, FeatureExample } from "./common";
 export function PropertyInput({
   p,
   value,
@@ -408,6 +408,7 @@ export default function Database({
       {loading && <div className="database-status muted" role="status">
         Updating database…
       </div>}
+      <FeatureExample feature="database" />
       <div className="database-toolbar">
         <div className="view-tabs">
           <button
@@ -801,6 +802,7 @@ function ViewDialog({
     [copy, setCopy] = useState(false);
   return (
     <Modal title="View settings" close={close}>
+      <FeatureExample feature="databaseViews" compact />
       <form
         className="form"
         onSubmit={(e) => {
@@ -1120,6 +1122,7 @@ function PropertiesDialog({
     setProps((p) => p.map((x, j) => (i === j ? { ...x, ...v } : x)));
   return (
     <Modal title="Properties & columns" close={close} wide>
+      <FeatureExample feature="databaseProperties" compact />
       <form
         className="form"
         onSubmit={(e) => {

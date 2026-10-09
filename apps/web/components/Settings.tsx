@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { Plus, Copy, ArrowUpRight } from "lucide-react";
 import { api, run, notify, changed, date } from "../lib/api";
-import { Modal, Field } from "./common";
+import { Modal, Field, FeatureExample } from "./common";
 import type { Appearance } from "../lib/appearance";
 export default function Settings({
   me,
@@ -72,6 +72,21 @@ export default function Settings({
           </button>
         ))}
       </div>
+      <FeatureExample
+        feature={
+          tab === "members"
+            ? "members"
+            : tab === "branding"
+              ? "branding"
+              : tab === "integrations"
+                ? "integrations"
+                : tab === "webhooks"
+                  ? "webhooks"
+                  : tab === "audit"
+                    ? "audit"
+                    : "profile"
+        }
+      />
       {tab === "profile" && (
         <>
           <section className="settings-section">
@@ -330,6 +345,7 @@ export default function Settings({
             Explore the API <ArrowUpRight size={15} />
           </a>
           <hr className="section-divider" />
+          <FeatureExample feature="sso" compact />
           <div className="section-title">
             <div>
               <h2>Single sign-on provider registrations</h2>
@@ -386,6 +402,7 @@ export default function Settings({
             </div>
           ))}
           <hr className="section-divider" />
+          <FeatureExample feature="scim" compact />
           <div className="section-title">
             <div>
               <h2>Directory provisioning (SCIM 2.0)</h2>

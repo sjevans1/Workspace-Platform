@@ -2,7 +2,7 @@
 import {useCallback,useEffect,useRef,useState} from "react";
 import {ArrowRight,Bell,RefreshCw} from "lucide-react";
 import {api,date,go,notify} from "../lib/api";
-import {Empty} from "./common";
+import {Empty,FeatureExample} from "./common";
 
 type Notice={
   id:string;
@@ -123,9 +123,11 @@ export default function NotificationInbox(){
         <RefreshCw size={15}/> Refresh
       </button>
     </div>
+    <FeatureExample feature="inbox" />
     <fieldset className="notification-preferences" disabled={!preferences||savingPreferences}
       aria-label="Notification preferences">
       <legend>Notification preferences</legend>
+      <FeatureExample feature="notificationPreferences" compact />
       <p className="muted small-text">Choose which new alerts are delivered to this workspace. Earlier notifications remain in your inbox.</p>
       <label className="checkbox-line">
         <input type="checkbox" aria-label="Mention alerts"

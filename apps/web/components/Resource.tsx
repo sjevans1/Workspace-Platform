@@ -23,7 +23,7 @@ import {
   icon,
   date,
 } from "../lib/api";
-import { Modal, Spinner, Empty, Field } from "./common";
+import { Modal, Spinner, Empty, Field, FeatureExample } from "./common";
 import Database, { PropertyInput } from "./Database";
 const Editor = dynamic(() => import("./Editor"), {
   ssr: false,
@@ -324,6 +324,11 @@ export default function Resource({
           </span>
         </div>
       </div>
+      {node.kind !== "database" && (
+        <FeatureExample
+          feature={collection ? "space" : node.kind === "record" ? "record" : "page"}
+        />
+      )}
       {collection ? (
         <>
           <div className="section-title">
@@ -555,6 +560,7 @@ function Backlinks({ id }: { id: string }) {
           Refresh links
         </button>
       </div>
+      <FeatureExample feature="backlinks" compact />
       {loading ? (
         <p className="muted">Checking accessible page links…</p>
       ) : error ? (
@@ -611,6 +617,7 @@ export function Permissions({
   }, [id]);
   return (
     <Modal title="Manage access" close={close}>
+      <FeatureExample feature="permissions" compact />
       <div className="form">
         <p className="muted">
           Access follows the parent page. An ancestor with no access blocks its
@@ -782,6 +789,7 @@ function Comments({
   const replyingTo = rows.find((comment) => comment.id === replyTo);
   return (
     <Modal title="Discussion" close={close}>
+      <FeatureExample feature="comments" compact />
       <div className="comments" aria-label="Discussion threads">
         {threaded.length ? (
           threaded.map((c) => (
@@ -1005,6 +1013,7 @@ function HistoryPanel({
   }, [id]);
   return (
     <Modal title="Version history" close={close}>
+      <FeatureExample feature="history" compact />
       <p className="modal-copy muted">
         Checkpoints are kept before replacements and at most once per five
         minutes of live editing. Restoring creates a new revision.
@@ -1067,6 +1076,7 @@ function Files({
   }, [id]);
   return (
     <Modal title="Private attachments" close={close}>
+      <FeatureExample feature="files" compact />
       <div className="form">
         {files.map((f) => (
           <div className="file-row" key={f.id}>
@@ -1128,6 +1138,7 @@ function ActivityPanel({ id, close }: { id: string; close: () => void }) {
   }, [id]);
   return (
     <Modal title="Page activity" close={close}>
+      <FeatureExample feature="activity" compact />
       <div className="activity-list">
         {rows.map((n) => (
           <div key={n.id}>
