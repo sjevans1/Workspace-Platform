@@ -90,10 +90,11 @@ jobs:
     # The deployed acceptance job now hosts the whole-stack W24 qualification in
     # addition to deployment, the browser workflow, the Wave R harness, the
     # W24-R collaboration capacity run, the isolated restore drill, the
-    # malware/storage checks, accessibility and trusted TLS, which together
-    # exceed the previous 30-minute allowance on a hosted runner. This raises
-    # only the CI wall-clock budget; no product or security limit changes.
-    timeout-minutes: 45
+    # malware/storage checks, accessibility, the Wave X X0 engine/viewport
+    # harness and trusted TLS, which together exceed the previous allowance on a
+    # hosted runner. This raises only the CI wall-clock budget; no product or
+    # security limit changes.
+    timeout-minutes: 50
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -103,7 +104,7 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium firefox
+      - run: npx playwright install --with-deps chromium firefox webkit
       - name: Validate deployment configuration
         run: |
           node scripts/init-env.mjs
@@ -349,6 +350,18 @@ jobs:
       - name: Verify keyboard accessibility in Chromium and Firefox
         run: |
           E2E_BASE_URL=http://localhost:8080           E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"           npx playwright test --config=playwright.compat.config.ts
+      - name: Verify deterministic engine and viewport harness
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Wave X X0: named engine x viewport projects (chromium/firefox/webkit
+          # x desktop/tablet/phone) over the deterministic synthetic fixture,
+          # then a repeated-run determinism proof on one project. Linux WebKit is
+          # an engine-compatibility proxy, NOT a claim of Safari on macOS or iOS.
+          # Runs after the replenished sign-in budget because it authenticates.
+          npx playwright test --config=playwright.harness.config.ts
+          node scripts/e2e-determinism.mjs
       - name: Verify trusted HTTPS, secure cookies and WSS
         run: |
           docker compose down
