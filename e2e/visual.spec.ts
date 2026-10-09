@@ -1,5 +1,6 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { FIXTURE } from "./fixtures/catalog";
+import { readVisualFixture, type VisualFixture } from "./support/visual-fixture";
 
 // Wave X X2: deterministic visual regression, Chromium only, light and dark,
 // desktop and phone. Every surface is built from the synthetic fixture in
@@ -38,66 +39,13 @@ async function openNavigation(page: Page) {
   await page.waitForTimeout(300);
 }
 
-async function seed(page: Page) {
-  const me = await (await page.request.get("/api/v1/me")).json();
-  const headers = { "X-CSRF-Token": me.csrf };
-  const root = (await (await page.request.get("/api/v1/resources")).json())[0];
-  const spaceResponse = await page.request.post("/api/v1/resources", {
-    headers,
-    data: { kind: "space", parent_id: root.id, title: FIXTURE.space },
-  });
-  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
-  const space = await spaceResponse.json();
-  const pageResponse = await page.request.post("/api/v1/resources", {
-    headers,
-    data: { kind: "page", parent_id: space.id, title: FIXTURE.page },
-  });
-  expect(pageResponse.ok(), await pageResponse.text()).toBeTruthy();
-  const fixturePage = await pageResponse.json();
-  const contentResponse = await page.request.patch(
-    `/api/v1/pages/${fixturePage.id}/content`,
-    {
-      headers,
-      data: {
-        blocks: [
-          { type: "heading", props: { level: 1 }, content: FIXTURE.page },
-          { type: "paragraph", content: FIXTURE.pageBody },
-          { type: "checkListItem", content: "First deterministic item" },
-          { type: "checkListItem", content: "Second deterministic item" },
-        ],
-        expected_revision: 1,
-      },
-    },
-  );
-  expect(contentResponse.ok(), await contentResponse.text()).toBeTruthy();
-  const databaseResponse = await page.request.post("/api/v1/resources", {
-    headers,
-    data: { kind: "database", parent_id: space.id, title: FIXTURE.database },
-  });
-  expect(databaseResponse.ok(), await databaseResponse.text()).toBeTruthy();
-  const database = await databaseResponse.json();
-  const schemaResponse = await page.request.patch(
-    `/api/v1/databases/${database.id}`,
-    { headers, data: { properties: FIXTURE.properties } },
-  );
-  expect(schemaResponse.ok(), await schemaResponse.text()).toBeTruthy();
-  for (const values of FIXTURE.records) {
-    const recordResponse = await page.request.post(
-      `/api/v1/databases/${database.id}/records`,
-      { headers, data: { values } },
-    );
-    expect(recordResponse.ok(), await recordResponse.text()).toBeTruthy();
-  }
-  return { spaceId: space.id, pageId: fixturePage.id, databaseId: database.id };
-}
+// The deterministic fixture is seeded once by the setup project
+// (e2e/auth.setup.ts) and its ids are read here, so the four snapshot projects
+// do not repeat the writes and exhaust the shared API budget.
+let fixture: VisualFixture;
 
-// Seeded once per project; Playwright re-runs beforeAll for each project.
-let fixture: { spaceId: string; pageId: string; databaseId: string };
-
-test.beforeAll(async ({ browser }) => {
-  const page = await authenticatedPage(browser);
-  fixture = await seed(page);
-  await page.context().close();
+test.beforeAll(() => {
+  fixture = readVisualFixture();
 });
 
 test("sign-in surface", async ({ browser }) => {

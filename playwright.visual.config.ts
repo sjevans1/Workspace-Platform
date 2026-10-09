@@ -1,5 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
+// Setting this before the setup project runs makes e2e/auth.setup.ts seed the
+// deterministic visual fixture once for the whole snapshot matrix.
+process.env.E2E_SEED_VISUAL_FIXTURE = "1";
+
 // Wave X X0: visual-regression configuration skeleton.
 //
 // X0 establishes the configuration and the baseline policy only; X2 populates
