@@ -111,15 +111,15 @@ export type IntegrationRoutes = {
     path: "/api/v1/imports/preview";
     params: {  };
     query: {  };
-    body: { "parent_id": string; "content": string; "target_database_id"?: string; };
-    response: { "columns": Array<string>; "row_count": number; "mapping": Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; "sample": Array<Array<string>>; "warnings": Array<string>; "target"?: { "id": string; "schema_digest": string; "properties": Array<{ "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; }>; }; };
+    body: { "parent_id": string; "content": string; "target_database_id"?: string; "mode"?: "append" | "reject-on-existing" | "skip-existing" | "authorized-update"; "key_property_id"?: string; "mapping"?: Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; };
+    response: { "columns": Array<string>; "row_count": number; "mapping": Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; "sample": Array<Array<string>>; "warnings": Array<string>; "target"?: { "id": string; "schema_digest": string; "properties": Array<{ "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; }>; }; "keyed"?: { "mode": "reject-on-existing" | "skip-existing" | "authorized-update"; "key_property_id": unknown; "normalization_version": number; "plan_digest": string; "key_property": { "id": string; "name": string; "type": "text" | "number" | "date"; }; "counts": { "insert": number; "update": number; "skip": number; "conflict": number; "conflict_restricted": number; }; "needs_confirmation": boolean; "decisions": Array<{ "index": number; "action": "insert" | "update" | "skip" | "conflict" | "conflict_restricted"; "key": unknown; "resource_id"?: string; "expected_revision"?: number; "reason"?: "missing_key" | "malformed_key" | "duplicate_key_in_source" | "existing_record" | "ambiguous_match"; }>; }; };
   };
   "POST /imports": {
     method: "POST";
     path: "/api/v1/imports";
     params: {  };
     query: {  };
-    body: { "parent_id": string; "format": "markdown" | "csv"; "name": string; "content": string; "target_database_id"?: string; "expected_schema_digest"?: string; "existing_mode"?: "append"; "idempotency_key"?: string; "mapping"?: Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; };
+    body: { "parent_id": string; "format": "markdown" | "csv"; "name": string; "content": string; "target_database_id"?: string; "expected_schema_digest"?: string; "existing_mode"?: "append" | "reject-on-existing" | "skip-existing" | "authorized-update"; "key_property_id"?: string; "keyed_plan_digest"?: string; "confirm_keyed_updates"?: boolean; "idempotency_key"?: string; "mapping"?: Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; };
     response: { "id": string; "status": "pending" | "running" | "completed" | "failed" | "cancelled"; };
   };
   "GET /jobs/:id": {

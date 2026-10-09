@@ -2,12 +2,15 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash, randomUUID } from "node:crypto";
 import { prepareCsvImport, prepareCsvIntoExisting, csvSchemaDigest } from "../../../packages/imports/csv.ts";
+import type { ImportMode } from "../../../packages/imports/keys.ts";
+import { keyedImportDigest, normalizeKeyValue, resolveKeyProperty } from "../../../packages/imports/keys.ts";
+import { keyedDecisionSet, planKeyedImport } from "../../../packages/imports/keyed.ts";
 import { Database, one } from "../../../packages/database/index.ts";
 import { decrypt, emit, signature } from "../../../packages/events/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
 import { requireAccess } from "../../../packages/permissions/index.ts";
 import type { Actor } from "../../../packages/auth/index.ts";
-import { createResource, createRecord, purgeDeletedResource } from "../../api/src/domain.ts";
+import { createResource, createRecord, updateRecordCanonical, purgeDeletedResource, resolveKeyedMatches } from "../../api/src/domain.ts";
 import { createStorage, type Storage } from "../../../packages/storage/index.ts";
 import { createAntivirus, type Antivirus } from "../../../packages/security/antivirus.ts";
 import { exportPortableTree } from "../../api/src/portable-export.ts";
@@ -401,13 +404,12 @@ export async function tick(
           // creating the new database. The enclosing savepoint remains the
           // atomic rollback guard for subsequent DB/storage failures.
           if (p.target_database_id) {
-            // APPEND ONLY: no duplicate probing against hidden records and no
-            // SQL UPDATE. Recheck parent/target membership and hold schema
-            // row lock until all records are inserted and job completes.
-            assert(p.existing_mode === "append" &&
-              typeof p.expected_schema_digest === "string" &&
+            // Existing-database import. Append remains key blind and never
+            // probes an existing record.
+            const mode: ImportMode = p.existing_mode || "append";
+            assert(typeof p.expected_schema_digest === "string" &&
               Array.isArray(p.mapping),400,
-              "Existing import requires an explicit mapping and append mode");
+              "Existing import requires an explicit mapping and schema digest");
             const target = await requireAccess(q, a, p.target_database_id,3);
             assert(target.kind === "database" && !target.deleted_at &&
               target.parent_id === p.parent_id,404,
@@ -420,8 +422,84 @@ export async function tick(
               "Target schema changed; preview again");
             const prepared = prepareCsvIntoExisting(
               p.content,p.mapping,definition.properties);
-            for (const values of prepared.rows)
-              await createRecord(q,a,target.id,values);
+            if (mode === "append") {
+              assert(p.key_property_id === undefined,400,
+                "Append mode does not take a key property");
+              for (const values of prepared.rows)
+                await createRecord(q,a,target.id,values);
+            } else {
+              assert(p.key_property_id,400,
+                "Keyed import modes require an explicit key property");
+              // The plan is re-derived inside the job against current state, so
+              // decisions taken at preview time can never be applied blindly.
+              const keyProperty = resolveKeyProperty(
+                definition.properties,p.key_property_id);
+              const keys: string[] = [];
+              for (const values of prepared.rows) {
+                try {
+                  const normalized = normalizeKeyValue(
+                    keyProperty,values[keyProperty.id]);
+                  if (normalized) keys.push(normalized);
+                } catch {
+                  // Malformed keys are planned as conflicts, never looked up.
+                }
+              }
+              const matches = await resolveKeyedMatches(q,a,target.id,
+                keyProperty,keys,mode === "authorized-update" ? 3 : 1);
+              const plan = planKeyedImport({
+                mode,
+                rows: prepared.rows,
+                targetProperties: definition.properties,
+                keyPropertyId: keyProperty.id,
+                visible: matches.visible,
+                restrictedKeys: matches.restrictedKeys,
+              });
+              assert(typeof p.keyed_plan_digest === "string",400,
+                "Keyed import requires an accepted preview plan digest");
+              const currentPlanDigest = keyedImportDigest({
+                mode,
+                key_property_id: keyProperty.id,
+                target_database_id: target.id,
+                schema_digest: p.expected_schema_digest,
+                content_hash: createHash("sha256").update(p.content).digest("hex"),
+                mapping: p.mapping,
+                decision_set: keyedDecisionSet(plan),
+              });
+              assert(currentPlanDigest === p.keyed_plan_digest,409,
+                "Import preview changed; preview again");
+              // A missing, malformed or duplicated key, an ambiguous identity,
+              // and a collision outside the actor's access all fail the whole
+              // job before anything is written. The restricted case deliberately
+              // shares the ordinary conflict message, so a hidden row cannot be
+              // told apart from a visible one.
+              const conflicts = plan.rows.filter((row) =>
+                row.action === "conflict" || row.action === "conflict_restricted");
+              assert(!conflicts.length,409,
+                "Import stopped: " + conflicts.length +
+                " conflicting row(s); no records were written");
+              for (const decision of plan.rows) {
+                if (decision.action === "skip") continue;
+                if (decision.action === "insert") {
+                  await createRecord(q,a,target.id,prepared.rows[decision.index]);
+                  continue;
+                }
+                // Unreachable: every conflict was rejected above. Kept explicit
+                // so an unrecognised decision can never fall through to a write.
+                if (decision.action !== "update")
+                  assert(false,409,
+                    "Import stopped: unresolved row decision; no records were written");
+                // Recheck write permission on the exact record immediately
+                // before changing it, then update only if the revision the
+                // decision was built from is still current.
+                await updateRecordCanonical(
+                  q,
+                  a,
+                  decision.resource_id,
+                  prepared.rows[decision.index],
+                  decision.expected_revision,
+                );
+              }
+            }
             resource = target;
           } else {
             assert(!p.existing_mode && !p.expected_schema_digest,400,

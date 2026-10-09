@@ -7871,6 +7871,342 @@ test("W09c CSV submission retries are principal-bound, atomic and schema-aware",
   assert.equal((await ok("GET", url + "/records")).length, 2);
 });
 
+
+test("W09d native keyed preview is exact, non-enumerating and tenant-safe", async () => {
+  const importer = await freshMemberActor("W09d preview importer");
+  const importSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W09d preview " + randomUUID().slice(0, 8),
+  });
+  await permissionPatch(
+    "/resources/" + importSpace.id + "/permissions",
+    { inherit: false, grants: [{ principal_id: importer.id, level: 3 }] },
+  );
+
+  const target = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: importSpace.id,
+    title: "W09d keyed target",
+  });
+  const url = "/databases/" + target.id;
+  await ok("PATCH", url, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "code", name: "Code", type: "text" },
+      { id: "amount", name: "Amount", type: "number" },
+      { id: "due", name: "Due", type: "date" },
+    ],
+  });
+  const visible = await ok("POST", url + "/records", {
+    values: { name: "Visible", code: "AC-1", amount: 1, due: "2026-10-01" },
+  });
+  const hidden = await ok("POST", url + "/records", {
+    values: { name: "Hidden", code: "HIDDEN", amount: 9, due: "2026-10-09" },
+  });
+  await permissionPatch(
+    "/resources/" + hidden.id + "/permissions",
+    { inherit: false, grants: [{ principal_id: importer.id, level: 0 }] },
+  );
+
+  const content =
+    "Name,Code,Amount,Due\n" +
+    "Visible update,AC-1,2,2026-10-02\n" +
+    "Hidden attempt,HIDDEN,8,2026-10-08\n" +
+    "Case variant,ac-1,3,2026-10-03\n" +
+    "Whitespace variant,AC-1 ,4,2026-10-04\n";
+  const base = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content,
+  }, importer);
+  const governed = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content,
+    mapping: base.mapping,
+    mode: "authorized-update",
+    key_property_id: "code",
+  }, importer);
+  assert.equal(governed.keyed.normalization_version, 4);
+  assert.deepEqual(governed.keyed.counts, {
+    insert: 2,
+    update: 1,
+    skip: 0,
+    conflict: 0,
+    conflict_restricted: 1,
+  });
+  assert.match(governed.keyed.plan_digest, /^[a-f0-9]{64}$/);
+  const restricted = governed.keyed.decisions.find(
+    (decision: any) => decision.action === "conflict_restricted",
+  );
+  assert.deepEqual(restricted, {
+    index: 1,
+    action: "conflict_restricted",
+    key: null,
+  });
+  assert.doesNotMatch(JSON.stringify(governed.keyed), new RegExp(hidden.id));
+  assert.doesNotMatch(JSON.stringify(governed.keyed), /HIDDEN/);
+
+  assert.equal(
+    (
+      await req("POST", "/imports/preview", {
+        parent_id: importSpace.id,
+        target_database_id: target.id,
+        content,
+        mapping: base.mapping,
+        mode: "authorized-update",
+        key_property_id: "code",
+      }, other)
+    ).statusCode,
+    404,
+  );
+
+  const duplicateContent =
+    "Name,Code,Amount,Due\nOne,DUP,1,2026-10-01\nTwo,DUP,2,2026-10-02\n";
+  const duplicateBase = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: duplicateContent,
+  }, importer);
+  const duplicate = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: duplicateContent,
+    mapping: duplicateBase.mapping,
+    mode: "authorized-update",
+    key_property_id: "code",
+  }, importer);
+  assert.equal(duplicate.keyed.counts.conflict, 2);
+
+  const blankContent = "Name,Code,Amount,Due\nBlank,   ,1,2026-10-01\n";
+  const blankBase = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: blankContent,
+  }, importer);
+  const blank = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: blankContent,
+    mapping: blankBase.mapping,
+    mode: "authorized-update",
+    key_property_id: "code",
+  }, importer);
+  assert.equal(blank.keyed.counts.conflict, 1);
+
+  const numberContent =
+    "Name,Code,Amount,Due\nNumeric match,unused,1.0,2026-12-01\n";
+  const numberBase = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: numberContent,
+  }, importer);
+  const numberPreview = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: numberContent,
+    mapping: numberBase.mapping,
+    mode: "authorized-update",
+    key_property_id: "amount",
+  }, importer);
+  assert.equal(numberPreview.keyed.counts.update, 1);
+
+  const dateContent =
+    "Name,Code,Amount,Due\nDate match,unused,7,2026-10-01\n";
+  const dateBase = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: dateContent,
+  }, importer);
+  const datePreview = await ok("POST", "/imports/preview", {
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    content: dateContent,
+    mapping: dateBase.mapping,
+    mode: "authorized-update",
+    key_property_id: "due",
+  }, importer);
+  assert.equal(datePreview.keyed.counts.update, 1);
+
+  assert.equal(
+    (await ok("GET", "/records/" + visible.id, undefined, importer)).revision,
+    1,
+    "preview must remain read-only",
+  );
+});
+
+
+test("W09d worker binds accepted preview decisions and rolls back stale work", async () => {
+  const importer = await freshMemberActor("W09d worker importer");
+  const importSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W09d worker " + randomUUID().slice(0, 8),
+  });
+  await permissionPatch(
+    "/resources/" + importSpace.id + "/permissions",
+    { inherit: false, grants: [{ principal_id: importer.id, level: 3 }] },
+  );
+  const target = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: importSpace.id,
+    title: "W09d worker target",
+  });
+  const url = "/databases/" + target.id;
+  await ok("PATCH", url, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "code", name: "Code", type: "text" },
+      { id: "amount", name: "Amount", type: "number" },
+      { id: "due", name: "Due", type: "date" },
+    ],
+  });
+  const visible = await ok("POST", url + "/records", {
+    values: { name: "Visible", code: "AC-1", amount: 1, due: "2026-10-01" },
+  });
+
+  const previewFor = async (content: string) => {
+    const base = await ok("POST", "/imports/preview", {
+      parent_id: importSpace.id,
+      target_database_id: target.id,
+      content,
+    }, importer);
+    const keyed = await ok("POST", "/imports/preview", {
+      parent_id: importSpace.id,
+      target_database_id: target.id,
+      content,
+      mapping: base.mapping,
+      mode: "authorized-update",
+      key_property_id: "code",
+    }, importer);
+    return { base, keyed };
+  };
+  const requestFor = (
+    name: string,
+    content: string,
+    preview: any,
+    idempotency_key = randomUUID(),
+  ) => ({
+    parent_id: importSpace.id,
+    target_database_id: target.id,
+    format: "csv",
+    name,
+    content,
+    mapping: preview.base.mapping,
+    expected_schema_digest: preview.keyed.target.schema_digest,
+    existing_mode: "authorized-update",
+    key_property_id: "code",
+    keyed_plan_digest: preview.keyed.keyed.plan_digest,
+    // Every caller above intentionally authorizes a real update, so the
+    // server-side explicit-confirmation gate must be satisfied.
+    confirm_keyed_updates: true,
+    idempotency_key,
+  });
+
+  const updateContent =
+    "Name,Code,Amount,Due\nUpdated visible,AC-1,2,2026-10-02\n";
+  const accepted = await previewFor(updateContent);
+  const replayKey = randomUUID();
+  const acceptedRequest = requestFor(
+    "W09d accepted update",
+    updateContent,
+    accepted,
+    replayKey,
+  );
+  // The confirmation gate is intentional: an otherwise valid authorized update
+  // submitted without explicit confirmation is refused with 400.
+  const unconfirmed = await req(
+    "POST",
+    "/imports",
+    {
+      ...acceptedRequest,
+      confirm_keyed_updates: false,
+      idempotency_key: randomUUID(),
+    },
+    importer,
+  );
+  assert.equal(unconfirmed.statusCode, 400, unconfirmed.body);
+  assert.match(unconfirmed.body, /explicit confirmation/i);
+  const queued = await ok("POST", "/imports", acceptedRequest, importer);
+  await tick(db);
+  const completed = await ok("GET", "/jobs/" + queued.id, undefined, importer);
+  assert.equal(completed.status, "completed", JSON.stringify(completed.result));
+  const updated = await ok("GET", "/records/" + visible.id, undefined, importer);
+  assert.equal(updated.values.name, "Updated visible");
+  assert.equal(updated.revision, 2);
+  assert.deepEqual(
+    await ok("POST", "/imports", acceptedRequest, importer),
+    { id: queued.id, status: "completed" },
+  );
+
+  const staleBeforeSubmit = await previewFor(updateContent);
+  await ok("PATCH", "/records/" + visible.id, {
+    values: { name: "Owner changed after preview" },
+    expected_revision: 2,
+  });
+  const staleSubmit = await req(
+    "POST",
+    "/imports",
+    requestFor(
+      "W09d stale before submit",
+      updateContent,
+      staleBeforeSubmit,
+    ),
+    importer,
+  );
+  assert.equal(staleSubmit.statusCode, 409, staleSubmit.body);
+  assert.match(staleSubmit.body, /preview changed/i);
+
+  const workerContent =
+    "Name,Code,Amount,Due\n" +
+    "Worker stale,AC-1,5,2026-10-05\n" +
+    "Must roll back,FRESH-W09D,6,2026-10-06\n";
+  const workerPreview = await previewFor(workerContent);
+  const workerJob = await ok(
+    "POST",
+    "/imports",
+    requestFor("W09d worker revision fence", workerContent, workerPreview),
+    importer,
+  );
+  await ok("PATCH", "/records/" + visible.id, {
+    values: { name: "Changed after queue" },
+    expected_revision: 3,
+  });
+  await tick(db);
+  const workerFailed = await ok("GET", "/jobs/" + workerJob.id, undefined, importer);
+  assert.equal(workerFailed.status, "failed");
+  assert.match(workerFailed.result.error, /preview changed/i);
+  const rowsAfterRevisionFailure = await ok("GET", url + "/records", undefined, importer);
+  assert.equal(
+    rowsAfterRevisionFailure.some((row: any) => row.values.code === "FRESH-W09D"),
+    false,
+    "worker-time revision conflict must roll back the fresh insert",
+  );
+
+  const aclContent =
+    "Name,Code,Amount,Due\nACL stale,AC-1,7,2026-10-07\n";
+  const aclPreview = await previewFor(aclContent);
+  const aclJob = await ok(
+    "POST",
+    "/imports",
+    requestFor("W09d ACL fence", aclContent, aclPreview),
+    importer,
+  );
+  await permissionPatch(
+    "/resources/" + visible.id + "/permissions",
+    { inherit: false, grants: [{ principal_id: importer.id, level: 0 }] },
+  );
+  await tick(db);
+  const aclFailed = await ok("GET", "/jobs/" + aclJob.id, undefined, importer);
+  assert.equal(aclFailed.status, "failed");
+  assert.match(aclFailed.result.error, /preview changed|conflicting row/i);
+  assert.equal(
+    (await req("GET", "/records/" + visible.id, undefined, importer)).statusCode,
+    404,
+  );
+});
+
 test("W12b notification receipts require current recipient and page access", async () => {
   // Prior integration scenarios revoke their shared member session. Use a
   // dedicated active actor so this security proof is independent of test order.

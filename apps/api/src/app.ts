@@ -85,7 +85,15 @@ import {
   csvMappingSchema,
   previewCsvImport,
   csvSchemaDigest,
+  prepareCsvIntoExisting,
 } from "../../../packages/imports/csv.ts";
+import {
+  importMode,
+  keyedImportDigest,
+  normalizeKeyValue,
+  resolveKeyProperty,
+} from "../../../packages/imports/keys.ts";
+import { keyedDecisionSet, planKeyedImport } from "../../../packages/imports/keyed.ts";
 import {
   templates,
   blocksToMarkdown,
@@ -122,6 +130,8 @@ import { registerScim, setScimGroupRoleMapping } from "./scim.ts";
 import {
   createResource,
   createRecord,
+  updateRecordCanonical,
+  resolveKeyedMatches,
   records,
   replaceDocument,
   validatePeople,
@@ -2511,38 +2521,24 @@ function dataRoutes(
             .strict(),
           r,
         ),
-        d = await one(
+        current = await one(
           q,
-          "SELECT v.*,d.properties FROM database_records v JOIN databases d ON d.resource_id=v.database_id WHERE v.resource_id=$1 FOR UPDATE OF v,d",
+          "SELECT values FROM database_records WHERE resource_id=$1",
           [n.id],
         );
-      assert(d, 404, "Record not found");
-      assert(
-        d.revision === v.expected_revision,
-        409,
-        "Record changed; reload before saving",
+      assert(current, 404, "Record not found");
+      const updated = await updateRecordCanonical(
+        q,
+        a,
+        n.id,
+        { ...current.values, ...v.values },
+        v.expected_revision,
+        v.values,
       );
-      const values = validateValues(d.properties, { ...d.values, ...v.values });
-      await validatePeople(q, d.properties, values);
-      await validateRelationWrites(q, a, d.properties, v.values);
-      await q.query(
-        "UPDATE database_records SET values=$2,revision=revision+1 WHERE resource_id=$1",
-        [n.id, json(values)],
-      );
-      await q.query(
-        "UPDATE resources SET title=$2,search_text=$3,updated_at=now(),updated_by=$4 WHERE id=$1",
-        [
-          n.id,
-          values[d.properties.find((p: any) => p.type === "title").id],
-          indexedRecordText(d.properties, values),
-          a.user_id,
-        ],
-      );
-      await emit(q, a, "record.updated", n.id, d.revision + 1);
       return {
         ...n,
-        values: await presentedRecordValues(q, a, d.properties, values),
-        revision: d.revision + 1,
+        values: await presentedRecordValues(q, a, updated.properties, updated.values),
+        revision: updated.revision,
       };
     },
     "databases.write",
@@ -4048,6 +4044,13 @@ function dataRoutes(
             parent_id: uuid,
             content: z.string().max(2097152),
             target_database_id: uuid.optional(),
+            // W09d keyed modes. Absent mode stays append, which is key blind.
+            mode: importMode.optional(),
+            key_property_id: z
+              .string()
+              .regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/)
+              .optional(),
+            mapping: csvMappingSchema.optional(),
           })
           .strict(),
         r,
@@ -4090,6 +4093,77 @@ function dataRoutes(
             }
           : { ...m, skip: true };
       });
+      // W09d: a keyed mode reports the governed plan it would apply. The plan is
+      // built from records the actor may act on, and a key colliding with a
+      // record outside that set is reported only as a restricted conflict, with
+      // no key, identifier, revision or count of matching rows disclosed.
+      const mode = request.mode || "append";
+      let keyed: Record<string, unknown> | undefined;
+      if (mode !== "append") {
+        assert(request.mapping, 400, "Keyed import modes require an explicit mapping");
+        assert(request.key_property_id, 400, "Keyed import modes require a key property");
+        const keyProperty = resolveKeyProperty(
+          schema.properties,
+          request.key_property_id!,
+        );
+        const parsed = prepareCsvIntoExisting(
+          request.content,
+          request.mapping!,
+          schema.properties,
+        );
+        const keys: string[] = [];
+        for (const values of parsed.rows) {
+          try {
+            const normalized = normalizeKeyValue(keyProperty, values[keyProperty.id]);
+            if (normalized) keys.push(normalized);
+          } catch {
+            // Malformed keys are planned as conflicts; they are not looked up.
+          }
+        }
+        const matches = await resolveKeyedMatches(
+          q,
+          a,
+          target.id,
+          keyProperty,
+          keys,
+          mode === "authorized-update" ? 3 : 1,
+        );
+        const plan = planKeyedImport({
+          mode,
+          rows: parsed.rows,
+          targetProperties: schema.properties,
+          keyPropertyId: keyProperty.id,
+          visible: matches.visible,
+          restrictedKeys: matches.restrictedKeys,
+        });
+        const planDigest = keyedImportDigest({
+          mode: plan.mode,
+          key_property_id: keyProperty.id,
+          target_database_id: target.id,
+          schema_digest: csvSchemaDigest(schema.properties),
+          content_hash: createHash("sha256").update(request.content).digest("hex"),
+          mapping: request.mapping,
+          decision_set: keyedDecisionSet(plan),
+        });
+        keyed = {
+          mode: plan.mode,
+          key_property_id: plan.key_property_id,
+          normalization_version: plan.normalization_version,
+          plan_digest: planDigest,
+          key_property: {
+            id: keyProperty.id,
+            name: keyProperty.name,
+            type: keyProperty.type,
+          },
+          counts: plan.counts,
+          // Applying updates always needs explicit confirmation.
+          needs_confirmation: plan.counts.update > 0,
+          // A bounded, ordered sample of the planned actions. Update entries may
+          // name the visible record they would change; restricted conflicts are
+          // indistinguishable from one another.
+          decisions: plan.rows.slice(0, 50),
+        };
+      }
       return {
         ...preview,
         mapping: suggestions,
@@ -4102,6 +4176,7 @@ function dataRoutes(
             type: p.type,
           })),
         },
+        keyed,
       };
     },
     "databases.write",
@@ -4120,7 +4195,16 @@ function dataRoutes(
             .string()
             .regex(/^[a-f0-9]{64}$/)
             .optional(),
-          existing_mode: z.literal("append").optional(),
+          existing_mode: importMode.optional(),
+          key_property_id: z
+            .string()
+            .regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/)
+            .optional(),
+          keyed_plan_digest: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
+          confirm_keyed_updates: z.boolean().optional(),
           idempotency_key: z
             .string()
             .regex(/^[A-Za-z0-9_-]{16,128}$/)
@@ -4139,7 +4223,42 @@ function dataRoutes(
       "CSV-specific options require CSV format",
     );
     const parent = await requireAccess(q, a, v.parent_id, 3);
-    const { idempotency_key, ...payload } = v;
+    const { idempotency_key, ...rest } = v;
+    // Existing-database imports have always required an explicit mode. Preserve
+    // that accepted W09b safety contract: absence must not silently become
+    // append. New-database imports retain their previous payload shape.
+    if (v.target_database_id)
+      assert(
+        rest.existing_mode !== undefined,
+        400,
+        "Existing imports require an explicit mode",
+      );
+    // A new-database import has no mode and stays append. A target-database
+    // import always has one, because the assertion above requires it.
+    const mode = rest.existing_mode || "append";
+    if (mode === "append")
+      assert(
+        rest.key_property_id === undefined && rest.keyed_plan_digest === undefined,
+        400,
+        "Append mode does not take keyed import controls",
+      );
+    else {
+      assert(
+        rest.key_property_id,
+        400,
+        "Keyed import modes require an explicit key property",
+      );
+      assert(
+        rest.keyed_plan_digest,
+        400,
+        "Keyed import modes require the accepted preview plan digest",
+      );
+    }
+    // Only a target-database import carries a resolved mode. A new-database
+    // import keeps its previous payload shape, which the worker asserts on.
+    const payload = v.target_database_id
+      ? { ...rest, existing_mode: mode }
+      : rest;
     // Bind the replay identity to *all* validated import parameters and the
     // signed-in principal. CSV bytes are hashed, never logged in a response.
     const digest = idempotency_key
@@ -4161,10 +4280,9 @@ function dataRoutes(
       assert(
         v.format === "csv" &&
           v.mapping &&
-          v.existing_mode === "append" &&
           v.expected_schema_digest,
         400,
-        "Existing imports require explicit append mode, mapping and schema digest",
+        "Existing imports require explicit mode, mapping and schema digest",
       );
       const target = await requireAccess(q, a, v.target_database_id, 3);
       assert(
@@ -4209,6 +4327,65 @@ function dataRoutes(
         409,
         "Target schema changed; preview again",
       );
+      if (mode !== "append") {
+        const keyProperty = resolveKeyProperty(
+          definition.properties,
+          v.key_property_id!,
+        );
+        const prepared = prepareCsvIntoExisting(
+          v.content,
+          v.mapping!,
+          definition.properties,
+        );
+        const keys: string[] = [];
+        for (const values of prepared.rows) {
+          try {
+            const normalized = normalizeKeyValue(
+              keyProperty,
+              values[keyProperty.id],
+            );
+            if (normalized) keys.push(normalized);
+          } catch {
+            // Malformed keys are represented as conflicts in the plan.
+          }
+        }
+        const matches = await resolveKeyedMatches(
+          q,
+          a,
+          v.target_database_id,
+          keyProperty,
+          keys,
+          mode === "authorized-update" ? 3 : 1,
+        );
+        const plan = planKeyedImport({
+          mode,
+          rows: prepared.rows,
+          targetProperties: definition.properties,
+          keyPropertyId: keyProperty.id,
+          visible: matches.visible,
+          restrictedKeys: matches.restrictedKeys,
+        });
+        const currentPlanDigest = keyedImportDigest({
+          mode,
+          key_property_id: keyProperty.id,
+          target_database_id: v.target_database_id,
+          schema_digest: v.expected_schema_digest!,
+          content_hash: createHash("sha256").update(v.content).digest("hex"),
+          mapping: v.mapping,
+          decision_set: keyedDecisionSet(plan),
+        });
+        assert(
+          currentPlanDigest === v.keyed_plan_digest,
+          409,
+          "Import preview changed; preview again",
+        );
+        if (mode === "authorized-update" && plan.counts.update > 0)
+          assert(
+            v.confirm_keyed_updates === true,
+            400,
+            "Authorized updates require explicit confirmation",
+          );
+      }
     }
     const jid = randomUUID();
     if (!idempotency_key) {

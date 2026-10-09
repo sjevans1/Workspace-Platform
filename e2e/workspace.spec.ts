@@ -1928,6 +1928,111 @@ test("W09 deployed browser: CSV preview suggests types, maps fields, and require
   await expect(dialog).not.toBeVisible();
 });
 
+test("W09d deployed browser governs keyed authorized updates end to end", async ({page}) => {
+  test.setTimeout(150000);
+  await login(page);
+  const me = await (await page.request.get("/api/v1/me")).json();
+  const headers = {"X-CSRF-Token": me.csrf};
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const stamp = Date.now();
+
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {kind:"space", parent_id:roots[0].id, title:"W09d UI space "+stamp},
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+
+  const dbResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {kind:"database", parent_id:space.id, title:"W09d UI target "+stamp},
+  });
+  expect(dbResponse.ok(), await dbResponse.text()).toBeTruthy();
+  const database = await dbResponse.json();
+
+  const schemaResponse = await page.request.patch("/api/v1/databases/" + database.id, {
+    headers,
+    data: {properties:[
+      {id:"name", name:"Name", type:"title"},
+      {id:"code", name:"Code", type:"text"},
+      {id:"amount", name:"Amount", type:"number"},
+    ]},
+  });
+  expect(schemaResponse.ok(), await schemaResponse.text()).toBeTruthy();
+
+  const recordResponse = await page.request.post(
+    "/api/v1/databases/" + database.id + "/records",
+    {
+      headers,
+      data:{values:{name:"Original", code:"AC-1", amount:1}},
+    },
+  );
+  expect(recordResponse.ok(), await recordResponse.text()).toBeTruthy();
+
+  await page.getByRole("button", {name:/Import your work/}).click();
+  const dialog = page.getByRole("dialog", {name:"Import your work"});
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Create in").selectOption(space.id);
+
+  const content =
+    "Name,Code,Amount\n" +
+    "Updated through UI,AC-1,2\n" +
+    "Fresh through UI,AC-2,3\n";
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name:"governed-update.csv",
+    mimeType:"text/csv",
+    buffer:Buffer.from(content,"utf8"),
+  });
+
+  const destination = dialog.getByLabel("Import destination mode");
+  await expect(destination.locator(`option[value="${database.id}"]`))
+    .toHaveCount(1);
+  await destination.selectOption(database.id);
+  await dialog.getByLabel("Existing-record behavior")
+    .selectOption("authorized-update");
+
+  const action = dialog.getByRole("button", {name:"Import", exact:true});
+  await expect(action).toBeDisabled();
+
+  await dialog.getByRole("button", {name:"Preview CSV columns"}).click();
+  await expect(dialog.getByText(/2 data rows/)).toBeVisible();
+  await dialog.getByLabel("Import key property").selectOption("code");
+  await dialog.getByRole("button", {
+    name:"Preview existing-record decisions",
+  }).click();
+
+  const governed = dialog.getByLabel("Governed import preview");
+  await expect(governed).toContainText("1 insert");
+  await expect(governed).toContainText("1 update");
+  await expect(governed).toContainText("0 skip");
+  await expect(governed).toContainText("0 conflict");
+  await expect(action).toBeDisabled();
+
+  await dialog.getByLabel("Confirm governed updates").check();
+  await expect(action).toBeEnabled();
+  await action.click();
+
+  await expect(dialog).not.toBeVisible({timeout:120000});
+  await expect.poll(async () => {
+    const response = await page.request.get(
+      "/api/v1/databases/" + database.id + "/records",
+    );
+    if (!response.ok()) return [];
+    return await response.json();
+  }, {timeout:120000}).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      values: expect.objectContaining({
+        name:"Updated through UI", code:"AC-1", amount:2,
+      }),
+    }),
+    expect.objectContaining({
+      values: expect.objectContaining({
+        name:"Fresh through UI", code:"AC-2", amount:3,
+      }),
+    }),
+  ]));
+});
+
 test("W09b deployed browser requires explicit append-only target confirmation", async ({page}) => {
   await login(page);
   const me = await (await page.request.get("/api/v1/me")).json();
