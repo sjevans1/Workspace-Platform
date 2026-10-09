@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { Lightbulb, X } from "lucide-react";
+import { featureExamples, type FeatureExampleKey } from "../lib/feature-examples";
 export function Modal({
   title,
   children,
@@ -144,5 +145,27 @@ export function Field({
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+
+export function FeatureExample({
+  feature,
+  compact = false,
+}: {
+  feature: FeatureExampleKey;
+  compact?: boolean;
+}) {
+  return (
+    <aside
+      className={`feature-example ${compact ? "compact" : ""}`}
+      aria-label="Example use"
+    >
+      <Lightbulb size={16} aria-hidden="true" />
+      <div>
+        <strong>Example use</strong>
+        <span>{featureExamples[feature]}</span>
+      </div>
+    </aside>
   );
 }
