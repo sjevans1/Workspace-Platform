@@ -59,6 +59,23 @@ Baselines live in `e2e/visual.spec.ts-snapshots/` and are committed.
   against a running stack.
 - A failing snapshot is investigated, never refreshed to green.
 
+## Step ordering (load-bearing)
+
+The visual comparison runs **first among browser steps** in the deployment job,
+immediately after the stack is healthy and the EICAR check, and before the
+deployed browser workflow, the Wave R harness and the capacity runs.
+
+Reason: the shell and page surfaces render workspace-wide state (sidebar
+resource tree, recently viewed, page chrome). Those baselines are only
+reproducible against a pristine, freshly-seeded workspace. Running the visual
+step last produced 0.02-0.05 content differences on `workspace-shell` and
+`page-blocks` regardless of how exactly the baselines were generated. Do not
+move it later, and do not mask those regions instead.
+
+The step is also the first authenticated step, so its single setup-project
+sign-in does not compete with the reused sign-in budget that the later steps
+consume.
+
 ## Drift-detection proof
 
 The spec contains a `@canary` case that deliberately inverts the database table
