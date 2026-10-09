@@ -251,7 +251,7 @@ For a bounded disposable-host validation outside CI, including WSL/Linux restart
 
 ## Repeat the S3 recovery check
 
-CI starts `chrislusf/seaweedfs:4.47` with its default `weed mini` entrypoint, synthetic test credentials and `S3_BUCKET=workspace-ci`. Only the S3 port is exposed. This service is disposable test infrastructure; see [SeaweedFS mini documentation](https://github.com/seaweedfs/seaweedfs/wiki/Quick-Start-with-weed-mini) for its configuration.
+CI starts `ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs` (the digest-pinned GHCR mirror of `chrislusf/seaweedfs:4.47`; see `ci/ghcr-mirror-manifest.json`) with its default `weed mini` entrypoint, synthetic test credentials and `S3_BUCKET=workspace-ci`. Only the S3 port is exposed. This service is disposable test infrastructure; see [SeaweedFS mini documentation](https://github.com/seaweedfs/seaweedfs/wiki/Quick-Start-with-weed-mini) for its configuration.
 
 To run the same check locally, start an isolated service:
 
@@ -260,7 +260,7 @@ docker run --rm --name workspace-s3-check \
   -p 127.0.0.1:8333:8333 \
   -e AWS_ACCESS_KEY_ID=workspace-ci \
   -e AWS_SECRET_ACCESS_KEY=workspace-ci-secret \
-  -e S3_BUCKET=workspace-ci chrislusf/seaweedfs:4.47
+  -e S3_BUCKET=workspace-ci ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs
 ```
 
 In another terminal, set TEST_DATABASE_URL to a disposable native PostgreSQL service whose test account can create databases, then run:

@@ -25,7 +25,7 @@ Workspace deliberately does not return the malware signature name to the end use
 The default Docker deployment builds a small hardened scanner image from the official ClamAV base:
 
 ```
-FROM clamav/clamav:1.5.4-debian13-slim
+FROM ghcr.io/sjevans1/workspace-ci-mirror-clamav@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
 ```
 
 `Dockerfile.clamav` applies current Debian security upgrades during the release build before the image is accepted. ClamAV itself remains on the explicit `1.5.4-debian13-slim` upstream line, while the derived `openjm-workspace-clamav:local` image is the artifact actually SBOMed, vulnerability-scanned and deployed. Signature data is intentionally mutable operational data and is refreshed into the persistent `clamav_db` volume.
