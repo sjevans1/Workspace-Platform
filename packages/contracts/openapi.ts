@@ -472,6 +472,7 @@ export const integrationOpenApi: Record<string, JsonSchema> = {
         existing_mode: { enum: ["append","reject-on-existing","skip-existing","authorized-update"] },
         key_property_id: { type: "string", pattern: "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$" },
         keyed_plan_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        confirm_keyed_updates: { type: "boolean" },
         idempotency_key: { type: "string",
           pattern: "^[A-Za-z0-9_-]{16,128}$", minLength: 16, maxLength: 128 },
         mapping: { type: "array", minItems: 1, maxItems: 100,
