@@ -90,11 +90,11 @@ jobs:
     # The deployed acceptance job now hosts the whole-stack W24 qualification in
     # addition to deployment, the browser workflow, the Wave R harness, the
     # W24-R collaboration capacity run, the isolated restore drill, the
-    # malware/storage checks, accessibility, the Wave X X0 engine/viewport
-    # harness and trusted TLS, which together exceed the previous allowance on a
-    # hosted runner. This raises only the CI wall-clock budget; no product or
-    # security limit changes.
-    timeout-minutes: 50
+    # malware/storage checks, accessibility across three engines and three
+    # viewports, the Wave X X0 engine/viewport harness and trusted TLS, which
+    # together exceed the previous allowance on a hosted runner. This raises only
+    # the CI wall-clock budget; no product or security limit changes.
+    timeout-minutes: 55
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -347,8 +347,12 @@ jobs:
           # lock pressure, worker and queue backlog. Writes
           # capacity-results/w24-reference-host.json.
           npx playwright test e2e/w24-capacity.spec.ts
-      - name: Verify keyboard accessibility in Chromium and Firefox
+      - name: Verify keyboard accessibility across engines and viewports
         run: |
+          # Wave X X1: Chromium, Firefox and WebKit x desktop/tablet/phone.
+          # Linux WebKit is an engine-compatibility proxy, not Safari on
+          # macOS/iOS. No assertion is removed and no gate is lowered to pass an
+          # engine.
           E2E_BASE_URL=http://localhost:8080           E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"           npx playwright test --config=playwright.compat.config.ts
       - name: Verify deterministic engine and viewport harness
         env:
