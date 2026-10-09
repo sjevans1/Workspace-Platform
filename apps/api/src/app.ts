@@ -2533,6 +2533,7 @@ function dataRoutes(
         n.id,
         { ...current.values, ...v.values },
         v.expected_revision,
+        v.values,
       );
       return {
         ...n,
