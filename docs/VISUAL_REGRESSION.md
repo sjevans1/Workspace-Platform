@@ -1,7 +1,6 @@
 # Visual regression (Wave X)
 
-**Status: X0 skeleton.** The configuration and this policy exist; no baselines
-are committed and CI does not run the visual config until **X2**.
+**Status: X2 implemented.** Thirty committed baselines cover the surface set below. CI runs the visual config in comparison mode on every run and proves drift detection with the canary; it never updates baselines.
 
 ## Why
 
@@ -29,28 +28,40 @@ only.
 
 ## Snapshot scope (X2)
 
-The smallest representative surface set, eight surfaces: the sign-in screen; the
-workspace shell with sidebar and recently viewed; a page with the core block set;
-the database table view; the board view; the calendar view; the settings branding
-panel; the manage-access dialog. Inbox is a ninth only if the fixture can make it
-deterministic.
+Eight surfaces, from the deterministic fixture only:
 
-## Baseline policy
+1. sign-in screen;
+2. workspace shell with the sidebar (the navigation is opened first at phone width);
+3. a page with the core block set;
+4. the database table view;
+5. the board view;
+6. the calendar view;
+7. the settings/branding surface;
+8. the manage-access dialog.
 
-- Baselines live in this **public** repository only because every fixture is
-  synthetic and non-sensitive. No customer, private or contradictory content may
-  ever be committed.
-- Any baseline change requires an explicit update command, a visible diff in
-  review and a stated reason.
-- CI never auto-updates a baseline. A failing snapshot is investigated, never
-  refreshed to green.
-- The harness must first fail on an intentional canary change before its
-  baselines are trusted.
+Viewport scope: light and dark at desktop `1440x1000` and phone `390x844`. The
+settings surface is a modal reached from the navigation; it is captured at
+desktop only, because the phone off-canvas navigation does not expose it
+deterministically to Playwright. Phone coverage is provided by the other seven
+surfaces. Inbox is not included because the fixture cannot make it deterministic.
 
-## Reproducing
+## Baseline update process
 
-```bash
-E2E_BASE_URL=http://localhost:8080 npx playwright test --config=playwright.visual.config.ts
-```
+Baselines live in `e2e/visual.spec.ts-snapshots/` and are committed.
 
-Baseline updates are explicit (`--update-snapshots`) and must be reviewed.
+- **CI never updates them.** A normal run only compares.
+- To regenerate, trigger the `Workspace verification` workflow with
+  `update_visual_baselines: true` (Actions → Run workflow). The deployment job
+  runs `--update-snapshots` (excluding the canary, which must never write a
+  baseline) and uploads `e2e/visual.spec.ts-snapshots` as the `visual-baselines`
+  artifact for review and commit. Locally the same command is
+  `npx playwright test --config=playwright.visual.config.ts --grep-invert "@canary" --update-snapshots`
+  against a running stack.
+- A failing snapshot is investigated, never refreshed to green.
+
+## Drift-detection proof
+
+The spec contains a `@canary` case that deliberately inverts the database table
+and compares it against the committed baseline with `maxDiffPixelRatio: 0`. CI
+runs it with `--grep @canary` and asserts a **non-zero exit**; a canary that
+passes means the comparison is not actually running.
