@@ -8970,3 +8970,303 @@ test("W17 export redacts unreadable external relation schema metadata", async ()
         "Hidden relation target UUID must not leak into archive metadata",
       );
 });
+
+test("W09e durable database export is bounded, permission-safe and cancellable", async () => {
+  const exporter = await freshMemberActor("W09e exporter");
+  const exportSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W09e " + randomUUID().slice(0, 8),
+  });
+  await permissionPatch(
+    `/resources/${exportSpace.id}/permissions`,
+    { inherit: false, grants: [{ principal_id: exporter.id, level: 3 }] },
+  );
+  const dataset = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: exportSpace.id,
+    title: "W09e export database",
+  });
+  const url = "/databases/" + dataset.id;
+  await ok("PATCH", url, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "qty", name: "Qty", type: "number" },
+      { id: "note", name: "Note", type: "text" },
+    ],
+  });
+  await ok(
+    "POST",
+    url + "/records",
+    { values: { name: "Visible anchor", qty: 1, note: "anchor" } },
+    exporter,
+  );
+
+  // A deterministic 10k fixture, inserted transactionally so the capacity run
+  // is practical under restricted PostgreSQL/RLS. Row 0 carries a formula-like
+  // and a Unicode cell to prove neutralisation and encoding round-trips.
+  const SIZE = 10000,
+    ids = Array.from({ length: SIZE }, () => randomUUID()),
+    tenant = owner.tenant;
+  await db.tenant(tenant, async (q) => {
+    await q.query(
+      "INSERT INTO resources(id,tenant_id,parent_id,kind,title,position)" +
+        " SELECT x.id,$2::uuid,$3::uuid,'record','W09e row ' || x.n::text,x.n::float8" +
+        " FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id,n)",
+      [ids, tenant, dataset.id],
+    );
+    await q.query(
+      "INSERT INTO database_records(tenant_id,resource_id,database_id,values)" +
+        " SELECT $2::uuid,r.id,$3::uuid,jsonb_build_object(" +
+        " 'name',CASE WHEN r.position=1 THEN '=cmd|+1' WHEN r.position=2 THEN 'Ünïcode ✓' ELSE r.title END," +
+        " 'qty',r.position::numeric," +
+        " 'note',CASE WHEN r.position=1 THEN '=1+1' ELSE 'note ' || r.position::text END)" +
+        " FROM resources r WHERE r.id=ANY($1::uuid[])",
+      [ids, tenant, dataset.id],
+    );
+  });
+
+  const connBefore = {
+    total: db.pool.totalCount,
+    idle: db.pool.idleCount,
+    waiting: db.pool.waitingCount,
+  };
+  const started = Date.now();
+
+  // Client disconnect: the export is queued and then deliberately never polled;
+  // the worker completes it independently of any client connection.
+  const csvJob = await ok(
+    "POST",
+    `/resources/${dataset.id}/export/jobs`,
+    { format: "csv" },
+    exporter,
+  );
+  await tick(db, undefined, fakeAntivirus);
+  const csvDone = await ok("GET", `/jobs/${csvJob.id}`, undefined, exporter);
+  assert.equal(csvDone.status, "completed", JSON.stringify(csvDone.result));
+  assert.equal(csvDone.result.rows, SIZE + 1);
+  assert.equal(csvDone.result.batch_size, 500);
+  assert.ok(csvDone.result.batches >= Math.ceil((SIZE + 1) / 500));
+  assert.match(csvDone.result.sha256, /^[a-f0-9]{64}$/);
+  assert.ok(csvDone.result.peak_rss_bytes > 0);
+
+  const csvDownload = await req(
+    "GET",
+    `/jobs/${csvJob.id}/export`,
+    undefined,
+    exporter,
+  );
+  assert.equal(csvDownload.statusCode, 200, csvDownload.body);
+  assert.match(String(csvDownload.headers["content-type"]), /text\/csv/);
+  const csv = String(csvDownload.rawPayload),
+    lines = csv.trimEnd().split("\n");
+  assert.equal(lines[0], "Name,Qty,Note", "stable schema-ordered header");
+  assert.equal(lines.length, SIZE + 2, "header plus every readable row");
+  assert.match(csv, /'=cmd\|/, "title formula lead is neutralised");
+  assert.match(csv, /'=1\+1/, "note formula lead is neutralised");
+  assert.match(csv, /Ünïcode/);
+  assert.equal(
+    new Set(lines.slice(1)).size,
+    SIZE + 1,
+    "keyset scan must not duplicate rows",
+  );
+
+  // JSON export on the same source.
+  const jsonJob = await ok(
+    "POST",
+    `/resources/${dataset.id}/export/jobs`,
+    { format: "json" },
+    exporter,
+  );
+  await tick(db, undefined, fakeAntivirus);
+  const jsonDownload = await req(
+    "GET",
+    `/jobs/${jsonJob.id}/export`,
+    undefined,
+    exporter,
+  );
+  assert.equal(jsonDownload.statusCode, 200, jsonDownload.body);
+  assert.match(
+    String(jsonDownload.headers["content-type"]),
+    /application\/json/,
+  );
+  const parsed = JSON.parse(String(jsonDownload.rawPayload));
+  assert.equal(parsed.length, SIZE + 1);
+  assert.ok(parsed.some((r: any) => r.values.name === "Visible anchor"));
+  assert.ok(parsed.some((r: any) => r.values.name === "Ünïcode ✓"));
+
+  const connAfter = {
+    total: db.pool.totalCount,
+    idle: db.pool.idleCount,
+    waiting: db.pool.waitingCount,
+  };
+  let pgLocks: any = "unavailable";
+  try {
+    pgLocks = (
+      await db.tenant(tenant, (q) =>
+        one(q, "SELECT count(*)::int n FROM pg_locks"),
+      )
+    ).n;
+  } catch {
+    pgLocks = "unavailable";
+  }
+  console.log(
+    "W09E_EXPORT_BENCH " +
+      JSON.stringify({
+        rows: SIZE + 1,
+        batch_size: csvDone.result.batch_size,
+        csv_batches: csvDone.result.batches,
+        csv_bytes: csvDone.result.bytes,
+        csv_duration_ms: csvDone.result.duration_ms,
+        csv_peak_rss_bytes: csvDone.result.peak_rss_bytes,
+        json_bytes: (
+          await ok("GET", `/jobs/${jsonJob.id}`, undefined, exporter)
+        ).result.bytes,
+        elapsed_ms: Date.now() - started,
+        connections_before: connBefore,
+        connections_after: connAfter,
+        pg_locks: pgLocks,
+      }),
+  );
+
+  // Expiry: an expired artifact is refused even for the owner.
+  await db.tenant(tenant, (q) =>
+    q.query(
+      "UPDATE job_artifacts SET expires_at=now()-interval '1 hour'" +
+        " WHERE job_id=$1 AND kind='output'",
+      [csvJob.id],
+    ),
+  );
+  assert.equal(
+    (await req("GET", `/jobs/${csvJob.id}/export`, undefined, exporter))
+      .statusCode,
+    404,
+    "expired export artifact must not be downloadable",
+  );
+
+  // Permission revocation after generation blocks the still-valid artifact.
+  await permissionPatch(`/resources/${exportSpace.id}/permissions`, {
+    inherit: false,
+    grants: [{ principal_id: exporter.id, level: 0 }],
+  });
+  assert.equal(
+    (await req("GET", `/jobs/${jsonJob.id}/export`, undefined, exporter))
+      .statusCode,
+    404,
+    "revoked access must block download after generation",
+  );
+  await permissionPatch(`/resources/${exportSpace.id}/permissions`, {
+    inherit: false,
+    grants: [{ principal_id: exporter.id, level: 3 }],
+  });
+
+  // A small second database for restart/reclaim and cooperative cancellation.
+  const small = await ok("POST", "/resources", {
+    kind: "database",
+    parent_id: exportSpace.id,
+    title: "W09e small export database",
+  });
+  await ok("PATCH", `/databases/${small.id}`, {
+    properties: [
+      { id: "name", name: "Name", type: "title" },
+      { id: "note", name: "Note", type: "text" },
+    ],
+  });
+  await ok(
+    "POST",
+    `/databases/${small.id}/records`,
+    { values: { name: "small record", note: "small" } },
+    exporter,
+  );
+
+  // Restart/reclaim: a crashed attempt left the job running with an expired
+  // lease and no committed artifact; a later worker reclaims and completes it,
+  // producing exactly one object under the idempotent job-id key.
+  const reclaimId = randomUUID();
+  await db.tenant(tenant, (q) =>
+    q.query(
+      "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload,status,lease_token,lease_expires_at)" +
+        " VALUES($1,$2,$3,$4,$5,'running',$6,now()-interval '1 minute')",
+      [
+        reclaimId,
+        tenant,
+        exporter.id,
+        small.id,
+        JSON.stringify({
+          format: "database_export",
+          export_format: "csv",
+          source_id: small.id,
+        }),
+        randomUUID(),
+      ],
+    ),
+  );
+  await tick(db, undefined, fakeAntivirus);
+  const reclaimed = await db.tenant(tenant, (q) =>
+    one(q, "SELECT status FROM jobs WHERE id=$1", [reclaimId]),
+  );
+  assert.equal(reclaimed.status, "completed");
+  assert.equal(
+    (
+      await db.tenant(tenant, (q) =>
+        q.query(
+          "SELECT id FROM job_artifacts WHERE job_id=$1 AND kind='output'",
+          [reclaimId],
+        ),
+      )
+    ).rowCount,
+    1,
+    "reclaim produces exactly one output artifact",
+  );
+
+  // Cooperative cancellation: the worker observes the signal between bounded
+  // batches, publishes no artifact and unwinds without killing the process.
+  const cancelJob = await ok(
+    "POST",
+    `/resources/${small.id}/export/jobs`,
+    { format: "csv" },
+    exporter,
+  );
+  await db.tenant(tenant, (q) =>
+    q.query(
+      "UPDATE jobs SET status='running',lease_token=$2,lease_expires_at=now()-interval '1 minute'" +
+        " WHERE id=$1",
+      [cancelJob.id, randomUUID()],
+    ),
+  );
+  const cancelRequest = await ok(
+    "POST",
+    `/jobs/${cancelJob.id}/cancel`,
+    {},
+    exporter,
+  );
+  assert.equal(cancelRequest.status, "cancelling");
+  await tick(db, undefined, fakeAntivirus);
+  assert.equal(
+    (await ok("GET", `/jobs/${cancelJob.id}`, undefined, exporter)).status,
+    "cancelled",
+  );
+  assert.equal(
+    (
+      await db.tenant(tenant, (q) =>
+        q.query(
+          "SELECT id FROM job_artifacts WHERE job_id=$1 AND kind='output'",
+          [cancelJob.id],
+        ),
+      )
+    ).rowCount,
+    0,
+    "cancelled export publishes no artifact",
+  );
+  assert.ok(
+    !(await storedFiles(dir)).some((f) => f.includes(cancelJob.id)),
+    "cancelled export leaves no partial object",
+  );
+  assert.equal(
+    await db.tenant(tenant, (q) =>
+      one(q, "SELECT 1 FROM job_cancellations WHERE job_id=$1", [cancelJob.id]),
+    ),
+    undefined,
+    "cancellation signal is cleared after unwind",
+  );
+});

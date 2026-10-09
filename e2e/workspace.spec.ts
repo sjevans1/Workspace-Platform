@@ -614,6 +614,71 @@ test("W17 browser exports and re-imports a portable workspace archive", async ({
     .toBeVisible();
 });
 
+test("W09e browser downloads a durable database export", async ({ page }) => {
+  await login(page);
+  const meResponse = await page.request.get("/api/v1/me");
+  expect(meResponse.ok(), await meResponse.text()).toBeTruthy();
+  const me = await meResponse.json();
+  const headers = { "X-CSRF-Token": me.csrf };
+  const rootsResponse = await page.request.get("/api/v1/resources");
+  expect(rootsResponse.ok(), await rootsResponse.text()).toBeTruthy();
+  const root = (await rootsResponse.json())[0];
+  const stamp = randomUUID().slice(0, 8);
+
+  const spaceResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: { kind: "space", parent_id: root.id, title: "W09e browser " + stamp },
+  });
+  expect(spaceResponse.ok(), await spaceResponse.text()).toBeTruthy();
+  const space = await spaceResponse.json();
+  const databaseResponse = await page.request.post("/api/v1/resources", {
+    headers,
+    data: {
+      kind: "database",
+      parent_id: space.id,
+      title: "Durable export source " + stamp,
+    },
+  });
+  expect(databaseResponse.ok(), await databaseResponse.text()).toBeTruthy();
+  const database = await databaseResponse.json();
+  const schemaResponse = await page.request.patch(
+    `/api/v1/databases/${database.id}`,
+    {
+      headers,
+      data: {
+        properties: [
+          { id: "name", name: "Name", type: "title" },
+          { id: "note", name: "Note", type: "text" },
+        ],
+      },
+    },
+  );
+  expect(schemaResponse.ok(), await schemaResponse.text()).toBeTruthy();
+  const rowTitle = "Durable browser row " + stamp;
+  const recordResponse = await page.request.post(
+    `/api/v1/databases/${database.id}/records`,
+    { headers, data: { values: { name: rowTitle, note: "browser" } } },
+  );
+  expect(recordResponse.ok(), await recordResponse.text()).toBeTruthy();
+
+  await page.goto("/?page=" + database.id);
+  await expect(page.getByRole("table")).toBeVisible();
+  await expect(page.getByText(rowTitle, { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Page actions" }).click();
+  const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
+  await page
+    .getByRole("button", { name: "Export CSV (durable)", exact: true })
+    .click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/\.csv$/);
+  const path = await download.path();
+  expect(path).toBeTruthy();
+  const csv = (await readFile(path!)).toString("utf8");
+  expect(csv.split("\n")[0]).toBe("Name,Note");
+  expect(csv).toContain(rowTitle);
+});
+
 test("admin can create and revoke a SCIM connector from Settings", async ({
   page,
 }) => {
