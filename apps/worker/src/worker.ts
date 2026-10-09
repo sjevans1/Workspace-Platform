@@ -7,15 +7,18 @@ import { keyedImportDigest, normalizeKeyValue, resolveKeyProperty } from "../../
 import { keyedDecisionSet, planKeyedImport } from "../../../packages/imports/keyed.ts";
 import { Database, one } from "../../../packages/database/index.ts";
 import { decrypt, emit, signature } from "../../../packages/events/index.ts";
-import { assert, json } from "../../../packages/contracts/index.ts";
+import { assert, json, view } from "../../../packages/contracts/index.ts";
+import { stringify } from "csv-stringify/sync";
 import { requireAccess } from "../../../packages/permissions/index.ts";
 import type { Actor } from "../../../packages/auth/index.ts";
-import { createResource, createRecord, updateRecordCanonical, purgeDeletedResource, resolveKeyedMatches } from "../../api/src/domain.ts";
+import { createResource, createRecord, updateRecordCanonical, purgeDeletedResource, resolveKeyedMatches, records } from "../../api/src/domain.ts";
 import { createStorage, type Storage } from "../../../packages/storage/index.ts";
 import { createAntivirus, type Antivirus } from "../../../packages/security/antivirus.ts";
 import { exportPortableTree } from "../../api/src/portable-export.ts";
 import { importPortableArchive } from "../../api/src/portable-import.ts";
 import { markdownToBlocks } from "../../../packages/editor/server.ts";
+/** Internal signal: a durable export observed a cooperative cancellation request. */
+class ExportCancelled extends Error {}
 export function webhookUrl(text: string) {
   const u = new URL(text);
   assert(
@@ -390,6 +393,130 @@ export async function tick(
           await q.query("DELETE FROM job_artifacts WHERE id=$1", [artifact.id]);
           resource = { id: imported.resource_id };
           jobResult = publicImportResult;
+        } else if (p.format === "database_export") {
+          // W09e: durable, bounded database export. Reuses the claimed lease,
+          // the encrypted object store and job_artifacts. Rows are read with
+          // keyset batches (records(after)) so there is no OFFSET scan and no
+          // all-rows-in-RAM materialisation. Live permission was rechecked by
+          // requireAccess above under the current worker membership.
+          const source = await requireAccess(q, a, p.source_id);
+          assert(source.id === j.resource_id, 400, "Export source changed");
+          assert(
+            source.kind === "database",
+            400,
+            "Export source is not a database",
+          );
+          const exportFormat = p.export_format === "json" ? "json" : "csv";
+          const definition = await one(
+            q,
+            "SELECT properties FROM databases WHERE resource_id=$1",
+            [source.id],
+          );
+          assert(definition, 404, "Database not found");
+          const artifactId = j.id,
+            key = `${tenant}/${source.id}/${artifactId}`;
+          // Idempotent artifact identity: the job id keys the object. A crashed
+          // attempt may have written this key without committing the enclosing
+          // transaction, so remove any orphan before writing the final object.
+          await storage.delete(key).catch(() => {});
+          pendingOutputKey = key;
+          const BATCH = 500,
+            names = definition.properties.map((prop: any) => prop.name);
+          const parts: Buffer[] = [],
+            startedAt = Date.now();
+          let peakRss = process.memoryUsage().rss,
+            count = 0,
+            batches = 0,
+            wroteHeader = false,
+            jsonFirst = true,
+            after: any;
+          if (exportFormat === "json") parts.push(Buffer.from("["));
+          for (;;) {
+            // Cooperative cancellation is observed between bounded batches.
+            // The worker process is never killed; it unwinds cleanly.
+            const requested = await one(
+              q,
+              "SELECT 1 FROM job_cancellations WHERE job_id=$1",
+              [j.id],
+            );
+            if (requested) throw new ExportCancelled("Export cancelled");
+            const batch = await records(
+              q,
+              a,
+              source.id,
+              view.parse({ type: "table" }),
+              0,
+              BATCH,
+              after,
+            );
+            if (!batch.length) break;
+            batches += 1;
+            count += batch.length;
+            const last = batch[batch.length - 1];
+            after = { position: last.position, id: last.id };
+            if (exportFormat === "csv") {
+              parts.push(
+                Buffer.from(
+                  stringify(
+                    batch.map((row: any) =>
+                      definition.properties.map((prop: any) => {
+                        let value = row.values[prop.id] ?? "";
+                        if (Array.isArray(value)) value = value.join(";");
+                        // Spreadsheet formula-injection mitigation: a cell that
+                        // begins with a formula lead character is quoted.
+                        return typeof value === "string" &&
+                          /^[=+\-@\t\r]/.test(value)
+                          ? `'${value}`
+                          : value;
+                      }),
+                    ),
+                    { header: !wroteHeader, columns: names },
+                  ),
+                ),
+              );
+              wroteHeader = true;
+            } else {
+              for (const row of batch) {
+                parts.push(
+                  Buffer.from(
+                    (jsonFirst ? "" : ",") +
+                      JSON.stringify({
+                        values: row.values,
+                        revision: row.revision,
+                      }),
+                  ),
+                );
+                jsonFirst = false;
+              }
+            }
+            peakRss = Math.max(peakRss, process.memoryUsage().rss);
+          }
+          if (exportFormat === "json") parts.push(Buffer.from("]"));
+          const body = Buffer.concat(parts),
+            digest = createHash("sha256").update(body).digest("hex"),
+            mime = exportFormat === "csv" ? "text/csv" : "application/json",
+            name = `database.${exportFormat}`;
+          await storage.put(key, body, mime);
+          await q.query(
+            "INSERT INTO job_artifacts(id,tenant_id,job_id,object_key,kind,name,mime,size,sha256,expires_at)" +
+              " VALUES($1,$2,$3,$4,'output',$5,$6,$7,$8,now()+interval '24 hours')",
+            [artifactId, tenant, j.id, key, name, mime, body.length, digest],
+          );
+          // Clear any cooperative-cancellation signal that arrived too late.
+          await q.query("DELETE FROM job_cancellations WHERE job_id=$1", [j.id]);
+          await emit(q, a, "export.performed", source.id);
+          jobResult = {
+            resource_id: source.id,
+            artifact_id: artifactId,
+            format: exportFormat,
+            rows: count,
+            batches,
+            batch_size: BATCH,
+            bytes: body.length,
+            sha256: digest,
+            duration_ms: Date.now() - startedAt,
+            peak_rss_bytes: peakRss,
+          };
         } else if (p.format === "markdown") {
           resource = await createResource(q, a, {
             parent_id: p.parent_id,
@@ -532,15 +659,27 @@ export async function tick(
           await storage.delete(pendingOutputKey).catch(() => {});
         for (const key of importedObjectKeys)
           await storage.delete(key).catch(() => {});
-        await q.query(
-          "UPDATE jobs SET status='failed',result=$2,completed_at=now()," +
-            " lease_token=NULL,lease_expires_at=NULL WHERE id=$1 AND lease_token=$3",
-          [
-            j.id,
-            json({ error: (e as Error).message.slice(0, 300) }),
-            claimedJob.lease_token,
-          ],
-        );
+        if (e instanceof ExportCancelled) {
+          // Cooperative cancellation: publish nothing, remove the partial
+          // artifact (if any) and the signal, and record a clean cancel.
+          await q.query("DELETE FROM job_cancellations WHERE job_id=$1", [j.id]);
+          await q.query(
+            "UPDATE jobs SET status='cancelled',result=$2,cancelled_at=now()," +
+              " completed_at=now(),lease_token=NULL,lease_expires_at=NULL" +
+              " WHERE id=$1 AND lease_token=$3",
+            [j.id, json({ cancelled: true }), claimedJob.lease_token],
+          );
+        } else {
+          await q.query(
+            "UPDATE jobs SET status='failed',result=$2,completed_at=now()," +
+              " lease_token=NULL,lease_expires_at=NULL WHERE id=$1 AND lease_token=$3",
+            [
+              j.id,
+              json({ error: (e as Error).message.slice(0, 300) }),
+              claimedJob.lease_token,
+            ],
+          );
+        }
       }
     });
   }

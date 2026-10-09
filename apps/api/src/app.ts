@@ -4453,6 +4453,34 @@ function dataRoutes(
   );
   route(
     "POST",
+    "/resources/:id/export/jobs",
+    "Queue a durable bounded database export",
+    async (q, a, r) => {
+      assert(!a.scopes, 403, "Human session required for database export");
+      const { format } = body(
+        z.object({ format: z.enum(["csv", "json"]) }).strict(),
+        r,
+      );
+      const n = await requireAccess(q, a, id(r));
+      scope(a, pageScope(n.kind));
+      assert(n.kind === "database", 400, "Durable export requires a database");
+      const jid = randomUUID();
+      await q.query(
+        "INSERT INTO jobs(id,tenant_id,user_id,resource_id,payload)" +
+          " VALUES($1,$2,$3,$4,$5)",
+        [
+          jid,
+          a.tenant_id,
+          a.user_id,
+          n.id,
+          json({ format: "database_export", export_format: format, source_id: n.id }),
+        ],
+      );
+      return { id: jid, status: "pending" };
+    },
+  );
+  route(
+    "POST",
     "/imports/archive",
     "Stage and queue a portable workspace archive import",
     async (q, a, r) => {
@@ -4539,6 +4567,41 @@ function dataRoutes(
     },
   );
   route(
+    "GET",
+    "/jobs/:id/export",
+    "Download a completed user-owned database export",
+    async (q, a, r, reply) => {
+      // Live permission recheck: access revoked after generation blocks the
+      // download even though the artifact already exists.
+      const job = await one(
+        q,
+        "SELECT id,user_id,resource_id,status FROM jobs WHERE id=$1",
+        [id(r)],
+      );
+      assert(job && job.user_id === a.user_id, 404, "Job not found");
+      await requireAccess(q, a, job.resource_id);
+      assert(job.status === "completed", 409, "Export job is not complete");
+      const artifact = await one(
+        q,
+        "SELECT object_key,name,mime,size FROM job_artifacts" +
+          " WHERE job_id=$1 AND kind='output' AND expires_at>now()",
+        [job.id],
+      );
+      assert(artifact, 404, "Export artifact not found");
+      const bytes = await storage.get(artifact.object_key);
+      assert(bytes.length === Number(artifact.size), 409,
+        "Export artifact size mismatch");
+      reply
+        .type(artifact.mime)
+        .header("X-Content-Type-Options", "nosniff")
+        .header(
+          "Content-Disposition",
+          `attachment; filename*=UTF-8''${encodeURIComponent(artifact.name)}`,
+        );
+      return reply.send(bytes);
+    },
+  );
+  route(
     "POST",
     "/jobs/:id/cancel",
     "Cancel a queued user-owned job",
@@ -4546,11 +4609,28 @@ function dataRoutes(
       const jobId = id(r);
       const j = await one(
         q,
-        "SELECT id,user_id,resource_id,status FROM jobs WHERE id=$1",
+        "SELECT id,user_id,resource_id,status,payload FROM jobs WHERE id=$1",
         [jobId],
       );
       assert(j && j.user_id === a.user_id, 404, "Job not found");
       await requireAccess(q, a, j.resource_id);
+      // A running durable export holds its job row FOR UPDATE, so an update to
+      // that row would block. Record the cooperative-cancellation request in
+      // the side table instead; the worker observes it between bounded batches,
+      // removes the partial artifact and marks the job cancelled.
+      if (j.status === "running" && j.payload?.format === "database_export") {
+        await q.query(
+          "INSERT INTO job_cancellations(job_id,tenant_id,requested_by)" +
+            " VALUES($1,$2,$3) ON CONFLICT(job_id) DO NOTHING",
+          [jobId, a.tenant_id, a.user_id],
+        );
+        await q.query(
+          "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id,request_id)" +
+            " VALUES($1,$2,$3,'job.cancel_requested',$4,$5)",
+          [randomUUID(), a.tenant_id, a.user_id, j.resource_id, a.requestId || null],
+        );
+        return { id: jobId, status: "cancelling" };
+      }
       assert(j.status === "pending", 409, "Only queued jobs can be cancelled");
       const cancelled = await one(
         q,

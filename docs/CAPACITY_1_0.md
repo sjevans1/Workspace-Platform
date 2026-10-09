@@ -271,3 +271,61 @@ E2E_BASE_URL=http://localhost:8080 E2E_W24_WHOLE_STACK=1 \
 It requires the deployed Compose stack, the shared sign-in budget to have been
 replenished, and the same environment variables the other deployed acceptance
 steps use. It writes `capacity-results/w24-reference-host.json`.
+
+## W09e durable database export
+
+**CI-host qualification evidence only, captured from the native backend job. This is not a universal production SLO.**
+
+The W24 evidence above is unchanged. This section adds the W09e durable export
+measurement. It is produced by the native PostgreSQL integration suite
+(`tests/integration.test.ts`, test `W09e durable database export is bounded,
+permission-safe and cancellable`), which runs under the restricted
+`workspace_runtime` role. The export source is a deterministic 10,001-row
+database (10,000 bulk rows plus one anchor). The worker reads rows in fixed
+keyset batches, so the measurement covers the bounded path rather than the
+synchronous 10,000-row export.
+
+The backend job prints one line prefixed `W09E_EXPORT_BENCH` with the captured
+figures. The values below were captured from the native backend job on head
+`85449db` (Actions run `37902845224`); the export code is unchanged since that
+run.
+
+| Property | Measured |
+| --- | --- |
+| Rows exported | 10,001 |
+| Batch size | 500 |
+| CSV batches | 21 |
+| CSV artifact bytes | 286,720 |
+| JSON artifact bytes | 786,755 |
+| CSV export duration | 393 ms |
+| Whole export scenario elapsed | 874 ms |
+| Peak worker RSS | 525,869,056 bytes (about 501 MiB, upper bound incl. harness) |
+| PostgreSQL connections before | 12 total, 11 idle, 0 waiting |
+| PostgreSQL connections after | 12 total, 10 idle, 0 waiting |
+| PostgreSQL locks observed | 3 |
+
+### Scope and limitations
+
+- **Native backend, not the deployed stack.** The figures come from the native
+  integration suite, not from `docker compose`, so they measure the worker and
+  PostgreSQL path rather than the containerised deployment.
+- **Peak RSS is the worker process.** The worker runs in-process with the test
+  harness, so its RSS includes the harness. Treat it as an upper bound.
+- **One shape of dataset.** A single wide-free schema (title, number, text) is
+  measured; nothing here speaks to many-column tables or relation-heavy rows.
+- **No throughput claim.** One run on one host is a bounded statement, not a
+  commitment to a requests-per-second or rows-per-second figure.
+
+### Reproducing
+
+The qualification runs only under a native PostgreSQL test database, not on the
+default embedded PGlite path:
+
+```bash
+TEST_DATABASE_URL=postgres://postgres:***@127.0.0.1:5432/workspace \
+  node --import tsx --test --test-concurrency=1 --test-timeout=120000 \
+  --test-name-pattern W09e tests/integration.test.ts
+```
+
+It logs the `W09E_EXPORT_BENCH` line and writes no artifact; the deployed
+browser journey is covered separately by `e2e/workspace.spec.ts`.
