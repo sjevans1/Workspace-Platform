@@ -119,7 +119,7 @@ export type IntegrationRoutes = {
     path: "/api/v1/imports";
     params: {  };
     query: {  };
-    body: { "parent_id": string; "format": "markdown" | "csv"; "name": string; "content": string; "target_database_id"?: string; "expected_schema_digest"?: string; "existing_mode"?: "append" | "reject-on-existing" | "skip-existing" | "authorized-update"; "key_property_id"?: string; "keyed_plan_digest"?: string; "idempotency_key"?: string; "mapping"?: Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; };
+    body: { "parent_id": string; "format": "markdown" | "csv"; "name": string; "content": string; "target_database_id"?: string; "expected_schema_digest"?: string; "existing_mode"?: "append" | "reject-on-existing" | "skip-existing" | "authorized-update"; "key_property_id"?: string; "keyed_plan_digest"?: string; "confirm_keyed_updates"?: boolean; "idempotency_key"?: string; "mapping"?: Array<{ "source": string; "id": string; "name": string; "type": "title" | "text" | "number" | "date" | "checkbox"; "skip"?: boolean; }>; };
     response: { "id": string; "status": "pending" | "running" | "completed" | "failed" | "cancelled"; };
   };
   "GET /jobs/:id": {
