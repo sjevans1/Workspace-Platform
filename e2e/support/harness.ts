@@ -1,13 +1,21 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { FIXTURE } from "../fixtures/catalog";
 
 const email = "browser@example.test",
   password = "browser-password-123";
 
+// The harness runs across nine engine x viewport projects, but the deployed
+// sign-in route keeps its strict production budget (10 attempts / 5 minutes per
+// network) which the preceding browser workflows consume. Sign in once and
+// reuse the real session across the sequential projects, exactly as the product
+// specs do, instead of exhausting the budget with nine logins.
+let cachedCookies: Awaited<ReturnType<BrowserContext["cookies"]>> = [];
+
 // Self-contained sign-in/setup for the deterministic harness. Deliberately does
 // NOT extend the product specs so the harness can run on WebKit and on the
 // viewport matrix without touching the existing accessibility journeys.
 export async function login(page: Page) {
+  if (cachedCookies.length) await page.context().addCookies(cachedCookies);
   await page.goto("/");
   await expect(page.locator("h1")).toBeVisible({ timeout: 30000 });
   if (
@@ -29,13 +37,34 @@ export async function login(page: Page) {
   } else if (
     await page.getByRole("button", { name: "Sign in", exact: true }).isVisible()
   ) {
-    await page.getByLabel("Email", { exact: true }).fill(email);
-    await page.getByLabel("Password", { exact: true }).fill(password);
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    // Preserve the production limit and honor Retry-After rather than weakening
+    // it: a consumed sign-in budget must be waited out, never bypassed.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await page.getByLabel("Email", { exact: true }).fill(email);
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      const response = page.waitForResponse(
+        (r) =>
+          r.url().includes("/api/v1/auth/login") &&
+          r.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      const loginResponse = await response;
+      if (loginResponse.status() !== 429) break;
+      const retry = Number(loginResponse.headers()["retry-after"] || 0);
+      const body = await loginResponse.json().catch(() => ({}));
+      const fromBody = Number(
+        String(body.error || "").match(/retry in (\d+) seconds?/i)?.[1] || 0,
+      );
+      const seconds = Math.min(30, retry || fromBody || 10);
+      await page.waitForTimeout((seconds + 1) * 1000);
+    }
   }
   await expect(
     page.getByRole("heading", { name: "Welcome back, Shane." }),
   ).toBeVisible({ timeout: 20000 });
+  cachedCookies = (await page.context().cookies()).filter(
+    (cookie) => cookie.name === "workspace_session",
+  );
 }
 
 export type SeededFixture = {
