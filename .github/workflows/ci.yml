@@ -64,8 +64,10 @@ jobs:
             echo "CI-H1: a consumed definition still references an upstream Docker Hub image" >&2
             exit 1
           fi
-          # The Docker Hub credentials are for the mirror workflow only.
-          if grep -q 'DOCKERHUB' .github/workflows/ci.yml; then
+          # The Docker Hub credentials are for the mirror workflow only. Match the
+          # secret expression, not the bare word (this guard's own text must not
+          # count as evidence).
+          if grep -nE 'secrets\.DOCKERHUB' .github/workflows/ci.yml; then
             echo "CI-H1: normal CI must not use Docker Hub credentials" >&2
             exit 1
           fi
