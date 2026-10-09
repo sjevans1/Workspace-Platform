@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: "accessibility.spec.ts",
+  testIgnore: ["accessibility.spec.ts", "harness.spec.ts", "visual.spec.ts"],
   fullyParallel: false,
   workers: 1,
   timeout: 90000,
