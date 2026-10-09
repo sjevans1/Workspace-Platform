@@ -182,7 +182,7 @@ test("keyboard modal focus is trapped, restored, and semantically labelled", asy
   await page.keyboard.press("Escape");
   await expect(search).toBeHidden();
 
-  expect(["chromium", "firefox"]).toContain(browserName);
+  expect(["chromium", "firefox", "webkit"]).toContain(browserName);
 });
 
 
@@ -196,6 +196,11 @@ test("command-K search supports arrow navigation, Enter opening, and Escape focu
   await create.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(target);
   const trigger = page.getByRole("button", { name: "Search anything" });
+  // At phone width the search trigger lives in the collapsible navigation, so
+  // open it first. This is a viewport behaviour, not an engine difference.
+  if (!(await trigger.isVisible())) {
+    await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  }
   await trigger.focus();
   await page.keyboard.press("ControlOrMeta+k");
   const dialog = page.getByRole("dialog", { name: "Search your workspace" });
