@@ -10,7 +10,7 @@ import { decrypt, emit, signature } from "../../../packages/events/index.ts";
 import { assert, json } from "../../../packages/contracts/index.ts";
 import { requireAccess } from "../../../packages/permissions/index.ts";
 import type { Actor } from "../../../packages/auth/index.ts";
-import { createResource, createRecord, purgeDeletedResource, resolveKeyedMatches } from "../../api/src/domain.ts";
+import { createResource, createRecord, updateRecordCanonical, purgeDeletedResource, resolveKeyedMatches } from "../../api/src/domain.ts";
 import { createStorage, type Storage } from "../../../packages/storage/index.ts";
 import { createAntivirus, type Antivirus } from "../../../packages/security/antivirus.ts";
 import { exportPortableTree } from "../../api/src/portable-export.ts";
@@ -491,16 +491,13 @@ export async function tick(
                 // Recheck write permission on the exact record immediately
                 // before changing it, then update only if the revision the
                 // decision was built from is still current.
-                await requireAccess(q,a,decision.resource_id,3);
-                const updated = await one(q,
-                  "UPDATE database_records SET values=$3,revision=revision+1" +
-                    " WHERE tenant_id=$2 AND resource_id=$1 AND revision=$4" +
-                    " RETURNING resource_id",
-                  [decision.resource_id,a.tenant_id,
-                    json(prepared.rows[decision.index]),
-                    decision.expected_revision]);
-                assert(updated,409,
-                  "Import stopped: a record changed after preview; no records were written");
+                await updateRecordCanonical(
+                  q,
+                  a,
+                  decision.resource_id,
+                  prepared.rows[decision.index],
+                  decision.expected_revision,
+                );
               }
             }
             resource = target;
