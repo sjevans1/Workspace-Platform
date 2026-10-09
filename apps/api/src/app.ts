@@ -4204,6 +4204,7 @@ function dataRoutes(
             .string()
             .regex(/^[a-f0-9]{64}$/)
             .optional(),
+          confirm_keyed_updates: z.boolean().optional(),
           idempotency_key: z
             .string()
             .regex(/^[A-Za-z0-9_-]{16,128}$/)
@@ -4378,6 +4379,12 @@ function dataRoutes(
           409,
           "Import preview changed; preview again",
         );
+        if (mode === "authorized-update" && plan.counts.update > 0)
+          assert(
+            v.confirm_keyed_updates === true,
+            400,
+            "Authorized updates require explicit confirmation",
+          );
       }
     }
     const jid = randomUUID();
