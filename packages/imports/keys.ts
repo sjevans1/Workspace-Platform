@@ -130,6 +130,18 @@ export function normalizeKeyValue(
   }
 }
 
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalJson(item)]),
+    );
+  }
+  return value;
+}
+
 export type KeyedImportBinding = {
   mode: ImportMode;
   key_property_id: string;
@@ -160,7 +172,7 @@ export function keyedImportDigest(binding: KeyedImportBinding): string {
         target_database_id: binding.target_database_id,
         schema_digest: binding.schema_digest,
         content_hash: binding.content_hash,
-        mapping: binding.mapping,
+        mapping: canonicalJson(binding.mapping),
         // Sorted so the digest depends on the decision set, not on the order a
         // caller happened to build it in.
         decision_set: [...binding.decision_set].sort(),
