@@ -406,6 +406,7 @@ export async function updateRecordCanonical(
   recordId: string,
   nextValues: Record<string, unknown>,
   expectedRevision: number,
+  relationWriteValues: Record<string, unknown> = nextValues,
 ) {
   await requireAccess(q, a, recordId, 3);
   const d = await one(
@@ -421,7 +422,7 @@ export async function updateRecordCanonical(
   );
   const values = validateValues(d.properties, nextValues);
   await validatePeople(q, d.properties, values);
-  await validateRelationWrites(q, a, d.properties, values);
+  await validateRelationWrites(q, a, d.properties, relationWriteValues);
   await q.query(
     "UPDATE database_records SET values=$2,revision=revision+1 WHERE resource_id=$1",
     [recordId, json(values)],
