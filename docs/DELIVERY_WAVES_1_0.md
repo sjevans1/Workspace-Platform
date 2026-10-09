@@ -112,12 +112,12 @@ Primary packages: **W23 + remaining W24**, with closure of W08/W09 operational-s
 
 ### Wave O closure (2026-10-09)
 
-Wave O is closed for its W09 and W23/W24 scope.
+Wave O's **W09** scope is closed by this tranche; the W23/W24 items remain tracked in [#167](https://github.com/sjevans1/Workspace-Platform/issues/167) and are not claimed complete here.
 
 - **W09 process reliability** was accepted in PR #169.
 - **W09d governed keyed imports** accepted in PR #173 (merge `8e0126918c88c0eb237740f1b019aa4e25f1f529`, exact-head run `37898878592`; post-merge main run `37901677754` SUCCESS).
 - **W09e durable, bounded database export** accepted in PR #177 (merge `c940de67fff37c3c94e0e3a3dfff5ee3d6ca8889`, exact-head run `37905292425`). Reuses the accepted lease/artifact/storage machinery; see [DURABLE_EXPORT.md](DURABLE_EXPORT.md) and the W09e section of [CAPACITY_1_0.md](CAPACITY_1_0.md).
-- W23 scheduled backups/restore drill and the W24 whole-stack capacity qualification remain as recorded in their own accepted slices; the W09 process-failure and large-export gates are now closed.
+- W23 scheduled backups/restore drill and the W24 whole-stack capacity qualification are tracked in [#167](https://github.com/sjevans1/Workspace-Platform/issues/167) and [CAPACITY_1_0.md](CAPACITY_1_0.md); this closeout does not claim them complete. It closes the **W09** process-failure and large-export gates.
 - Residual **W08 live-reordering/named-host capacity** remains open and is not a W09 dependency.
 
 ## Wave X — experience and commercial packaging
