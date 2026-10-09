@@ -1094,6 +1094,9 @@ function CreateDialog({
               ...(existingMode !== "append" ? {
                 key_property_id: keyProperty,
                 keyed_plan_digest: preview.keyed.plan_digest,
+                ...(existingMode === "authorized-update" ? {
+                  confirm_keyed_updates: importConfirmed,
+                } : {}),
               } : {}),
             } : {}),
           };
