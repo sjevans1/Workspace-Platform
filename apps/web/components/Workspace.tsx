@@ -957,7 +957,11 @@ function CreateDialog({
     [previewContent, setPreviewContent] = useState(""),
     [databaseChoices, setDatabaseChoices] = useState<any[]>([]),
     [targetDatabase, setTargetDatabase] = useState(""),
-    [appendConfirmed, setAppendConfirmed] = useState(false),
+    [existingMode, setExistingMode] = useState<
+      "append" | "reject-on-existing" | "skip-existing" | "authorized-update"
+    >("append"),
+    [keyProperty, setKeyProperty] = useState(""),
+    [importConfirmed, setImportConfirmed] = useState(false),
     [busy, setBusy] = useState(false);
   // Same exact request retains its key across a lost HTTP acknowledgement
   // or retry in this dialog. Editing any parameter rotates the identity.
@@ -1013,6 +1017,33 @@ function CreateDialog({
       setBusy(false);
     }
   }
+  async function previewGovernedImport() {
+    if (!targetDatabase || existingMode === "append")
+      return;
+    if (!keyProperty)
+      return notify("Choose the property that uniquely identifies existing records");
+    if (!previewContent || !mapping.length)
+      return notify("Preview the CSV columns first");
+    setBusy(true);
+    try {
+      await run(async () => {
+        const governed = await api("/imports/preview", "POST", {
+          parent_id: destination,
+          target_database_id: targetDatabase,
+          content: previewContent,
+          mapping,
+          mode: existingMode,
+          key_property_id: keyProperty,
+        });
+        setPreview(governed);
+        setMapping(governed.mapping);
+        setImportConfirmed(false);
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -1028,9 +1059,19 @@ function CreateDialog({
           throw Error("Workspace archive exceeds the 64 MiB import limit");
         if (isCsv && !preview)
           throw Error("Preview the CSV and review its column mapping before import");
-        if (isCsv && targetDatabase && (!appendConfirmed || !preview.target ||
+        if (isCsv && targetDatabase && (!preview.target ||
           preview.target.id !== targetDatabase))
-          throw Error("Confirm the append-only target import after preview");
+          throw Error("Preview the selected target database before importing");
+        if (isCsv && targetDatabase && existingMode !== "append" &&
+          (!preview.keyed || preview.keyed.mode !== existingMode ||
+            preview.keyed.key_property_id !== keyProperty))
+          throw Error("Run the governed preview for the selected mode and key property");
+        if (isCsv && targetDatabase &&
+          (existingMode === "append" || preview.keyed?.needs_confirmation) &&
+          !importConfirmed)
+          throw Error(existingMode === "append"
+            ? "Confirm the append-only target import after preview"
+            : "Confirm the governed updates shown in the preview");
 
         let j: any;
         if (isArchive) {
@@ -1049,7 +1090,11 @@ function CreateDialog({
             ...(isCsv && targetDatabase ? {
               target_database_id: targetDatabase,
               expected_schema_digest: preview.target.schema_digest,
-              existing_mode: "append",
+              existing_mode: existingMode,
+              ...(existingMode !== "append" ? {
+                key_property_id: keyProperty,
+                keyed_plan_digest: preview.keyed.plan_digest,
+              } : {}),
             } : {}),
           };
           let idempotency_key: string | undefined;
@@ -1144,7 +1189,9 @@ function CreateDialog({
               setMapping([]);
               setPreviewContent("");
               setTargetDatabase("");
-              setAppendConfirmed(false);
+              setExistingMode("append");
+              setKeyProperty("");
+              setImportConfirmed(false);
             }}
           >
             {!parents.some((n) => n.id === parent) && (
@@ -1184,7 +1231,9 @@ function CreateDialog({
                   setMapping([]);
                   setPreviewContent("");
                   setTargetDatabase("");
-                  setAppendConfirmed(false);
+                  setExistingMode("append");
+              setKeyProperty("");
+              setImportConfirmed(false);
                 }}
               />
             </Field>
@@ -1199,17 +1248,38 @@ function CreateDialog({
                       setPreview(undefined);
                       setMapping([]);
                       setPreviewContent("");
-                      setAppendConfirmed(false);
+                      setExistingMode("append");
+              setKeyProperty("");
+              setImportConfirmed(false);
                     }}
                   >
                     <option value="">Create a new database</option>
                     {databaseChoices.map((db: any) => (
                       <option key={db.id} value={db.id}>
-                        Append records to {db.title}
+                        Use existing database: {db.title}
                       </option>
                     ))}
                   </select>
                 </Field>
+                {targetDatabase && (
+                  <Field label="Existing-record behavior">
+                    <select
+                      aria-label="Existing-record behavior"
+                      value={existingMode}
+                      onChange={(e) => {
+                        setExistingMode(e.target.value as typeof existingMode);
+                        setKeyProperty("");
+                        setImportConfirmed(false);
+                        if (preview?.keyed) setPreview(undefined);
+                      }}
+                    >
+                      <option value="append">Append every row</option>
+                      <option value="reject-on-existing">Reject rows whose key already exists</option>
+                      <option value="skip-existing">Skip rows whose key already exists</option>
+                      <option value="authorized-update">Update matching records when authorized</option>
+                    </select>
+                  </Field>
+                )}
                 <button type="button" className="button" disabled={busy}
                   onClick={() => void previewFile()}>
                   Preview CSV columns
@@ -1218,6 +1288,48 @@ function CreateDialog({
                   <div className="import-preview">
                     <strong>{preview.row_count} data rows · {preview.columns.length} columns</strong>
                     <p>Review the suggested types. Untick fields you do not want to import. Every row is checked again before saving.</p>
+                    {targetDatabase && existingMode !== "append" && (
+                      <div className="import-governed-controls">
+                        <label>
+                          Match existing records by
+                          <select
+                            aria-label="Import key property"
+                            value={keyProperty}
+                            onChange={(e) => {
+                              setKeyProperty(e.target.value);
+                              setImportConfirmed(false);
+                            }}
+                          >
+                            <option value="">Choose a key property</option>
+                            {(preview.target?.properties || [])
+                              .filter((p: any) => ["text", "number", "date"].includes(p.type))
+                              .map((p: any) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} ({p.type})
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <button type="button" className="button"
+                          disabled={busy || !keyProperty}
+                          onClick={() => void previewGovernedImport()}>
+                          Preview existing-record decisions
+                        </button>
+                      </div>
+                    )}
+                    {preview.keyed && (
+                      <div className="import-governed-summary" aria-label="Governed import preview">
+                        <strong>Governed preview</strong>
+                        <p>
+                          {preview.keyed.counts.insert} insert · {preview.keyed.counts.update} update ·
+                          {" "}{preview.keyed.counts.skip} skip ·
+                          {" "}{preview.keyed.counts.conflict + preview.keyed.counts.conflict_restricted} conflict
+                        </p>
+                        {(preview.keyed.counts.conflict + preview.keyed.counts.conflict_restricted) > 0 && (
+                          <small>Conflicting rows must be resolved before this import can complete.</small>
+                        )}
+                      </div>
+                    )}
                     <div style={{ maxHeight: 340, overflow: "auto" }}>
                       {mapping.map((item: any, index: number) => (
                         <div key={item.source} className="import-column">
@@ -1288,14 +1400,25 @@ function CreateDialog({
                       ))}
                     </div>
                     <small>{preview.warnings[0]}</small>
-                    {targetDatabase && (
+                    {targetDatabase && existingMode === "append" && (
                       <label className="import-append-confirmation">
                         <input type="checkbox"
                           aria-label="Confirm append-only import"
-                          checked={appendConfirmed}
-                          onChange={(e) => setAppendConfirmed(e.target.checked)} />
+                          checked={importConfirmed}
+                          onChange={(e) => setImportConfirmed(e.target.checked)} />
                         Append new records to this database without updating,
                         replacing or deduplicating existing records.
+                      </label>
+                    )}
+                    {targetDatabase && existingMode === "authorized-update" &&
+                      preview.keyed?.needs_confirmation && (
+                      <label className="import-append-confirmation">
+                        <input type="checkbox"
+                          aria-label="Confirm governed updates"
+                          checked={importConfirmed}
+                          onChange={(e) => setImportConfirmed(e.target.checked)} />
+                        Confirm {preview.keyed.counts.update} existing record
+                        {preview.keyed.counts.update === 1 ? "" : "s"} will be updated.
                       </label>
                     )}
                   </div>
@@ -1310,7 +1433,12 @@ function CreateDialog({
           </button>
           <button disabled={busy || (importing &&
             !!file?.name.toLowerCase().endsWith(".csv") &&
-            (!preview || !!targetDatabase && !appendConfirmed))}
+            (!preview || !!targetDatabase && (
+              existingMode === "append" ? !importConfirmed :
+              !preview.keyed || preview.keyed.mode !== existingMode ||
+              preview.keyed.key_property_id !== keyProperty ||
+              (preview.keyed.needs_confirmation && !importConfirmed)
+            )))}
             className="button primary">
             {busy ? "Working…" : importing ? "Import" : "Create"}
           </button>
