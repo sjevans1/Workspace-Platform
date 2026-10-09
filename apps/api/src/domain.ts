@@ -400,6 +400,46 @@ export async function validatePeople(q: Query, props: Property[], values: any) {
         "Person must be an active organisation member",
       );
 }
+export async function updateRecordCanonical(
+  q: Query,
+  a: Actor,
+  recordId: string,
+  nextValues: Record<string, unknown>,
+  expectedRevision: number,
+) {
+  await requireAccess(q, a, recordId, 3);
+  const d = await one(
+    q,
+    "SELECT v.*,d.properties FROM database_records v JOIN databases d ON d.resource_id=v.database_id WHERE v.resource_id=$1 FOR UPDATE OF v,d",
+    [recordId],
+  );
+  assert(d, 404, "Record not found");
+  assert(
+    Number(d.revision) === expectedRevision,
+    409,
+    "Record changed; reload before saving",
+  );
+  const values = validateValues(d.properties, nextValues);
+  await validatePeople(q, d.properties, values);
+  await validateRelationWrites(q, a, d.properties, values);
+  await q.query(
+    "UPDATE database_records SET values=$2,revision=revision+1 WHERE resource_id=$1",
+    [recordId, json(values)],
+  );
+  const titleProperty = d.properties.find((p: Property) => p.type === "title");
+  await q.query(
+    "UPDATE resources SET title=$2,search_text=$3,updated_at=now(),updated_by=$4 WHERE id=$1",
+    [
+      recordId,
+      values[titleProperty.id],
+      indexedRecordText(d.properties, values),
+      a.user_id,
+    ],
+  );
+  await emit(q, a, "record.updated", recordId, expectedRevision + 1);
+  return { values, revision: expectedRevision + 1, properties: d.properties };
+}
+
 export async function createRecord(
   q: Query,
   a: Actor,
