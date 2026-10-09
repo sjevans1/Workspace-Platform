@@ -28,12 +28,21 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: engines.flatMap((browserName) =>
-    Object.entries(viewports).map(([name, viewport]) => ({
-      name: `${browserName}-${name}`,
-      use: { browserName, viewport },
-    })),
-  ),
+  projects: [
+    // Authenticate once for the whole matrix (see e2e/auth.setup.ts).
+    { name: "setup", testMatch: /auth\.setup\.ts/ },
+    ...engines.flatMap((browserName) =>
+      Object.entries(viewports).map(([name, viewport]) => ({
+        name: `${browserName}-${name}`,
+        use: {
+          browserName,
+          viewport,
+          storageState: process.env.E2E_AUTH_STATE || "e2e/.auth/session.json",
+        },
+        dependencies: ["setup"],
+      })),
+    ),
+  ],
   // Local runs start their own dev server; CI sets E2E_BASE_URL against the
   // already-running Compose stack, so no webServer is started there.
   webServer: process.env.E2E_BASE_URL

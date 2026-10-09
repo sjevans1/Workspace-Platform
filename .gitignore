@@ -7,6 +7,7 @@ node_modules/
 backups/
 playwright-report/
 test-results/
+e2e/.auth/
 *.log
 *.tsbuildinfo
 
