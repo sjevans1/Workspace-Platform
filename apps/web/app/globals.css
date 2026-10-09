@@ -2569,3 +2569,22 @@ textarea:focus-visible {
     min-width: min(290px, calc(100vw - 64px));
   }
 }
+
+
+.feature-example{
+  display:flex;
+  align-items:flex-start;
+  gap:.7rem;
+  margin:.85rem 0 1.1rem;
+  padding:.8rem .9rem;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:color-mix(in srgb,var(--surface) 92%,var(--accent) 8%);
+  color:var(--muted);
+  font-size:.9rem;
+  line-height:1.45;
+}
+.feature-example>svg{flex:0 0 auto;margin-top:.12rem;color:var(--accent)}
+.feature-example>div{display:grid;gap:.12rem}
+.feature-example strong{color:var(--text);font-size:.78rem;letter-spacing:.04em;text-transform:uppercase}
+.feature-example.compact{margin:.55rem 0 .8rem;padding:.65rem .75rem;font-size:.84rem}
