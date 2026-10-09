@@ -49,7 +49,8 @@ export default function Resource({
     [menu, setMenu] = useState(false),
     [record, setRecord] = useState<any>(),
     [members, setMembers] = useState<any[]>([]),
-    [exportingArchive, setExportingArchive] = useState(false);
+    [exportingArchive, setExportingArchive] = useState(false),
+    [exportingDatabase, setExportingDatabase] = useState("");
   async function load() {
     const n = await api(`/resources/${id}`);
     setNode(n);
@@ -105,6 +106,41 @@ export default function Resource({
       throw Error(`Archive export still running. Job ID: ${queued.id}`);
     } finally {
       setExportingArchive(false);
+    }
+  }
+  async function exportDatabase(format: "csv" | "json") {
+    setMenu(false);
+    setExportingDatabase(format);
+    try {
+      const queued = await api(`/resources/${id}/export/jobs`, "POST", {
+        format,
+      });
+      notify("Database export queued.");
+      for (let attempt = 0; attempt < 180; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const job = await api(`/jobs/${queued.id}`);
+        if (job.status === "failed")
+          throw Error(job.result?.error || "Database export failed");
+        if (job.status === "cancelled")
+          throw Error("Database export was cancelled");
+        if (job.status !== "completed") continue;
+        const blob = await downloadWorkspaceArchive(
+          `/jobs/${queued.id}/export`,
+        );
+        const url = URL.createObjectURL(blob),
+          anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${node.title || "database"}.${format}`;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+        notify("Database export is ready.");
+        return;
+      }
+      throw Error(`Database export still running. Job ID: ${queued.id}`);
+    } finally {
+      setExportingDatabase("");
     }
   }
   if (!node) return <Spinner />;
@@ -197,13 +233,33 @@ export default function Resource({
                   <LinkIcon size={15} />
                   Copy link
                 </button>
-                {!collection && (
+                {!collection && node.kind === "database" && (
+                  <>
+                    <button
+                      disabled={!!exportingDatabase}
+                      onClick={() => run(() => exportDatabase("csv"))}
+                    >
+                      {exportingDatabase === "csv"
+                        ? "Preparing CSV…"
+                        : "Export CSV (durable)"}
+                    </button>
+                    <button
+                      disabled={!!exportingDatabase}
+                      onClick={() => run(() => exportDatabase("json"))}
+                    >
+                      {exportingDatabase === "json"
+                        ? "Preparing JSON…"
+                        : "Export JSON (durable)"}
+                    </button>
+                  </>
+                )}
+                {!collection && node.kind !== "database" && (
                   <>
                     <a
-                      href={`/api/v1/resources/${id}/export?format=${node.kind === "database" ? "csv" : "markdown"}`}
+                      href={`/api/v1/resources/${id}/export?format=markdown`}
                       download
                     >
-                      Export {node.kind === "database" ? "CSV" : "Markdown"}
+                      Export Markdown
                     </a>
                     <a
                       href={`/api/v1/resources/${id}/export?format=json`}
