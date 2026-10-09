@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "CI-H1",
+  "owner": "sjevans1",
+  "upstreamRegistry": "docker.io",
+  "mirrorRegistry": "ghcr.io",
+  "policy": {
+    "upstreamRemainsSourceOfTruth": true,
+    "autoPromoteUpstreamChanges": false,
+    "consumerPinning": "immutable-digest",
+    "refreshRequiresReviewedChange": true,
+    "note": "Normal Workspace CI consumes the mirror pinned by mirrorDigest. A new upstream digest is never promoted automatically; it requires a reviewed update to this manifest plus full acceptance."
+  },
+  "images": [
+    {
+      "name": "node",
+      "purpose": "application Dockerfile build and runtime base",
+      "upstream": "docker.io/library/node",
+      "sourceTag": "24-trixie-slim",
+      "upstreamDigest": "sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66",
+      "mediaType": "application/vnd.oci.image.index.v1+json",
+      "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-node",
+      "mirrorTag": "24-trixie-slim",
+      "mirrorDigest": null,
+      "refreshDate": "2026-10-09",
+      "consumers": ["Dockerfile"]
+    },
+    {
+      "name": "postgres",
+      "purpose": "compose database service and backend CI service container",
+      "upstream": "docker.io/library/postgres",
+      "sourceTag": "17.11-bookworm",
+      "upstreamDigest": "sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826",
+      "mediaType": "application/vnd.oci.image.index.v1+json",
+      "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-postgres",
+      "mirrorTag": "17.11-bookworm",
+      "mirrorDigest": null,
+      "refreshDate": "2026-10-09",
+      "consumers": ["compose.yaml", ".github/workflows/ci.yml"]
+    },
+    {
+      "name": "clamav",
+      "purpose": "antivirus runtime image base",
+      "upstream": "docker.io/clamav/clamav",
+      "sourceTag": "1.5.4-debian13-slim",
+      "upstreamDigest": "sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578",
+      "mediaType": "application/vnd.oci.image.index.v1+json",
+      "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-clamav",
+      "mirrorTag": "1.5.4-debian13-slim",
+      "mirrorDigest": null,
+      "refreshDate": "2026-10-09",
+      "consumers": ["Dockerfile.clamav"]
+    },
+    {
+      "name": "caddy",
+      "purpose": "reverse proxy and TLS runtime",
+      "upstream": "docker.io/library/caddy",
+      "sourceTag": "2.11.4-alpine",
+      "upstreamDigest": "sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b",
+      "mediaType": "application/vnd.oci.image.index.v1+json",
+      "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-caddy",
+      "mirrorTag": "2.11.4-alpine",
+      "mirrorDigest": null,
+      "refreshDate": "2026-10-09",
+      "consumers": ["compose.yaml"]
+    },
+    {
+      "name": "seaweedfs",
+      "purpose": "S3-compatible backend CI service container",
+      "upstream": "docker.io/chrislusf/seaweedfs",
+      "sourceTag": "4.47",
+      "upstreamDigest": "sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882",
+      "mediaType": "application/vnd.oci.image.index.v1+json",
+      "mirror": "ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs",
+      "mirrorTag": "4.47",
+      "mirrorDigest": null,
+      "refreshDate": "2026-10-09",
+      "consumers": [".github/workflows/ci.yml"]
+    }
+  ],
+  "excluded": [
+    {
+      "image": "ghcr.io/valkey-io/valkey:8.1.10-alpine",
+      "reason": "already repository-consumed from GHCR; unchanged by CI-H1"
+    }
+  ]
+}

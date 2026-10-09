@@ -1,0 +1,62 @@
+name: Mirror upstream images to GHCR
+
+# CI-H1: populate and refresh repository-controlled GHCR mirrors of the approved
+# upstream Docker Hub images, so normal Workspace CI never depends on
+# unauthenticated Docker Hub pulls.
+#
+# The scheduled run only CHECKS for upstream drift and reports it; it never
+# promotes. Promoting a new upstream digest is a reviewed change to
+# ci/ghcr-mirror-manifest.json followed by full acceptance.
+on:
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: "Copy upstream images into GHCR and record mirror digests"
+        type: boolean
+        default: false
+  schedule:
+    # Low-frequency drift check (Mondays 06:17 UTC). Verify only.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+      - name: Authenticate to GHCR
+        run: |
+          # GITHUB_TOKEN only. Never printed, never committed.
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Verify upstream digests (and mirror when refreshed)
+        env:
+          GHCR_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          mode="--verify"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.refresh }}" = "true" ]; then
+            mode="--mirror"
+          fi
+          node scripts/ci/ghcr-mirror.mjs "$mode" --report mirror-report.json
+      - name: Upload mirror report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ghcr-mirror-report
+          path: mirror-report.json
+          if-no-files-found: warn
+      - name: Show manifest diff when refreshed
+        if: github.event_name == 'workflow_dispatch' && inputs.refresh == true
+        run: |
+          # The refreshed manifest carries the recorded mirror digests. Commit it
+          # only after review; this workflow never pushes to the repository.
+          git --no-pager diff --stat -- ci/ghcr-mirror-manifest.json || true
+          git --no-pager diff -- ci/ghcr-mirror-manifest.json || true
