@@ -44,6 +44,10 @@ jobs:
       - name: Verify upstream digests (and mirror when refreshed)
         env:
           GHCR_OWNER: ${{ github.repository_owner }}
+          # Optional. Supplying these raises the upstream Docker Hub pull limit
+          # for the mirror job only; normal Workspace CI never uses them.
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           mode="--verify"

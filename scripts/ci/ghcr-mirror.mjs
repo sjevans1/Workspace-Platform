@@ -36,27 +36,44 @@ const ACCEPT = [
   "application/vnd.docker.distribution.manifest.v2+json",
 ].join(",");
 
+function withRetry(fn, attempts = 4, baseMs = 5000) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return fn();
+    } catch (error) {
+      lastError = error;
+      const delay = baseMs * attempt;
+      console.error(
+        `attempt ${attempt}/${attempts} failed: ${String(error.message || error).slice(0, 200)}; retrying in ${delay}ms`,
+      );
+      execFileSync("sleep", [String(delay / 1000)]);
+    }
+  }
+  throw lastError;
+}
+
 function remoteDigest(reference) {
   // Works for both Docker Hub (with token) and GHCR (with docker login creds).
   if (reference.startsWith("docker.io/")) {
     const [repo, tag] = reference.replace("docker.io/", "").split(":");
-    const out = execFileSync("curl", [
-      "-sSI",
-      "-H",
-      `Accept: ${ACCEPT}`,
-      "-H",
-      `Authorization: Bearer ${token(repo)}`,
-      `https://registry-1.docker.io/v2/${repo}/manifests/${tag}`,
-    ]).toString();
+    const out = withRetry(() =>
+      execFileSync("curl", [
+        "-sSI",
+        "-H",
+        `Accept: ${ACCEPT}`,
+        "-H",
+        `Authorization: Bearer ${token(repo)}`,
+        `https://registry-1.docker.io/v2/${repo}/manifests/${tag}`,
+      ]).toString(),
+    );
     const match = out.match(/docker-content-digest:\s*(\S+)/i);
     if (!match) throw new Error(`no digest for ${reference}`);
     return match[1].trim();
   }
-  const out = execFileSync("skopeo", [
-    "inspect",
-    "--raw",
-    `docker://${reference}`,
-  ]).toString();
+  const out = withRetry(() =>
+    execFileSync("skopeo", ["inspect", "--raw", `docker://${reference}`]).toString(),
+  );
   return "sha256:" + createHash("sha256").update(out).digest("hex");
 }
 
@@ -84,11 +101,18 @@ for (const image of manifest.images) {
     const tagged = `${image.mirror}:${image.mirrorTag}`;
     // Registry-to-registry copy; --all preserves every architecture of the
     // upstream index. Skopeo copies manifest bytes verbatim, so the mirror
-    // digest equals the upstream digest.
-    execFileSync(
-      "skopeo",
-      ["copy", "--all", `docker://${upstreamRef}`, `docker://${tagged}`],
-      { stdio: "inherit" },
+    // digest equals the upstream digest. --src-creds is only supplied when the
+    // operator configured a Docker Hub token, which raises the upstream pull
+    // limit; normal Workspace CI never needs it.
+    const srcCreds = process.env.DOCKERHUB_USERNAME
+      ? ["--src-creds", `${process.env.DOCKERHUB_USERNAME}:${process.env.DOCKERHUB_TOKEN}`]
+      : [];
+    withRetry(() =>
+      execFileSync(
+        "skopeo",
+        ["copy", "--all", ...srcCreds, `docker://${upstreamRef}`, `docker://${tagged}`],
+        { stdio: "inherit" },
+      ),
     );
     const mirrorDigest = remoteDigest(tagged);
     entry.mirrorDigestResolved = mirrorDigest;
