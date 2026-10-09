@@ -8098,6 +8098,9 @@ test("W09d worker binds accepted preview decisions and rolls back stale work", a
     existing_mode: "authorized-update",
     key_property_id: "code",
     keyed_plan_digest: preview.keyed.keyed.plan_digest,
+    // Every caller above intentionally authorizes a real update, so the
+    // server-side explicit-confirmation gate must be satisfied.
+    confirm_keyed_updates: true,
     idempotency_key,
   });
 
@@ -8111,6 +8114,20 @@ test("W09d worker binds accepted preview decisions and rolls back stale work", a
     accepted,
     replayKey,
   );
+  // The confirmation gate is intentional: an otherwise valid authorized update
+  // submitted without explicit confirmation is refused with 400.
+  const unconfirmed = await req(
+    "POST",
+    "/imports",
+    {
+      ...acceptedRequest,
+      confirm_keyed_updates: false,
+      idempotency_key: randomUUID(),
+    },
+    importer,
+  );
+  assert.equal(unconfirmed.statusCode, 400, unconfirmed.body);
+  assert.match(unconfirmed.body, /explicit confirmation/i);
   const queued = await ok("POST", "/imports", acceptedRequest, importer);
   await tick(db);
   const completed = await ok("GET", "/jobs/" + queued.id, undefined, importer);
