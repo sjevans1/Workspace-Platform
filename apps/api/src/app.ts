@@ -130,6 +130,7 @@ import { registerScim, setScimGroupRoleMapping } from "./scim.ts";
 import {
   createResource,
   createRecord,
+  updateRecordCanonical,
   resolveKeyedMatches,
   records,
   replaceDocument,
@@ -2520,38 +2521,23 @@ function dataRoutes(
             .strict(),
           r,
         ),
-        d = await one(
+        current = await one(
           q,
-          "SELECT v.*,d.properties FROM database_records v JOIN databases d ON d.resource_id=v.database_id WHERE v.resource_id=$1 FOR UPDATE OF v,d",
+          "SELECT values FROM database_records WHERE resource_id=$1",
           [n.id],
         );
-      assert(d, 404, "Record not found");
-      assert(
-        d.revision === v.expected_revision,
-        409,
-        "Record changed; reload before saving",
+      assert(current, 404, "Record not found");
+      const updated = await updateRecordCanonical(
+        q,
+        a,
+        n.id,
+        { ...current.values, ...v.values },
+        v.expected_revision,
       );
-      const values = validateValues(d.properties, { ...d.values, ...v.values });
-      await validatePeople(q, d.properties, values);
-      await validateRelationWrites(q, a, d.properties, v.values);
-      await q.query(
-        "UPDATE database_records SET values=$2,revision=revision+1 WHERE resource_id=$1",
-        [n.id, json(values)],
-      );
-      await q.query(
-        "UPDATE resources SET title=$2,search_text=$3,updated_at=now(),updated_by=$4 WHERE id=$1",
-        [
-          n.id,
-          values[d.properties.find((p: any) => p.type === "title").id],
-          indexedRecordText(d.properties, values),
-          a.user_id,
-        ],
-      );
-      await emit(q, a, "record.updated", n.id, d.revision + 1);
       return {
         ...n,
-        values: await presentedRecordValues(q, a, d.properties, values),
-        revision: d.revision + 1,
+        values: await presentedRecordValues(q, a, updated.properties, updated.values),
+        revision: updated.revision,
       };
     },
     "databases.write",
