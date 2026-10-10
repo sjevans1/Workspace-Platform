@@ -9664,3 +9664,94 @@ test("W10c5e a previously working private attachment URL is denied after revocat
     "the stored permission state reflects the revocation",
   );
 });
+
+test("W11 reconnect: comment and reply state survive a collaboration reconnect", async () => {
+  // Wave X / X4a (W11 closure). Comments are server-persisted, so a collaboration
+  // reconnect must not lose them and must not break reply atomicity. The provider
+  // is torn down and recreated, which is the reconnect the Wave R harness
+  // exercises for documents.
+  const c = await connect(owner);
+  try {
+    const rootBody = "W11 reconnect root " + randomUUID();
+    const posted = await ok("POST", `/resources/${page.id}/comments`, {
+      body: rootBody,
+    });
+    assert.ok(posted.id);
+
+    c.provider.destroy();
+    const reconnected = await connect(owner);
+    try {
+      const list = await ok("GET", `/resources/${page.id}/comments`);
+      assert.ok(
+        list.some(
+          (entry: any) => entry.id === posted.id && entry.body === rootBody,
+        ),
+        "comment state must survive the reconnect",
+      );
+
+      // Reply atomicity still holds after the reconnect.
+      const reply = await ok("POST", `/resources/${page.id}/comments`, {
+        body: "W11 reconnect reply " + randomUUID(),
+        reply_to: posted.id,
+      });
+      assert.equal(reply.parent_comment_id, posted.id);
+
+      // A reply to a reply is still refused (root-only threading) after reconnect.
+      const nested = await req(
+        "POST",
+        `/resources/${page.id}/comments`,
+        { body: "nested", reply_to: reply.id },
+        owner,
+      );
+      assert.equal(nested.statusCode, 400, nested.body);
+    } finally {
+      reconnected.provider.destroy();
+    }
+  } finally {
+    if (c.provider) c.provider.destroy();
+  }
+});
+
+test("W12 notification pagination is bounded and stable, and retention is deterministic", async () => {
+  // Wave X / X4a (W12 closure).
+  // 1. The window is bounded.
+  const first = (await ok("GET", "/notifications")).map((n: any) => n.id);
+  assert.ok(first.length <= 100, "the notification window must be bounded");
+
+  // 2. Two rows sharing the SAME created_at must still order deterministically.
+  const a = randomUUID();
+  const b = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    for (const [id, message] of [
+      [a, "W12 tie A"],
+      [b, "W12 tie B"],
+    ] as const)
+      await q.query(
+        "INSERT INTO notifications(id,tenant_id,user_id,resource_id,message,created_at) VALUES($1,$2,$3,$4,$5,now())",
+        [id, owner.tenant, owner.id, page.id, message],
+      );
+  });
+  const second = (await ok("GET", "/notifications")).map((n: any) => n.id);
+  const third = (await ok("GET", "/notifications")).map((n: any) => n.id);
+  assert.deepEqual(third, second, "repeated reads must return a stable order");
+  const [higher, lower] = a > b ? [a, b] : [b, a];
+  assert.ok(second.indexOf(higher) >= 0 && second.indexOf(lower) >= 0);
+  assert.ok(
+    second.indexOf(higher) < second.indexOf(lower),
+    "rows sharing a timestamp must order by id descending",
+  );
+
+  // 3. Retention is deterministic: every returned row belongs to the requesting
+  // recipient, and no notification can outlive its resource (FK contract).
+  const mine = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT id FROM notifications WHERE user_id=$1", [owner.id]),
+  );
+  const mineIds = new Set(mine.rows.map((row: any) => row.id));
+  assert.ok(second.every((id: string) => mineIds.has(id)));
+  const orphans = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT count(*)::int AS count FROM notifications n LEFT JOIN resources r ON r.id=n.resource_id WHERE r.id IS NULL",
+    ),
+  );
+  assert.equal(orphans.rows[0].count, 0);
+});

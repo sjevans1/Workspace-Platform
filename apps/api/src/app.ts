@@ -3509,7 +3509,10 @@ function dataRoutes(
         a,
         (
           await q.query(
-            "SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100",
+            // Wave X / X4a (W12): bounded AND stable. created_at alone has no
+            // tiebreaker, so rows sharing a timestamp could order differently
+            // between reads; id DESC makes the window deterministic.
+            "SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC, id DESC LIMIT 100",
             [a.user_id],
           )
         ).rows,
