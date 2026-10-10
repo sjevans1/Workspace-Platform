@@ -9536,3 +9536,131 @@ test("W26 organisation branding authority and tenant isolation", async () => {
   assert.equal(otherMe.statusCode, 200, otherMe.body);
   assert.notEqual(JSON.parse(otherMe.body).branding?.productName, "Org A Product");
 });
+
+test("W10c5e a previously working private attachment URL is denied after revocation", async () => {
+  // Wave X / X4a. The acceptance is NOT "a revoked user cannot request a new
+  // URL". It is: a URL that DEMONSTRABLY WORKED before revocation no longer
+  // grants access afterwards. The URL is the file id route, so the same URL
+  // string is used either side of the revocation.
+  const privateSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W10c5e space " + randomUUID(),
+  });
+  const privatePage = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: privateSpace.id,
+    title: "W10c5e private page " + randomUUID(),
+  });
+
+  const boundary = "----w10c5e" + randomUUID().replaceAll("-", "");
+  const payload = "W10c5e private attachment bytes";
+  const uploaded = await req(
+    "POST",
+    `/resources/${privatePage.id}/files`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="evidence.txt"\r\nContent-Type: text/plain\r\n\r\n${payload}\r\n--${boundary}--\r\n`,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+  const attachment = uploaded.json();
+  const url = `/files/${attachment.id}/content`;
+
+  // The URL carries no capability: it is a stable file id, and the storage
+  // object key is never exposed to a client.
+  assert.equal(attachment.url, "/api/v1" + url);
+  assert.ok(
+    !/[?&]/.test(attachment.url),
+    "the attachment URL must carry no token, signature or query parameter",
+  );
+  const storedKey = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT object_key FROM files WHERE id=$1", [attachment.id]),
+  );
+  assert.ok(!url.includes(storedKey.object_key), "the URL must not embed the storage key");
+
+  // A principal who can read the page can use the URL. (fresh member session:
+  // this is about authorization, not session longevity.)
+  const actor = await freshMemberActor("w10c5e principal");
+  await permissionPatch(`/resources/${privatePage.id}/permissions`, {
+    inherit: false,
+    grants: [{ principal_id: actor.id, level: 1 }],
+  });
+  const workedBefore = await req("GET", url, undefined, actor);
+  assert.equal(workedBefore.statusCode, 200, workedBefore.body);
+  assert.equal(workedBefore.body, payload);
+  assert.equal(String(workedBefore.headers["cache-control"]), "no-store");
+
+  // 1. DIRECT grant revoked. The same URL must stop working.
+  await permissionPatch(`/resources/${privatePage.id}/permissions`, {
+    inherit: false,
+    grants: [],
+  });
+  const afterDirect = await req("GET", url, undefined, actor);
+  assert.equal(afterDirect.statusCode, 404, afterDirect.body);
+  // Non-enumerating: the denial does not disclose the attachment.
+  assert.doesNotMatch(afterDirect.body, /evidence|attachment|private/i);
+
+  // An unrelated authorized principal still has access to the same URL.
+  const stillAllowed = await req("GET", url, undefined, owner);
+  assert.equal(stillAllowed.statusCode, 200, stillAllowed.body);
+  assert.equal(stillAllowed.body, payload);
+
+  // Tenant B can never reach it, before or after.
+  const otherTenant = await freshOtherTenant("W10c5e other tenant");
+  assert.equal((await req("GET", url, undefined, otherTenant)).statusCode, 404);
+
+  // 2. INHERITED access path removed. Grant through the parent space, use the
+  // URL, then remove the inherited path.
+  const parentSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W10c5e space " + randomUUID(),
+  });
+  const childPage = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: parentSpace.id,
+    title: "W10c5e child page " + randomUUID(),
+  });
+  const uploaded2 = await req(
+    "POST",
+    `/resources/${childPage.id}/files`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="inherited.txt"\r\nContent-Type: text/plain\r\n\r\n${payload}\r\n--${boundary}--\r\n`,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded2.statusCode, 200, uploaded2.body);
+  const url2 = `/files/${uploaded2.json().id}/content`;
+
+  const inheriting = await freshMemberActor("w10c5e inheritor");
+  await permissionPatch(`/resources/${parentSpace.id}/permissions`, {
+    inherit: true,
+    grants: [{ principal_id: inheriting.id, level: 1 }],
+  });
+  const inheritedBefore = await req("GET", url2, undefined, inheriting);
+  assert.equal(inheritedBefore.statusCode, 200, inheritedBefore.body);
+  assert.equal(inheritedBefore.body, payload);
+
+  await permissionPatch(`/resources/${parentSpace.id}/permissions`, {
+    inherit: false,
+    grants: [],
+  });
+  const inheritedAfter = await req("GET", url2, undefined, inheriting);
+  assert.equal(inheritedAfter.statusCode, 404, inheritedAfter.body);
+  // The child remains readable to an authorized principal: only the revoked
+  // path changed (direct-child/inherited semantics stay consistent).
+  assert.equal((await req("GET", url2, undefined, owner)).statusCode, 200);
+
+  // 3. Restart/restore does not resurrect revoked access: authorization is live
+  // database state, so a brand-new session for the same principal is still
+  // denied, and the stored permission state reflects the revocation.
+  const reissue = await req("GET", url, undefined, { ...actor });
+  assert.equal(reissue.statusCode, 404, reissue.body);
+  const livePolicy = await ok("GET", `/resources/${privatePage.id}/permissions`);
+  const ownEntry = livePolicy.policy.at(-1);
+  assert.equal(ownEntry.id, privatePage.id);
+  assert.equal(
+    ownEntry.grants.length,
+    0,
+    "the stored permission state reflects the revocation",
+  );
+});
