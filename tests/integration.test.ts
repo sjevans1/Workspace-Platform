@@ -9755,3 +9755,168 @@ test("W12 notification pagination is bounded and stable, and retention is determ
   );
   assert.equal(orphans.rows[0].count, 0);
 });
+
+test("W04 admin-assisted mail-free recovery is scoped, one-time, expiring and audited", async () => {
+  // Wave X / X4b-3 (W04). Hostile cases are first-class here: unauthorized
+  // issuance, cross-tenant targeting, unknown targets, replay, supersession and
+  // expiry are all asserted, not just the happy path.
+  const victim = await freshMemberActor("W04 victim");
+  const victimEmail = `member-${victim.id}@example.test`;
+  const baseline = await req("GET", "/me", undefined, victim);
+  assert.equal(baseline.statusCode, 200, baseline.body);
+
+  // 2. An unauthorized role cannot issue recovery material.
+  const nonAdmin = await freshMemberActor("W04 non-admin");
+  const memberAttempt = await req(
+    "POST",
+    `/users/${victim.id}/recovery`,
+    undefined,
+    nonAdmin,
+  );
+  assert.equal(memberAttempt.statusCode, 403, memberAttempt.body);
+
+  // 3. Cross-tenant targeting is denied, and looks exactly like a missing user.
+  const otherTenant = await freshOtherTenant("W04 other tenant");
+  const crossTenant = await req(
+    "POST",
+    `/users/${victim.id}/recovery`,
+    undefined,
+    otherTenant,
+  );
+  assert.equal(crossTenant.statusCode, 404, crossTenant.body);
+
+  // 4. An unknown target is the SAME denial: no enumeration oracle beyond the
+  // administrative knowledge the actor already has.
+  const unknown = await req(
+    "POST",
+    `/users/${randomUUID()}/recovery`,
+    undefined,
+    owner,
+  );
+  assert.equal(unknown.statusCode, 404, unknown.body);
+  assert.equal(unknown.json().error, crossTenant.json().error);
+
+  // 1. The authorized owner issues material for an eligible same-tenant user.
+  const issued = await ok("POST", `/users/${victim.id}/recovery`);
+  assert.ok(issued.token && issued.token.length >= 20);
+  assert.equal(issued.expires_in_seconds, 1800);
+
+  // 5 and 6. The raw value is returned once and stored ONLY as a hash.
+  const stored = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT token_hash,used_at,revoked_at,expires_at FROM recovery_material WHERE id=$1",
+      [issued.id],
+    ),
+  );
+  assert.equal(stored.token_hash, hash(issued.token));
+  assert.notEqual(stored.token_hash, issued.token);
+  assert.match(stored.token_hash, /^[a-f0-9]{64}$/);
+  assert.equal(stored.used_at, null);
+
+  // 14. Audit identifies action, actor and target without the secret.
+  const audit = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT action,actor_id,resource_id,request_id FROM audit_events WHERE action='auth.recovery_issued' AND resource_id=$1 ORDER BY created_at DESC LIMIT 1",
+      [victim.id],
+    ),
+  );
+  assert.equal(audit.actor_id, owner.id);
+  assert.ok(!JSON.stringify(audit).includes(issued.token));
+
+  // 12 and 13. Completion changes the credential and revokes prior sessions.
+  const done = await req(
+    "POST",
+    "/auth/recovery/complete",
+    { token: issued.token, password: "w04-recovered-password-123" },
+    null,
+  );
+  assert.equal(done.statusCode, 200, done.body);
+  assert.ok(done.json().sessions_revoked >= 1);
+  // 11. The route carries a declared rate limit.
+  assert.equal(Number(done.headers["x-ratelimit-limit"]), 10);
+  // 13. The victim's prior session is invalidated.
+  assert.equal((await req("GET", "/me", undefined, victim)).statusCode, 401);
+  // 12. The new credential works and a wrong one does not.
+  const relogin = await req(
+    "POST",
+    "/auth/login",
+    { email: victimEmail, password: "w04-recovered-password-123" },
+    null,
+  );
+  assert.equal(relogin.statusCode, 200, relogin.body);
+  const wrong = await req(
+    "POST",
+    "/auth/login",
+    { email: victimEmail, password: "not-the-password-123" },
+    null,
+  );
+  assert.equal(wrong.statusCode, 401, wrong.body);
+
+  // 9. Replay after successful use fails.
+  const replay = await req(
+    "POST",
+    "/auth/recovery/complete",
+    { token: issued.token, password: "w04-replay-password-123" },
+    null,
+  );
+  assert.equal(replay.statusCode, 400, replay.body);
+
+  // 10. Superseded material fails: a fresh issuance revokes the outstanding one.
+  const first = await ok("POST", `/users/${victim.id}/recovery`);
+  const second = await ok("POST", `/users/${victim.id}/recovery`);
+  const superseded = await req(
+    "POST",
+    "/auth/recovery/complete",
+    { token: first.token, password: "w04-superseded-password-1" },
+    null,
+  );
+  assert.equal(superseded.statusCode, 400, superseded.body);
+  const usable = await req(
+    "POST",
+    "/auth/recovery/complete",
+    { token: second.token, password: "w04-final-password-1234" },
+    null,
+  );
+  assert.equal(usable.statusCode, 200, usable.body);
+
+  // 7. Expiry is enforced.
+  const expiring = await ok("POST", `/users/${victim.id}/recovery`);
+  await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "UPDATE recovery_material SET expires_at=now()-interval '1 minute' WHERE id=$1",
+      [expiring.id],
+    ),
+  );
+  const expiredUse = await req(
+    "POST",
+    "/auth/recovery/complete",
+    { token: expiring.token, password: "w04-expired-password-123" },
+    null,
+  );
+  assert.equal(expiredUse.statusCode, 400, expiredUse.body);
+
+  // The denial is uniform across unknown, expired and already used material, so
+  // the completion route leaks nothing about which case it was.
+  const unknownUse = await req(
+    "POST",
+    "/auth/recovery/complete",
+    { token: "z".repeat(40), password: "w04-unknown-password-123" },
+    null,
+  );
+  assert.equal(unknownUse.statusCode, 400, unknownUse.body);
+  assert.equal(unknownUse.json().error, expiredUse.json().error);
+  assert.equal(unknownUse.json().error, replay.json().error);
+
+  // 8. A completed material cannot be reused even by its legitimate holder: the
+  // original completion was consumptive (already asserted via replay) and the
+  // stored row records the use rather than the secret.
+  const consumed = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT used_at FROM recovery_material WHERE id=$1", [second.id]),
+  );
+  assert.ok(consumed.used_at, "the used material records its consumption");
+
+  // 16. Nothing above required SMTP: the flow ran with no mail configuration.
+  assert.ok(!process.env.SMTP_HOST && !process.env.MAIL_URL);
+});

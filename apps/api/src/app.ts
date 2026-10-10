@@ -1216,6 +1216,121 @@ export async function buildApp(
       return { ok: true };
     },
   );
+  // Wave X / X4b-3 (W04): admin/owner-assisted account recovery for a mail-free
+  // deployment. There is deliberately NO unauthenticated self-service
+  // initiation: with no trusted delivery or verification channel, such a route
+  // would have to invent a second identity-verification mechanism. An authorised
+  // owner/admin issues one-time material for an eligible same-tenant user, and
+  // that material is the proof of possession when the user sets a new credential.
+  route(
+    "POST",
+    "/users/:id/recovery",
+    "Issue one-time account recovery material",
+    async (q, a, r) => {
+      admin(a);
+      const target = id(r);
+      // Eligible: an ACTIVE membership in the actor's OWN tenant, and not a
+      // service account. Anything else is reported exactly like a missing user,
+      // so this adds no enumeration oracle beyond administrative knowledge the
+      // actor already has.
+      const membership = await one(
+        q,
+        "SELECT m.user_id,u.is_service FROM memberships m JOIN users u ON u.id=m.user_id" +
+          " WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.active",
+        [a.tenant_id, target],
+      );
+      assert(membership && !membership.is_service, 404, "User not found");
+      // A fresh issuance supersedes any outstanding material for that user.
+      await q.query(
+        "UPDATE recovery_material SET revoked_at=now()" +
+          " WHERE tenant_id=$1 AND user_id=$2 AND used_at IS NULL AND revoked_at IS NULL",
+        [a.tenant_id, target],
+      );
+      const raw = token(),
+        materialId = randomUUID();
+      // Only the hash is stored. The raw value leaves the process exactly once,
+      // in this response, and is never logged or written to the audit record.
+      await q.query(
+        "INSERT INTO recovery_material(id,tenant_id,user_id,token_hash,issued_by,expires_at)" +
+          " VALUES($1,$2,$3,$4,$5,now()+interval '30 minutes')",
+        [materialId, a.tenant_id, target, hash(raw), a.user_id],
+      );
+      await q.query(
+        "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id,request_id)" +
+          " VALUES($1,$2,$3,'auth.recovery_issued',$4,$5)",
+        [randomUUID(), a.tenant_id, a.user_id, target, r.id],
+      );
+      return { id: materialId, token: raw, expires_in_seconds: 1800 };
+    },
+  );
+  // Completion is unauthenticated BY NECESSITY (the user cannot sign in), but it
+  // is not a self-service flow: it requires possession of admin-issued material.
+  // Every unusable case - unknown, expired, already used, superseded - returns the
+  // SAME denial, so it is not an enumeration oracle.
+  app.post(
+    "/api/v1/auth/recovery/complete",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "5 minutes" } },
+      logLevel: "warn",
+    },
+    async (r) => {
+      const v = body(
+        z
+          .object({
+            token: z.string().min(20).max(512),
+            password: z.string().min(12).max(256),
+          })
+          .strict(),
+        r,
+      );
+      const candidate = await db.system((q) =>
+        one(
+          q,
+          "SELECT * FROM recovery_material_context($1)",
+          [hash(v.token)],
+        ),
+      );
+      // Hash the password regardless of whether the material is usable, so the
+      // work performed does not distinguish the two cases.
+      const encoded = await passwordHash(v.password);
+      const completed = candidate
+        ? await db.tenant(candidate.tenant_id, async (q) => {
+            // Atomic single-use claim: expiry, replay and supersession are all
+            // enforced by the same predicate.
+            const claimed = await one(
+              q,
+              "UPDATE recovery_material SET used_at=now()" +
+                " WHERE id=$1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at>now()" +
+                " RETURNING id",
+              [candidate.id],
+            );
+            if (!claimed) return null;
+            await q.query("UPDATE users SET password_hash=$2 WHERE id=$1", [
+              candidate.user_id,
+              encoded,
+            ]);
+            // Prior sessions for that user in that tenant are revoked, so
+            // recovery cannot leave an existing session alive.
+            const revoked = await q.query(
+              "DELETE FROM sessions WHERE tenant_id=$1 AND user_id=$2",
+              [candidate.tenant_id, candidate.user_id],
+            );
+            await q.query(
+              "INSERT INTO audit_events(id,tenant_id,actor_id,action,resource_id,request_id)" +
+                " VALUES($1,$2,NULL,'auth.recovery_used',$3,$4)",
+              [randomUUID(), candidate.tenant_id, candidate.user_id, r.id],
+            );
+            return { sessions_revoked: revoked.rowCount };
+          })
+        : null;
+      assert(
+        completed,
+        400,
+        "Recovery material is invalid, expired or already used",
+      );
+      return { ok: true, sessions_revoked: completed.sessions_revoked };
+    },
+  );
   route("GET", "/me", "Session and organisation", async (q, a, r) => {
     const o = await one(q, "SELECT * FROM organisations WHERE id=$1", [
       a.tenant_id,
