@@ -9422,3 +9422,39 @@ test("W25-T curated templates instantiate safely, atomically and tenant-locally"
     "failed instantiation must leave no partial template state behind",
   );
 });
+
+test("W26 deployment summary is admin-only and never exposes a secret value", async () => {
+  // Wave X / X3 (W26): the operator/admin-readable summary reuses the existing
+  // authenticated surface. The owner is the administrative principal.
+  const allowed = await req("GET", "/admin/deployment", undefined, owner);
+  assert.equal(allowed.statusCode, 200, allowed.body);
+  const body = JSON.parse(allowed.body);
+  assert.equal(typeof body.summary.storageProfile, "string");
+  assert.equal(body.summary.mailTransport, "none");
+  assert.equal(typeof body.summary.secureCookies, "boolean");
+  assert.equal(typeof body.summary.antivirusMode, "string");
+  assert.ok(Array.isArray(body.issues));
+
+  // A member is not an administrative principal, and a guest is not either.
+  const denied = await req("GET", "/admin/deployment", undefined, member);
+  assert.equal(denied.statusCode, 403, denied.body);
+  const guestDenied = await req("GET", "/admin/deployment", undefined, guest);
+  assert.equal(guestDenied.statusCode, 403, guestDenied.body);
+
+  // No credential value can appear in the response. Secret settings are
+  // reported as names only.
+  for (const name of [
+    "POSTGRES_PASSWORD",
+    "RUNTIME_DB_PASSWORD",
+    "ENCRYPTION_KEY",
+    "SETUP_TOKEN",
+    "METRICS_BEARER_TOKEN",
+    "OIDC_CLIENT_SECRET",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
+  ]) {
+    const value = process.env[name];
+    if (value && value.length >= 8)
+      assert.ok(!allowed.body.includes(value), `summary leaked ${name}`);
+  }
+});

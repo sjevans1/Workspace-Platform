@@ -71,6 +71,7 @@ import {
   brandingSchema,
   organisationBranding,
 } from "../../../packages/branding/index.ts";
+import { validateDeployment } from "../../../packages/deployment/index.ts";
 import { emit, encrypt } from "../../../packages/events/index.ts";
 import {
   beginEventCursor,
@@ -1084,10 +1085,20 @@ export async function buildApp(
           409,
           "Setup already completed",
         );
-        await q.query(
-          "INSERT INTO organisations(id,name,branding) VALUES($1,$2,$3)",
-          [tenant, v.organisation, orgBranding ? json(orgBranding) : null],
-        );
+        // The branding column is NOT NULL DEFAULT '{}', so only name it when the
+        // administrator actually supplied organisation branding. Otherwise the
+        // original insert is used and the existing default applies, which keeps
+        // existing installations and upgrades behaving exactly as before.
+        if (orgBranding)
+          await q.query(
+            "INSERT INTO organisations(id,name,branding) VALUES($1,$2,$3)",
+            [tenant, v.organisation, json(orgBranding)],
+          );
+        else
+          await q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [
+            tenant,
+            v.organisation,
+          ]);
         await q.query(
           "INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)",
           [user, v.name, v.email, encoded],
@@ -3322,6 +3333,23 @@ function dataRoutes(
       await emit(q, a, "permission.updated", id(r));
       return { ok: true, revision: current.permission_revision + 1 };
     },
+  );
+  // Wave X / X3 (W26): operator/admin-readable deployment summary. Reuses the
+  // shared deployment validator and the existing readiness primitives rather
+  // than adding a monitoring subsystem. Safe fields only: profile, storage and
+  // encryption posture, antivirus, local auth, deployment OIDC, branding state
+  // and validation issues. Secret VALUES are never read here; settings whose
+  // value is secret appear as names only.
+  route(
+    "GET",
+    "/admin/deployment",
+    "Read the safe deployment summary",
+    async (q, a) => {
+      admin(a);
+      const report = validateDeployment(process.env, "api");
+      return { valid: report.ok, summary: report.summary, issues: report.issues };
+    },
+    "workspace.read",
   );
   route(
     "PATCH",

@@ -110,6 +110,34 @@ const rotation = (prepared: boolean): JsonSchema => ({
 });
 
 export const integrationOpenApi: Record<string, JsonSchema> = {
+  // Wave X / X3 (W26): operator/admin-readable deployment summary. Safe fields
+  // only; secret values are never read or returned.
+  "GET /admin/deployment": {
+    response: {
+      200: {
+        type: "object",
+        required: ["valid", "summary", "issues"],
+        properties: {
+          valid: { type: "boolean" },
+          summary: { type: "object", additionalProperties: true },
+          issues: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["setting", "problem"],
+              properties: {
+                setting: { type: "string" },
+                problem: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      ...errors,
+    },
+  },
   "POST /webhooks/:id/secret-rotation": rotation(true),
   "POST /webhooks/:id/secret-rotation/activate": rotation(false),
   "DELETE /webhooks/:id/secret-rotation": rotation(false),
