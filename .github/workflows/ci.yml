@@ -216,6 +216,29 @@ jobs:
           docker compose ps
           docker compose logs
           exit 1
+      - name: Verify the frontend actually serves before browser acceptance
+        run: |
+          # CI-H2: the service-healthy condition above (and the API's /ready
+          # through Caddy) proves service liveness, not that the Next frontend
+          # can serve. Caddy starts once web is merely STARTED, so browser steps
+          # could reach a frontend that is not yet accepting requests and report
+          # "expected element absent".
+          #
+          # This is a state-based readiness wait on a real served document, not a
+          # blind sleep: it polls the actual frontend response and fails closed
+          # with the web container logs if the frontend never serves.
+          served=0
+          for i in $(seq 1 90); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)"
+            if [ "$code" = "200" ]; then served=1; break; fi
+            sleep 2
+          done
+          if [ "$served" != "1" ]; then
+            echo "Frontend did not serve http://localhost:8080/ with 200" >&2
+            docker compose logs web
+            exit 1
+          fi
+          echo "Frontend is serving HTTP 200 before browser acceptance"
       - name: Verify deployed monitoring endpoint
         run: |
           token="$(sed -n 's/^METRICS_BEARER_TOKEN=//p' .env)"

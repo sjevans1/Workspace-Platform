@@ -2,6 +2,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from "@pla
 import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { recoverOnce, assertWorkspaceShell } from "./support/readiness";
 
 const email = "browser@example.test";
 const password = "browser-password-123";
@@ -16,13 +17,25 @@ function compose(args: string[]) {
 async function login(page: Page) {
   await page.goto("/");
   const heading = page.getByRole("heading", { name: "Welcome back, Shane." });
-  if (await heading.isVisible()) return;
+  const requireShell = () =>
+    recoverOnce(
+      `capacity-shell-${test.info().project.name}`,
+      () => assertWorkspaceShell(page),
+      async () => {
+        await page.goto("/");
+      },
+    );
+  if (await heading.isVisible()) {
+    await requireShell();
+    return;
+  }
   const signIn = page.getByRole("button", { name: "Sign in", exact: true });
   await expect(signIn).toBeVisible();
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await signIn.click();
   await expect(heading).toBeVisible();
+  await requireShell();
 }
 
 async function waitForCollabHealth(expectedConnections?: number) {
