@@ -169,3 +169,33 @@ test("W24-R capacity criteria are unchanged by this infrastructure change", asyn
     "capacity measurement must remain in the spec",
   );
 });
+
+test("W24 whole-stack entry login uses the same verified, bounded sign-in", async () => {
+  const spec = await readFile(
+    fileURLToPath(new URL("../e2e/w24-capacity.spec.ts", import.meta.url)),
+    "utf8",
+  );
+  const verified = spec.indexOf('r.url().includes("/api/v1/auth/login")');
+  assert.ok(
+    verified >= 0,
+    "the whole-stack entry login must await and verify its real response",
+  );
+  const retryAfter = spec.indexOf('headers()["retry-after"]');
+  assert.ok(
+    retryAfter >= 0,
+    "a 429 must be answered with the server-directed Retry-After",
+  );
+  assert.ok(
+    spec.includes("Sign-in remained rate limited after the server-directed wait"),
+    "the single bounded retry must fail hard when the limit persists",
+  );
+  assert.match(
+    spec,
+    /\[1, 5, 10, 25\]/,
+    "the whole-stack 1/5/10/25 capacity ladder must remain",
+  );
+  assert.ok(
+    spec.includes("429"),
+    "the workload's 429 accounting must remain in the spec",
+  );
+});

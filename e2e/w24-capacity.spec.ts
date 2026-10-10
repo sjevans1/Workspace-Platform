@@ -78,15 +78,49 @@ function compose(args: string[]) {
 async function login(page: Page) {
   await page.goto("/");
   const heading = page.getByRole("heading", { name: "Welcome back, Shane." });
-  if (await heading.isVisible()) return;
   const signIn = page.getByRole("button", { name: "Sign in", exact: true });
-  await expect(signIn).toBeVisible();
-  await page.getByLabel("Email", { exact: true }).fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await signIn.click();
-  // This step runs only after the shared sign-in budget has been replenished,
-  // so a single attempt is expected to succeed. Retrying here would spend more
-  // of the strict production sign-in budget rather than prove the window.
+  // Deterministic entry state before deciding whether to authenticate.
+  await expect(signIn.or(heading)).toBeVisible({ timeout: 30000 });
+  if (await signIn.isVisible()) {
+    // Option C for the shared production sign-in budget: the legitimate login
+    // is the only sign-in request this step issues. A 429 is answered with the
+    // server-directed Retry-After and ONE bounded retry; if the limit persists,
+    // fail hard instead of spending more of the budget. The workload's own 429
+    // accounting further down is unchanged.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await page.getByLabel("Email", { exact: true }).fill(email);
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      const response = page.waitForResponse(
+        (r) =>
+          r.url().includes("/api/v1/auth/login") &&
+          r.request().method() === "POST",
+      );
+      await signIn.click();
+      const loginResponse = await response;
+      if (loginResponse.status() !== 429) {
+        expect(
+          loginResponse.ok(),
+          "Login should succeed or return a bounded rate limit",
+        ).toBeTruthy();
+        break;
+      }
+      const retry = Number(loginResponse.headers()["retry-after"] || 0);
+      const body = await loginResponse.json().catch(() => ({}));
+      const fromBody = Number(
+        String(body.error || "").match(/retry in (\d+) seconds?/i)?.[1] || 0,
+      );
+      const seconds = retry || fromBody || 10;
+      expect(
+        seconds,
+        "Only bounded login backoff is supported in acceptance",
+      ).toBeLessThanOrEqual(30);
+      if (attempt === 1)
+        throw Error(
+          "Sign-in remained rate limited after the server-directed wait",
+        );
+      await page.waitForTimeout((seconds + 1) * 1000);
+    }
+  }
   await expect(heading).toBeVisible({ timeout: 30000 });
 }
 
