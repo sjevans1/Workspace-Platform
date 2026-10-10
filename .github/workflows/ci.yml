@@ -16,7 +16,7 @@ permissions:
   contents: read
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       # CI-H1: service images come from the repository-controlled GHCR mirrors
@@ -46,8 +46,8 @@ jobs:
       TEST_SHUTDOWN_DIAGNOSTICS: "true"
       PGOPTIONS: "-c statement_timeout=30000 -c lock_timeout=10000"
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
@@ -112,7 +112,7 @@ jobs:
           npm run accept:s3
       - run: npm run build
   deployment:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The deployed acceptance job now hosts the whole-stack W24 qualification in
     # addition to deployment, the browser workflow, the Wave R harness, the
     # W24-R collaboration capacity run, the isolated restore drill, the
@@ -125,8 +125,8 @@ jobs:
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
@@ -299,7 +299,7 @@ jobs:
           # commit (see docs/VISUAL_REGRESSION.md). The canary is excluded so it
           # cannot overwrite a real baseline.
           npx playwright test --config=playwright.visual.config.ts --grep-invert "@canary" --update-snapshots
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines
         with:
           name: visual-baselines
@@ -534,7 +534,7 @@ jobs:
             E2E_BASE_URL=https://workspace.test \
             E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)" \
             npx playwright test e2e/tls.spec.ts
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: browser-results
