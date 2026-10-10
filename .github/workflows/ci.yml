@@ -338,10 +338,13 @@ jobs:
       - name: Wait for auth rate-limit budget before W24-R
         run: |
           # The deployed browser workflow just ran Chromium, Firefox and WebKit
-          # across three viewports against the same Caddy inbound IP, so the
-          # sign-in route's strict production budget can already be exhausted
-          # when W24-R starts. Adapt CI sequencing to the limiter instead of
-          # weakening or bypassing it.
+          # across three viewports against the same Caddy inbound IP. Check the
+          # shared general budget and API liveness ONLY. The sign-in budget is
+          # never probed: any credential probe consumes one of the sign-in
+          # route's 10-per-5-minutes production attempts and can cause W24-R's
+          # legitimate login to be rejected with 429. W24-R's own login honors
+          # a 429 with the server-directed Retry-After and fails hard if it
+          # persists.
           bash scripts/ci/wait-for-auth-budget.sh
       - name: Qualify W24-R collaboration capacity
         env:
@@ -417,9 +420,8 @@ jobs:
           npx playwright test e2e/w24-capacity.spec.ts
       - name: Wait for auth rate-limit budget before accessibility matrix
         run: |
-          # Runs after the W24 whole-stack load and authenticates across nine
-          # engine x viewport projects on the shared inbound IP, so it reuses the
-          # same helper rather than assuming leftover sign-in budget.
+          # Runs after the W24 whole-stack load. Non-mutating: checks the shared
+          # general budget and API liveness only, never the sign-in budget.
           bash scripts/ci/wait-for-auth-budget.sh
       - name: Verify keyboard accessibility across engines and viewports
         run: |

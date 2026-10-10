@@ -6,28 +6,29 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-// CI infrastructure proof: scripts/ci/wait-for-auth-budget.sh must adapt CI
-// sequencing to the production rate limiter, never weaken it. It waits only for
-// the server-directed interval, stays bounded, and fails closed.
+// CI infrastructure proof for scripts/ci/wait-for-auth-budget.sh.
+//
+// The critical property: the budget check is NON-MUTATING with respect to the
+// sign-in limiter. It must never submit credentials, valid or invalid, because
+// the sign-in route's production budget (10 attempts / 5 minutes per network) is
+// shared, and a probe can spend the final remaining attempt and cause the
+// legitimate qualification login to be rejected with 429.
 
 const run = promisify(execFile);
 const script = fileURLToPath(
   new URL("../scripts/ci/wait-for-auth-budget.sh", import.meta.url),
 );
 
-type StubOptions = {
-  generalRemaining: string | null;
-  signIn429Count: number; // how many initial sign-ins are rate limited
-  retryAfter?: string;
-};
+type HitLog = { methods: number; logins: number };
 
 async function withStubServer(
-  options: StubOptions,
-  body: (baseUrl: string, hits: { logins: number }) => Promise<void>,
+  options: { generalRemaining: string | null },
+  body: (baseUrl: string, hits: HitLog) => Promise<void>,
 ) {
-  let logins = 0;
+  const hits: HitLog = { methods: 0, logins: 0 };
   const server: Server = createServer((req, res) => {
     if (req.url === "/api/v1/auth/methods") {
+      hits.methods += 1;
       if (options.generalRemaining === null) {
         res.writeHead(200, {});
       } else {
@@ -37,17 +38,10 @@ async function withStubServer(
       return;
     }
     if (req.url === "/api/v1/auth/login") {
-      logins += 1;
-      if (logins <= options.signIn429Count) {
-        res.writeHead(429, {
-          "retry-after": options.retryAfter ?? "1",
-          "content-type": "application/json",
-        });
-        res.end(JSON.stringify({ error: "rate limited" }));
-        return;
-      }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end("{}");
+      // Reaching here at all breaks the non-mutating contract.
+      hits.logins += 1;
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Incorrect email or password" }));
       return;
     }
     res.writeHead(404);
@@ -57,7 +51,7 @@ async function withStubServer(
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   try {
-    await body(`http://127.0.0.1:${port}`, { logins });
+    await body(`http://127.0.0.1:${port}`, hits);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -67,89 +61,81 @@ const fastEnv = {
   ...process.env,
   AUTH_BUDGET_GENERAL_ATTEMPTS: "3",
   AUTH_BUDGET_GENERAL_INTERVAL: "1",
-  AUTH_BUDGET_SIGNIN_ATTEMPTS: "4",
   AUTH_BUDGET_MIN_REMAINING: "240",
-  AUTH_BUDGET_MAX_WAIT: "5",
 };
 
-test("auth budget helper: available budget exits immediately after one probe", async () => {
-  await withStubServer(
-    { generalRemaining: "999", signIn429Count: 0 },
-    async (baseUrl) => {
-      const { stdout } = await run("bash", [script, baseUrl], { env: fastEnv });
-      assert.match(stdout, /Rate-limit budget available/);
-      assert.match(stdout, /Sign-in rate-limit budget available \(status 200\)/);
-    },
+test("budget check does not increment sign-in attempts", async () => {
+  await withStubServer({ generalRemaining: "999" }, async (baseUrl, hits) => {
+    const { stdout } = await run("bash", [script, baseUrl], { env: fastEnv });
+    assert.match(stdout, /Rate-limit budget available/);
+    assert.equal(
+      hits.logins,
+      0,
+      "the budget check must not consume a sign-in attempt",
+    );
+  });
+});
+
+test("a full window is not consumed by the readiness check itself", async () => {
+  await withStubServer({ generalRemaining: "999" }, async (baseUrl, hits) => {
+    await run("bash", [script, baseUrl], { env: fastEnv });
+    assert.equal(hits.logins, 0, "no sign-in attempt may be issued at all");
+    assert.ok(hits.methods >= 1, "the read-only budget route is used");
+  });
+});
+
+test("persistent general rate limiting still fails closed", async () => {
+  await withStubServer({ generalRemaining: "1" }, async (baseUrl, hits) => {
+    await assert.rejects(
+      run("bash", [script, baseUrl], { env: fastEnv }),
+      (error: any) => {
+        assert.match(
+          String(error.stderr),
+          /Shared test rate-limit window did not recover/,
+        );
+        return true;
+      },
+    );
+    assert.equal(hits.logins, 0, "failure handling must not probe sign-in");
+  });
+});
+
+test("an absent budget header fails closed", async () => {
+  await withStubServer({ generalRemaining: null }, async (baseUrl) => {
+    await assert.rejects(
+      run("bash", [script, baseUrl], { env: fastEnv }),
+      (error: any) => {
+        assert.match(
+          String(error.stderr),
+          /Shared test rate-limit window did not recover/,
+        );
+        return true;
+      },
+    );
+  });
+});
+
+test("helper source contains no credential submission", async () => {
+  const source = await readFile(script, "utf8");
+  assert.ok(
+    !/auth\/login/.test(source),
+    "the helper must not reference the sign-in route at all",
+  );
+  assert.ok(!/password/i.test(source), "the helper must not submit credentials");
+  assert.ok(
+    source.includes("/api/v1/auth/methods"),
+    "the read-only budget route must be used",
   );
 });
 
-test("auth budget helper: honors Retry-After and succeeds once the budget recovers", async () => {
-  await withStubServer(
-    { generalRemaining: "999", signIn429Count: 1, retryAfter: "1" },
-    async (baseUrl) => {
-      const { stdout } = await run("bash", [script, baseUrl], { env: fastEnv });
-      assert.match(stdout, /Sign-in limited; waiting 1s before retry 1/);
-      assert.match(stdout, /Sign-in rate-limit budget available \(status 200\)/);
-    },
-  );
-});
-
-test("auth budget helper: fails closed when the sign-in budget never recovers", async () => {
-  await withStubServer(
-    { generalRemaining: "999", signIn429Count: 99, retryAfter: "1" },
-    async (baseUrl) => {
-      await assert.rejects(
-        run("bash", [script, baseUrl], { env: fastEnv }),
-        (error: any) => {
-          assert.match(String(error.stderr), /Sign-in rate-limit window did not recover/);
-          return true;
-        },
-      );
-    },
-  );
-});
-
-test("auth budget helper: fails closed when the general budget never recovers", async () => {
-  await withStubServer(
-    { generalRemaining: "1", signIn429Count: 0 },
-    async (baseUrl) => {
-      await assert.rejects(
-        run("bash", [script, baseUrl], { env: fastEnv }),
-        (error: any) => {
-          assert.match(String(error.stderr), /Shared test rate-limit window did not recover/);
-          return true;
-        },
-      );
-    },
-  );
-});
-
-test("auth budget helper: rejects a server-directed wait beyond the bounded maximum", async () => {
-  await withStubServer(
-    { generalRemaining: "999", signIn429Count: 99, retryAfter: "600" },
-    async (baseUrl) => {
-      await assert.rejects(
-        run("bash", [script, baseUrl], { env: fastEnv }),
-        (error: any) => {
-          assert.match(String(error.stderr), /exceeds the bounded maximum/);
-          return true;
-        },
-      );
-    },
-  );
-});
-
-test("W24-R capacity login verifies its sign-in response before proceeding", async () => {
+test("legitimate login honors the server-directed reset and stays bounded", async () => {
   const spec = await readFile(
     fileURLToPath(new URL("../e2e/wave-r-capacity.spec.ts", import.meta.url)),
     "utf8",
   );
   const verified = spec.indexOf('r.url().includes("/api/v1/auth/login")');
   const readiness = spec.indexOf("recoverOnce(");
-  assert.ok(
-    verified >= 0,
-    "the capacity login must wait for and verify the real login response",
-  );
+  assert.ok(verified >= 0, "the legitimate login must await its real response");
   assert.ok(
     readiness >= 0,
     "the capacity login must still use the shared readiness primitive",
@@ -159,11 +145,27 @@ test("W24-R capacity login verifies its sign-in response before proceeding", asy
     "sign-in must be confirmed before shell readiness is asserted",
   );
   assert.ok(
+    spec.indexOf('headers()["retry-after"]') >= 0,
+    "a 429 must be answered with the server-directed Retry-After",
+  );
+  assert.ok(
     spec.includes("Exceeded bounded rate-limit retries"),
-    "rate-limit handling must stay bounded",
+    "the retry must stay bounded and fail hard when exhausted",
   );
   assert.ok(
     !/waitForTimeout\(\s*\d+\s*\)/.test(spec.split("const capacities")[0]),
     "no arbitrary fixed sleep may precede the capacity ladder",
+  );
+});
+
+test("W24-R capacity criteria are unchanged by this infrastructure change", async () => {
+  const spec = await readFile(
+    fileURLToPath(new URL("../e2e/wave-r-capacity.spec.ts", import.meta.url)),
+    "utf8",
+  );
+  assert.match(spec, /\[1, 5, 10, 25\]/, "the 1/5/10/25 ladder must remain");
+  assert.ok(
+    spec.includes("waitForCollabHealth"),
+    "capacity measurement must remain in the spec",
   );
 });
