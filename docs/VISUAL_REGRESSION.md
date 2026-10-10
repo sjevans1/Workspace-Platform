@@ -59,6 +59,25 @@ Baselines live in `e2e/visual.spec.ts-snapshots/` and are committed.
   against a running stack.
 - A failing snapshot is investigated, never refreshed to green.
 
+## Deterministic shell state (workspace-shell surface)
+
+The shell surface renders navigation state, so it is captured only after a
+deterministic readiness sequence, with no arbitrary sleeps:
+
+1. the fixture is seeded idempotently by title (a repeated run reuses the
+   existing fixture space/page/database instead of duplicating them, so the
+   sidebar can never contain two same-titled entries);
+2. the page explicitly opens the known fixture space by id, so the selected
+   navigation item and main content do not depend on earlier navigation;
+3. a state-based readiness check requires the sidebar search control, the
+   "YOUR SPACES" header and every expected space row to be present before the
+   screenshot, which removes the mid-render paint that previously produced a
+   0.03 desktop-light mismatch.
+
+At phone width the off-canvas navigation is opened through its own contract
+because its panel does not report CSS visibility to Playwright reliably; the
+readiness assertions on the panel's contents are therefore desktop-scoped.
+
 ## Step ordering (load-bearing)
 
 The visual comparison runs **first among browser steps** in the deployment job,

@@ -37,9 +37,29 @@ async function api(
   throw new Error(`Rate limited on ${method} ${path} after bounded retries`);
 }
 
+async function findChild(
+  page: Page,
+  parentId: string,
+  kind: string,
+  title: string,
+): Promise<any | undefined> {
+  const response = await api(
+    page,
+    "get",
+    `/api/v1/resources?parent_id=${parentId}&limit=200`,
+  );
+  const children = (await response.json()) as any[];
+  return children.find((child) => child.kind === kind && child.title === title);
+}
+
 /**
  * Seed the deterministic visual fixture once per run (from the setup project),
  * so the matrix projects do not each repeat the writes and exhaust the budget.
+ *
+ * Idempotent by title: an existing fixture space/page/database is reused rather
+ * than duplicated, so repeated runs and a shared database cannot produce
+ * duplicate sidebar entries (which would make the shell surface nondeterministic
+ * and create ambiguous selectors).
  */
 export async function seedVisualFixture(page: Page): Promise<VisualFixture> {
   const me = await (await api(page, "get", "/api/v1/me")).json();
@@ -47,47 +67,60 @@ export async function seedVisualFixture(page: Page): Promise<VisualFixture> {
   const root = (await (await api(page, "get", "/api/v1/resources")).json())[0];
   expect(root?.id, "workspace root must exist").toBeTruthy();
 
-  const space = await (
-    await api(page, "post", "/api/v1/resources", {
-      headers,
-      data: { kind: "space", parent_id: root.id, title: FIXTURE.space },
-    })
-  ).json();
+  let space = await findChild(page, root.id, "space", FIXTURE.space);
+  if (!space) {
+    space = await (
+      await api(page, "post", "/api/v1/resources", {
+        headers,
+        data: { kind: "space", parent_id: root.id, title: FIXTURE.space },
+      })
+    ).json();
+  }
 
-  const fixturePage = await (
-    await api(page, "post", "/api/v1/resources", {
+  let fixturePage = await findChild(page, space.id, "page", FIXTURE.page);
+  if (!fixturePage) {
+    fixturePage = await (
+      await api(page, "post", "/api/v1/resources", {
+        headers,
+        data: { kind: "page", parent_id: space.id, title: FIXTURE.page },
+      })
+    ).json();
+    await api(page, "patch", `/api/v1/pages/${fixturePage.id}/content`, {
       headers,
-      data: { kind: "page", parent_id: space.id, title: FIXTURE.page },
-    })
-  ).json();
-  await api(page, "patch", `/api/v1/pages/${fixturePage.id}/content`, {
-    headers,
-    data: {
-      blocks: [
-        { type: "heading", props: { level: 1 }, content: FIXTURE.page },
-        { type: "paragraph", content: FIXTURE.pageBody },
-        { type: "checkListItem", content: "First deterministic item" },
-        { type: "checkListItem", content: "Second deterministic item" },
-      ],
-      expected_revision: 1,
-    },
-  });
-
-  const database = await (
-    await api(page, "post", "/api/v1/resources", {
-      headers,
-      data: { kind: "database", parent_id: space.id, title: FIXTURE.database },
-    })
-  ).json();
-  await api(page, "patch", `/api/v1/databases/${database.id}`, {
-    headers,
-    data: { properties: FIXTURE.properties },
-  });
-  for (const values of FIXTURE.records)
-    await api(page, "post", `/api/v1/databases/${database.id}/records`, {
-      headers,
-      data: { values },
+      data: {
+        blocks: [
+          { type: "heading", props: { level: 1 }, content: FIXTURE.page },
+          { type: "paragraph", content: FIXTURE.pageBody },
+          { type: "checkListItem", content: "First deterministic item" },
+          { type: "checkListItem", content: "Second deterministic item" },
+        ],
+        expected_revision: 1,
+      },
     });
+  }
+
+  let database = await findChild(page, space.id, "database", FIXTURE.database);
+  if (!database) {
+    database = await (
+      await api(page, "post", "/api/v1/resources", {
+        headers,
+        data: {
+          kind: "database",
+          parent_id: space.id,
+          title: FIXTURE.database,
+        },
+      })
+    ).json();
+    await api(page, "patch", `/api/v1/databases/${database.id}`, {
+      headers,
+      data: { properties: FIXTURE.properties },
+    });
+    for (const values of FIXTURE.records)
+      await api(page, "post", `/api/v1/databases/${database.id}/records`, {
+        headers,
+        data: { values },
+      });
+  }
 
   return { spaceId: space.id, pageId: fixturePage.id, databaseId: database.id };
 }

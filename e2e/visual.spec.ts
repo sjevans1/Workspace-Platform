@@ -39,6 +39,31 @@ async function openNavigation(page: Page) {
   await page.waitForTimeout(300);
 }
 
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// The authoritative sidebar "space row" button: the icon-prefixed row control,
+// excluding the "Expand …" and "Add to …" buttons that share the same title.
+function spaceRow(page: Page, title: string) {
+  return page.locator(".sidebar").getByRole("button", {
+    name: new RegExp(`^(?!Expand\\b|Add to\\b)\\S+ ${escapeRegExp(title)}$`),
+  });
+}
+
+// Deterministic sidebar readiness. The navigation must be fully rendered with
+// the complete, known space list before any snapshot; otherwise a mid-render
+// paint (sidebar not yet drawn) can be captured, which is exactly what produced
+// the previous desktop-light mismatch.
+async function workspaceShellReady(page: Page) {
+  const sidebar = page.locator(".sidebar");
+  await expect(
+    sidebar.getByRole("button", { name: "Search anything" }),
+  ).toBeVisible();
+  await expect(sidebar.getByText("YOUR SPACES", { exact: true })).toBeVisible();
+  for (const title of [...FIXTURE.defaultSpaces, FIXTURE.space])
+    await expect(spaceRow(page, title)).toBeVisible();
+}
+
 // The deterministic fixture is seeded once by the setup project
 // (e2e/auth.setup.ts) and its ids are read here, so the four snapshot projects
 // do not repeat the writes and exhaust the shared API budget.
@@ -58,14 +83,40 @@ test("sign-in surface", async ({ browser }) => {
   const page = await context.newPage();
   await page.goto("/");
   await expect(page.locator("h1")).toBeVisible();
+  // The sign-in form autofocuses an input; a blinking text caret is not product
+  // content and must not destabilise the snapshot.
+  await page.addStyleTag({
+    content: "*{caret-color:transparent !important}",
+  });
   await expect(page).toHaveScreenshot("sign-in.png", { fullPage: true });
   await context.close();
 });
 
 test("workspace shell with sidebar", async ({ browser }) => {
   const page = await authenticatedPage(browser);
+  const desktop = (test.info().project.use.viewport?.width ?? 0) >= 800;
   await page.goto("/");
   await openNavigation(page);
+  if (desktop) await workspaceShellReady(page);
+
+  // Explicitly open the known fixture space so the selected item and the main
+  // content are deterministic, rather than depending on earlier navigation.
+  // Navigation is by id so it works identically at every viewport (the row
+  // control is off-canvas and not clickable at phone width).
+  await page.goto("/?page=" + fixture.spaceId);
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(
+    FIXTURE.space,
+  );
+
+  // Re-establish the deterministic shell state after navigation (reopening the
+  // off-canvas navigation at phone width) and require it before capturing.
+  await openNavigation(page);
+  if (desktop) {
+    await expect(
+      page.locator(".sidebar").getByRole("button", { name: "Search anything" }),
+    ).toBeVisible();
+    await expect(spaceRow(page, FIXTURE.space)).toBeVisible();
+  }
   await expect(page).toHaveScreenshot("workspace-shell.png");
   await page.context().close();
 });
@@ -144,7 +195,7 @@ test("manage access dialog", async ({ browser }) => {
 test("@canary intentional visual drift is detected", async ({ browser }) => {
   const page = await authenticatedPage(browser);
   await page.goto("/?page=" + fixture.databaseId);
-  await expect(page.getByRole("table")).toBeVisible();
+  await expect(page.getByRole("table")).toBeVisible({ timeout: 60000 });
   await page.addStyleTag({
     content: "body{filter:invert(1) hue-rotate(90deg) !important}",
   });

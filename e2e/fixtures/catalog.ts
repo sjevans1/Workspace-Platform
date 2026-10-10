@@ -20,6 +20,9 @@ export const FIXTURE = {
     { name: "Fixture row three", qty: 3, note: "gamma" },
   ],
   pageBody: "Deterministic fixture page body.",
+  // Spaces the workspace seeds at setup. Asserted present before the shell
+  // snapshot so the navigation list is provably complete.
+  defaultSpaces: ["Company Wiki", "Projects", "Meetings"],
 } as const;
 
 export type FixtureCatalog = typeof FIXTURE;
