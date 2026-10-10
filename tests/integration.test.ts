@@ -9458,3 +9458,56 @@ test("W26 deployment summary is admin-only and never exposes a secret value", as
       assert.ok(!allowed.body.includes(value), `summary leaked ${name}`);
   }
 });
+
+test("W26 organisation branding authority and tenant isolation", async () => {
+  // Wave X / X3 (W26). These criteria belong at the native authorization layer:
+  // they are about who may write what and which tenant may see it.
+  const organisationBrandingBody = {
+    productName: "Org A Product",
+    primaryAccent: "#177a64",
+    logoLight: "",
+    logoDark: "",
+    favicon: "",
+    loginBackground: "",
+    supportName: "Org A support",
+    supportUrl: "",
+    legalName: "",
+    privacyUrl: "",
+    termsUrl: "",
+  };
+
+  // Deployment sign-in branding, read with no session at all.
+  const before = JSON.parse((await req("GET", "/branding", undefined, null)).body);
+
+  // An organisation owner may change their own organisation branding.
+  const patched = await req(
+    "PATCH",
+    "/branding",
+    organisationBrandingBody,
+    owner,
+  );
+  assert.equal(patched.statusCode, 200, patched.body);
+
+  // It takes effect for the signed-in organisation.
+  const me = await ok("GET", "/me");
+  assert.equal(me.branding.productName, "Org A Product");
+
+  // ...and it does NOT change the unauthenticated deployment sign-in branding.
+  const after = JSON.parse((await req("GET", "/branding", undefined, null)).body);
+  assert.deepEqual(after, before);
+  assert.notEqual(after.productName, "Org A Product");
+
+  // A member is not an administrative principal for branding.
+  const memberDenied = await req(
+    "PATCH",
+    "/branding",
+    { ...organisationBrandingBody, productName: "Member rewrite" },
+    member,
+  );
+  assert.equal(memberDenied.statusCode, 403, memberDenied.body);
+
+  // A different tenant cannot see or inherit this organisation's branding.
+  const otherMe = await req("GET", "/me", undefined, other);
+  assert.equal(otherMe.statusCode, 200, otherMe.body);
+  assert.notEqual(JSON.parse(otherMe.body).branding?.productName, "Org A Product");
+});

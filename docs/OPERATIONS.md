@@ -21,6 +21,31 @@ The generator refuses to overwrite an existing `.env`. It creates separate owner
 
 Only Caddy is published to the host. PostgreSQL, Valkey, API and collaboration are internal Compose services.
 
+### Fresh installation (Linux, containers)
+
+The supported production target is **Linux with containers**. Windows/WSL is a supported development and local-evaluation environment, not a production deployment claim.
+
+1. **Obtain the release**: clone the repository or unpack the release archive on the host.
+2. **Generate configuration**: `node scripts/init-env.mjs`. It refuses to overwrite an existing `.env`.
+3. **Customise deployment branding** in `.env`: `PRODUCT_NAME`, `PRIMARY_ACCENT`, `LOGO_LIGHT`, `LOGO_DARK`, `FAVICON`. Deployment branding controls the sign-in surface; organisation branding applies after sign-in. An accent that cannot carry the required UI states is rejected rather than shipped unreadable.
+4. **Validate before starting anything**: `npm run validate:deployment`. It prints a secret-free summary and exits non-zero, naming the offending setting, when the configuration is invalid. Nothing is started if this fails.
+5. **Start**: `docker compose up --build -d`.
+6. **Prove readiness**: `curl --fail http://localhost:8080/ready` and `curl --fail http://localhost:8080/health`.
+7. **First setup**: open the site, enter the setup token from `.env`, and create the first organisation. Optionally set an organisation accent; this never changes deployment sign-in branding.
+8. **Verify**: sign in, confirm the deployment branding on the sign-in screen and the organisation branding inside the workspace, upload a file (readiness covers malware scanning and storage), and read the operator summary at `GET /api/v1/admin/deployment` as an owner.
+
+Step 4 also accepts an explicit file: `npm run validate:deployment -- .env`.
+
+### Mail-free operation
+
+Workspace requires **no mail transport**. There are no SMTP settings to configure, and a deployment with no mail configuration installs, boots and operates fully.
+
+- No `SMTP_*`/`MAIL_*` variables or provider credentials are required or read.
+- Invitations remain copy/share based: an administrator copies the invite link from the interface and shares it directly.
+- Nothing in the core application depends on a third-party mail account, and no external SaaS dependency is introduced.
+
+Mail is deliberately out of 1.0 scope, so the mail-specific clauses of W04/W12 stay outside the required acceptance boundary.
+
 ### Proxy trust and authenticated rate limits (W01)
 
 In Compose, **Caddy is the only allowed public ingress**. It discards caller-provided `X-Forwarded-For` and `X-Real-IP` values and substitutes its actual client socket peer. The API uses `TRUST_PROXY=1`, which allows **exactly one** upstream hop; unrestricted `TRUST_PROXY=true` now fails startup. For direct Node/WSL development, leave `TRUST_PROXY` unset (equivalent to false). **Never expose API port 4000 directly while `TRUST_PROXY=1`; that setting requires a private Caddy-to-API network.** Do not use caller-supplied `X-Real-IP`, `X-Forwarded-For`, email address or other unverified headers for throttling.
@@ -153,7 +178,7 @@ S3_SECRET_KEY=<dedicated-service-secret>
 S3_FORCE_PATH_STYLE=true
 ```
 
-Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. Object writes use the S3 If-None-Match condition so an existing key cannot be overwritten, matching local storage. The automated CI recovery drill passes against authenticated SeaweedFS 4.47. For the selected production provider, use [Production S3/object-store acceptance](PRODUCTION_S3_ACCEPTANCE.md), which exercises the same immutable-write and backup/recovery contract without requiring bucket-creation privileges. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
+Create the private bucket beforehand. Give the service principal only the required object and bucket-health access. Never publish the bucket anonymously. Storage readiness checks require access to the configured bucket. Object writes use the S3 If-None-Match condition so an existing key cannot be overwritten, matching local storage. The automated CI recovery drill passes against authenticated SeaweedFS 4.47. For the selected production provider, use [Production S3/object-store acceptance](PRODUCTION_S3_ACCEPTANCE.md) via `npm run accept:s3`, which exercises the same immutable-write and backup/recovery contract without requiring bucket-creation privileges. There is no second S3 acceptance mechanism; the deployment summary at `GET /api/v1/admin/deployment` reports the selected storage profile. For disconnected environments, mirror container images and npm artifacts into internal registries before installation.
 
 ## File malware scanning
 
@@ -211,6 +236,22 @@ Schedule the stop, backup, verify, rotate and start sequence so a failed run is 
 
 Do not treat a green backup log as proof of recoverability. Pair the schedule with the periodic restore drill below, and confirm that `verify` succeeds for the archive you would actually depend on.
 
+## Uninstall and redeploy
+
+These operations are deliberately distinct. Read the label on each command before running it.
+
+**Stop the application, keep all data (reversible).** Stops containers and keeps every volume and `.env` intact, so starting again returns the same deployment: `docker compose stop`, or `docker compose down` without `-v`. This is the normal uninstall step.
+
+**Recreate containers, keep all data (reversible).** Rebuilds or replaces the application containers while the named volumes persist. Data, branding and the encryption key are unaffected.
+
+**Destroy all data (DESTRUCTIVE AND IRREVERSIBLE).** `docker compose down -v` **deletes the data volumes**. PostgreSQL content, attachment objects, ClamAV signatures and deployment state are gone. There is no undo. Run it only when a deployment is being deliberately retired, and only after a verified backup is restored elsewhere and confirmed.
+
+**Clean reinstall.** After a deliberate volume removal: generate a new `.env` with a new encryption key, validate with `npm run validate:deployment`, start Compose, and perform first-run setup as a new installation.
+
+**Restore into a fresh deployment.** The supported way back from a backup. It requires an empty target and the original `ENCRYPTION_KEY`; see below.
+
+Stopping containers is the normal uninstall step. Deleting volumes is a data-destruction action and must never look like an ordinary uninstall.
+
 ## Restore to an empty deployment
 
 Restore into a separate fresh deployment with the **same application/schema version** and original ENCRYPTION_KEY. The tool refuses to restore into any nonempty application database or overwrite existing object keys. Do not delete the old deployment as part of a recovery test.
@@ -233,10 +274,22 @@ Verify sign-in, page content, restored history, files, a table/board record, and
 
 Back up before each upgrade. Review release notes, build the new image, stop writers, run migrations once, and start the new services. Migrations are transactional and tracked in `schema_migrations`; the migration runner uses an advisory lock. Downgrade is not automatic: recover the matching backup into a separate deployment if needed.
 
+Supported sequence:
+
+1. **Validate**: `npm run validate:deployment` against the target `.env`. Invalid configuration fails closed before anything is stopped.
+2. **Back up**: the ops backup job, retaining the original `ENCRYPTION_KEY`.
+3. **Update**: fetch the new release/image.
+4. **Migrate**: the `migrate` service runs once, transactionally.
+5. **Start/restart**: bring up the new services.
+6. **Verify readiness**: `/ready`, `/health`, and `docker compose ps` all healthy.
+7. **Verify persistence**: the sign-in screen still shows the deployment branding and each organisation still shows its own branding and configuration.
+8. **Recover if needed**: restore the pre-upgrade backup into a separate deployment (see Restore to an empty deployment).
+
 - `/health`: API process alive.
 - `/ready`: API database, rate-limit store when configured, and object storage accessible.
 - `docker compose ps`: API, collaboration and worker should each report `healthy`. Collaboration health verifies its database writer lease; worker health verifies database access, recent tick completion, repeated failures and a maximum in-flight tick duration.
 - `GET /api/v1/operations/status` as an owner/admin human session: tenant queue counts for imports, event dispatch, webhook deliveries and object deletion, including dead/failed work requiring attention.
+- `GET /api/v1/admin/deployment` as an owner/admin human session: safe deployment summary (profile, storage and encryption posture, secure cookies, local auth, deployment SSO, antivirus, branding status, mail-free posture, validation issues). Secret values are never returned; settings whose value is secret appear as names only.
 - `docker compose logs api collab worker`: structured request/worker errors; HTTP logs redact cookies, bearer credentials, CSRF and setup tokens.
 - Settings → Webhooks: recent deliveries, retry/dead status and last error.
 - Settings → Audit: recent append-only application audit records.
