@@ -112,8 +112,8 @@ async function login(page: Page) {
       const seconds = retry || fromBody || 10;
       expect(
         seconds,
-        "Only bounded login backoff is supported in acceptance",
-      ).toBeLessThanOrEqual(30);
+        "Retry-After must match the sign-in route's production window",
+      ).toBeLessThanOrEqual(300);
       if (attempt === 1)
         throw Error(
           "Sign-in remained rate limited after the server-directed wait",

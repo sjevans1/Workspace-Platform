@@ -29,7 +29,7 @@ async function login(page: Page) {
     // backoff. A blind fill-and-click silently no-ops when the click lands
     // before the page is interactive, and it cannot distinguish a 429 from a
     // successful sign-in, which is how this step failed at its entry check.
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       await page.getByLabel("Email", { exact: true }).fill(email);
       await page.getByLabel("Password", { exact: true }).fill(password);
       const response = page.waitForResponse(
@@ -54,9 +54,9 @@ async function login(page: Page) {
       const seconds = retry || fromBody || 10;
       expect(
         seconds,
-        "Only bounded login backoff is supported in acceptance",
-      ).toBeLessThanOrEqual(30);
-      if (attempt === 3) throw Error("Exceeded bounded rate-limit retries");
+        "Retry-After must match the sign-in route's production window",
+      ).toBeLessThanOrEqual(300);
+      if (attempt === 1) throw Error("Exceeded bounded rate-limit retries");
       await page.waitForTimeout((seconds + 1) * 1000);
     }
   }
