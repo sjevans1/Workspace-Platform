@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -135,5 +136,34 @@ test("auth budget helper: rejects a server-directed wait beyond the bounded maxi
         },
       );
     },
+  );
+});
+
+test("W24-R capacity login verifies its sign-in response before proceeding", async () => {
+  const spec = await readFile(
+    fileURLToPath(new URL("../e2e/wave-r-capacity.spec.ts", import.meta.url)),
+    "utf8",
+  );
+  const verified = spec.indexOf('r.url().includes("/api/v1/auth/login")');
+  const readiness = spec.indexOf("recoverOnce(");
+  assert.ok(
+    verified >= 0,
+    "the capacity login must wait for and verify the real login response",
+  );
+  assert.ok(
+    readiness >= 0,
+    "the capacity login must still use the shared readiness primitive",
+  );
+  assert.ok(
+    verified < readiness,
+    "sign-in must be confirmed before shell readiness is asserted",
+  );
+  assert.ok(
+    spec.includes("Exceeded bounded rate-limit retries"),
+    "rate-limit handling must stay bounded",
+  );
+  assert.ok(
+    !/waitForTimeout\(\s*\d+\s*\)/.test(spec.split("const capacities")[0]),
+    "no arbitrary fixed sleep may precede the capacity ladder",
   );
 });
