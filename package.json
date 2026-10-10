@@ -29,6 +29,7 @@
     "licenses": "node scripts/licenses.mjs",
     "format": "prettier --write apps packages scripts tests e2e *.json *.ts *.yaml",
     "accept:s3": "node --import tsx scripts/accept-production-s3.ts",
+    "validate:deployment": "node --import tsx scripts/validate-deployment.ts",
     "provision:tenant": "node --import tsx scripts/provision-tenant.ts",
     "migrate:storage-encryption": "node --import tsx scripts/migrate-storage-encryption.ts",
     "test:ci-orchestrator": "node --test tools/ci-orchestrator/test/*.test.mjs",

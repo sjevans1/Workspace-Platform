@@ -1,7 +1,11 @@
 import { Database } from "../../../packages/database/index.ts";
+import { assertDeploymentValid } from "../../../packages/deployment/index.ts";
 import { startInternalHealthServer } from "../../../packages/operations/health.ts";
 import { createCollab } from "./server.ts";
 
+// Wave X / X3 (W26): fail closed on invalid deployment configuration before the
+// service starts. Service scope, so only settings this service receives.
+assertDeploymentValid(process.env, "collab");
 const db = new Database(),
   collab = await createCollab(db, Number(process.env.COLLAB_PORT || 1234)),
   stopHealth = await startInternalHealthServer(
