@@ -16,26 +16,28 @@ function compose(args: string[]) {
 
 async function login(page: Page) {
   await page.goto("/");
-  const heading = page.getByRole("heading", { name: "Welcome back, Shane." });
-  const requireShell = () =>
-    recoverOnce(
-      `capacity-shell-${test.info().project.name}`,
-      () => assertWorkspaceShell(page),
-      async () => {
-        await page.goto("/");
-      },
-    );
-  if (await heading.isVisible()) {
-    await requireShell();
-    return;
-  }
   const signIn = page.getByRole("button", { name: "Sign in", exact: true });
-  await expect(signIn).toBeVisible();
-  await page.getByLabel("Email", { exact: true }).fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await signIn.click();
-  await expect(heading).toBeVisible();
-  await requireShell();
+  if (await signIn.isVisible()) {
+    await page.getByLabel("Email", { exact: true }).fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await signIn.click();
+  }
+  // CI-H2 ordering: establish the authenticated Workspace shell through the
+  // shared readiness primitive BEFORE any legacy content assertion, so a
+  // not-yet-ready application takes the single bounded recovery instead of
+  // failing the entry check. This protects entry only; the capacity/load
+  // assertions below are untouched.
+  await recoverOnce(
+    `capacity-shell-${test.info().project.name}`,
+    () => assertWorkspaceShell(page),
+    async () => {
+      await page.goto("/");
+    },
+  );
+  // Legacy assertion retained, now guaranteed to run after shell readiness.
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Shane." }),
+  ).toBeVisible();
 }
 
 async function waitForCollabHealth(expectedConnections?: number) {

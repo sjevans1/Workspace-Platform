@@ -71,11 +71,9 @@ async function login(page: Page) {
       if (attempt === 3) throw Error("Exceeded bounded rate-limit retries");
     }
   }
-  await expect(
-    page.getByRole("heading", { name: "Welcome back, Shane." }),
-  ).toBeVisible();
-  // CI-H2: require the authenticated shell (not just the heading) and take the
-  // shared single bounded recovery if it is absent.
+  // CI-H2 ordering: require the authenticated shell (not just the heading)
+  // FIRST, taking the shared single bounded recovery if it is absent. The
+  // legacy heading assertion runs only after shell readiness is confirmed.
   await recoverOnce(
     `a11y-shell-${test.info().project.name}`,
     () => assertWorkspaceShell(page),
@@ -83,6 +81,9 @@ async function login(page: Page) {
       await page.goto("/");
     },
   );
+  await expect(
+    page.getByRole("heading", { name: "Welcome back, Shane." }),
+  ).toBeVisible();
   verifiedCookies = (await page.context().cookies())
     .filter((cookie) => cookie.name === "workspace_session");
 }
