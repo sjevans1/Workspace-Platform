@@ -13,6 +13,23 @@ async function login(page: Page) {
   await page.goto("/");
   await expect(page.locator("h1")).toBeVisible({ timeout: 30000 });
   if (
+    await page
+      .getByRole("heading", { name: "Make yourself at home." })
+      .isVisible()
+  ) {
+    // This spec may run before the workspace workflow has set up the instance.
+    await page
+      .getByLabel("Setup token", { exact: true })
+      .fill(process.env.E2E_SETUP_TOKEN || "e2e-setup-token");
+    await page.getByLabel("Organisation", { exact: true }).fill("OpenJM");
+    await page.getByLabel("Workspace", { exact: true }).fill("Team workspace");
+    await page.getByLabel("Your name", { exact: true }).fill("Shane Evans");
+    await page.getByLabel("Email", { exact: true }).fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await page
+      .getByRole("button", { name: "Create workspace", exact: true })
+      .click();
+  } else if (
     await page.getByRole("button", { name: "Sign in", exact: true }).isVisible()
   ) {
     await page.getByLabel("Email", { exact: true }).fill(email);
@@ -45,7 +62,7 @@ test("W25-T browser: browse, filter, instantiate and verify template classes", a
   await typeFilter.selectOption("space");
   const spaceCards = page.locator(".template-card");
   await expect(spaceCards.first().getByText("Multi-resource")).toBeVisible();
-  expect(await spaceCards.count()).toBe(5);
+  expect(await spaceCards.count()).toBeGreaterThanOrEqual(5);
 
   await typeFilter.selectOption("database");
   await expect(page.locator(".template-card").first().getByText("Database")).toBeVisible();

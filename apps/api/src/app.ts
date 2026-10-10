@@ -1998,7 +1998,22 @@ export async function buildApp(
     "GET",
     "/templates",
     "List built-in templates",
-    async () => templateSummaries(),
+    // Curated templates first, then the legacy built-ins so existing journeys
+    // that reference them by id keep working unchanged.
+    async () => [
+      ...templateSummaries(),
+      ...Object.entries(templates).map(([id, t]) => ({
+        id,
+        title: t.title,
+        description: t.description,
+        icon: t.icon,
+        kind: t.kind,
+        level: t.kind,
+        category: "General",
+        version: 1,
+        resources: 1 + (t.children?.length || 0),
+      })),
+    ],
     "workspace.read",
   );
   dataRoutes(route, storage, antivirus, antivirusMetrics);
