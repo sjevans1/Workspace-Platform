@@ -9270,3 +9270,155 @@ test("W09e durable database export is bounded, permission-safe and cancellable",
     "cancellation signal is cleared after unwind",
   );
 });
+
+test("W25-T curated templates instantiate safely, atomically and tenant-locally", async () => {
+  const creator = await freshMemberActor("W25-T creator");
+  const home = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W25-T " + randomUUID().slice(0, 8),
+  });
+  await permissionPatch(`/resources/${home.id}/permissions`, {
+    inherit: false,
+    grants: [{ principal_id: creator.id, level: 3 }],
+  });
+
+  // Page template: independent ids on repeated instantiation, blocks created.
+  const first = await ok("POST", "/resources", {
+    kind: "page", parent_id: home.id, template: "meeting-notes",
+  }, creator);
+  const second = await ok("POST", "/resources", {
+    kind: "page", parent_id: home.id, template: "meeting-notes",
+  }, creator);
+  assert.equal(first.kind, "page");
+  assert.notEqual(first.id, second.id, "repeated instantiation must allocate independent ids");
+  const doc = await ok("GET", `/pages/${first.id}/content`, undefined, creator);
+  assert.ok(JSON.stringify(doc.blocks).includes("Attendees"), "page template blocks must be created");
+
+  // Database template: defined properties, views and synthetic starter records.
+  const pipeline = await ok("POST", "/resources", {
+    kind: "database", parent_id: home.id, template: "sales-pipeline",
+  }, creator);
+  const schema = await ok("GET", `/databases/${pipeline.id}`, undefined, creator);
+  const propertyIds = schema.properties.map((p: any) => p.id);
+  for (const expected of ["name", "stage", "value", "owner", "close"])
+    assert.ok(propertyIds.includes(expected), `missing property ${expected}`);
+  assert.ok(
+    schema.views.some((v: any) => v.config.type === "board" && v.config.groupBy === "stage"),
+    "board view must be created from the template",
+  );
+  const rows = await ok("GET", `/databases/${pipeline.id}/records`, undefined, creator);
+  assert.equal(rows.length, 1, "synthetic starter record must be created");
+
+  // Multi-resource template: coherent hierarchy, relation remap, cross-resource reference.
+  // A space template instantiates under the workspace root (parent rules unchanged).
+  const project = await ok("POST", "/resources", {
+    kind: "space", parent_id: root.id, template: "project-management",
+  }, creator);
+  const children = await ok("GET", `/resources?parent_id=${project.id}&limit=200`, undefined, creator);
+  assert.deepEqual(
+    children.map((c: any) => c.title).sort(),
+    ["Decision log", "Project brief", "Projects", "Risks", "Tasks"].sort(),
+  );
+  const projectsDb = children.find((c: any) => c.title === "Projects");
+  const tasksDb = children.find((c: any) => c.title === "Tasks");
+  const tasksSchema = await ok("GET", `/databases/${tasksDb.id}`, undefined, creator);
+  const relation = tasksSchema.properties.find((p: any) => p.type === "relation");
+  assert.equal(
+    relation.target_database_id,
+    projectsDb.id,
+    "relation target must remap from the symbolic template reference to the generated database id",
+  );
+  const taskRows = await ok("GET", `/databases/${tasksDb.id}/records`, undefined, creator);
+  const projectRows = await ok("GET", `/databases/${projectsDb.id}/records`, undefined, creator);
+  assert.deepEqual(
+    taskRows[0].values.project,
+    [projectRows[0].id],
+    "record reference must remap to the generated record id",
+  );
+
+  // Tenant isolation: another tenant cannot see the instantiated resources.
+  const otherTenant = randomUUID();
+  await db.tenant(otherTenant, (q) =>
+    q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [otherTenant, "W25-T other"]),
+  );
+  const leaked = await db.tenant(otherTenant, (q) =>
+    q.query("SELECT id FROM resources WHERE id=$1", [project.id]),
+  );
+  assert.equal(leaked.rowCount, 0, "template resources must not be visible across tenants");
+
+  // Authorization boundary: no access to the parent means no instantiation.
+  const outsider = await freshMemberActor("W25-T outsider");
+  const denied = await req("POST", "/resources", {
+    kind: "page", parent_id: home.id, template: "meeting-notes",
+  }, outsider);
+  assert.equal(denied.statusCode, 404, denied.body);
+
+  // Legacy built-in templates still instantiate unchanged.
+  const legacy = await ok("POST", "/resources", {
+    kind: "database", parent_id: home.id, template: "tasks",
+  }, creator);
+  assert.equal(legacy.kind, "database");
+  const legacySchema = await ok("GET", `/databases/${legacy.id}`, undefined, creator);
+  assert.ok(legacySchema.properties.some((p: any) => p.id === "status"), "legacy tasks schema intact");
+
+  // Atomic rollback: force a failure AFTER the root and one child exist.
+  const { instantiateTemplate } = await import("../apps/api/src/template-instantiate.ts");
+  const actor = {
+    tenant_id: creator.tenant,
+    user_id: creator.id,
+    role: "member",
+    name: "W25-T creator",
+    email: "w25t@example.test",
+    scopes: null,
+    expires_at: new Date(Date.now() + 60000),
+  };
+  const broken: any = {
+    id: "broken-atomicity",
+    version: 1,
+    level: "space",
+    category: "Operations",
+    title: "Broken",
+    description: "Fails mid-instantiation.",
+    icon: "x",
+    resource: {
+      key: "root",
+      kind: "space",
+      title: "Broken space",
+      children: [
+        { key: "good", kind: "page", title: "Good page" },
+        {
+          key: "bad",
+          kind: "database",
+          title: "Bad database",
+          properties: [
+            { id: "name", name: "Name", type: "title" },
+            { id: "amount", name: "Amount", type: "number" },
+          ],
+          views: [{ name: "All records", config: { type: "table", filters: [], sort: [] } }],
+          records: [{ key: "r", values: { name: "bad", amount: "not-a-number" } }],
+        },
+      ],
+    },
+  };
+  let failed = false;
+  try {
+    await db.tenant(creator.tenant, (q) =>
+      instantiateTemplate(q, actor as any, broken, root.id),
+    );
+  } catch {
+    failed = true;
+  }
+  assert.ok(failed, "a mid-instantiation failure must surface");
+  const leftover = await db.tenant(creator.tenant, (q) =>
+    q.query(
+      "SELECT title FROM resources WHERE title = ANY($1::text[])",
+      [["Broken space", "Good page", "Bad database"]],
+    ),
+  );
+  assert.equal(
+    leftover.rowCount,
+    0,
+    "failed instantiation must leave no partial template state behind",
+  );
+});

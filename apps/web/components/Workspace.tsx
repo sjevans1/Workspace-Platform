@@ -534,7 +534,9 @@ function Dashboard({
   const [items, setItems] = useState<any[]>([]),
     [spaces, setSpaces] = useState<any[]>([]),
     [notes, setNotes] = useState<any[]>([]),
-    [templateItems, setTemplateItems] = useState<any[]>([]);
+    [templateItems, setTemplateItems] = useState<any[]>([]),
+    [templateCategory, setTemplateCategory] = useState("All"),
+    [templateLevel, setTemplateLevel] = useState("All");
   useEffect(() => {
     run(async () => {
       setItems(
@@ -635,45 +637,126 @@ function Dashboard({
         </div>
       )}
       {screen === "templates" ? (
-        <div className="template-grid">
-          {templateItems.map((template: any) => {
-            const needsSpace = template.kind !== "space" && !spaces.length;
-            return (
-              <button
-                className="template-card"
-                key={template.id}
-                disabled={needsSpace}
-                aria-describedby={needsSpace
-                  ? `template-${template.id}-requirement` : undefined}
-                onClick={() =>
-                  create({
-                    parent: template.kind === "space"
-                      ? root
-                      : spaces[0]?.id || root,
-                    kind: template.kind,
-                    template: template.id,
-                    title: template.title,
-                  })
-                }
+        <div className="template-browser">
+          <div className="section-title">
+            <h2>Templates</h2>
+            <span>
+              {
+                templateItems.filter(
+                  (t: any) =>
+                    (templateCategory === "All" || t.category === templateCategory) &&
+                    (templateLevel === "All" || t.level === templateLevel),
+                ).length
+              }{" "}
+              of {templateItems.length} templates
+            </span>
+          </div>
+          <div className="template-filters" role="group" aria-label="Filter templates">
+            <label className="template-filter">
+              <span>Category</span>
+              <select
+                aria-label="Filter templates by category"
+                value={templateCategory}
+                onChange={(event) => setTemplateCategory(event.target.value)}
               >
-                <span className="template-icon">{template.icon}</span>
-                <h3>{template.title}</h3>
-                <p>{template.description}</p>
-                {needsSpace ? (
-                  <span
-                    className="template-use"
-                    id={`template-${template.id}-requirement`}
-                  >
-                    Create a space first
-                  </span>
-                ) : (
-                  <span className="template-use">
-                    Use template <ArrowRight size={15} />
-                  </span>
+                <option value="All">All categories</option>
+                {[...new Set(templateItems.map((t: any) => t.category))].map(
+                  (category: any) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ),
                 )}
-              </button>
+              </select>
+            </label>
+            <label className="template-filter">
+              <span>Type</span>
+              <select
+                aria-label="Filter templates by type"
+                value={templateLevel}
+                onChange={(event) => setTemplateLevel(event.target.value)}
+              >
+                <option value="All">All types</option>
+                <option value="page">Page</option>
+                <option value="database">Database</option>
+                <option value="space">Multi-resource</option>
+              </select>
+            </label>
+          </div>
+          {(() => {
+            const visible = templateItems.filter(
+              (t: any) =>
+                (templateCategory === "All" || t.category === templateCategory) &&
+                (templateLevel === "All" || t.level === templateLevel),
             );
-          })}
+            if (!visible.length)
+              return (
+                <p role="status" className="template-empty">
+                  No templates match this filter.
+                </p>
+              );
+            return (
+              <div className="template-grid">
+                {visible.map((template: any) => {
+                  const needsSpace =
+                    template.level !== "space" && !spaces.length;
+                  const levelLabel =
+                    template.level === "space"
+                      ? "Multi-resource"
+                      : template.level === "database"
+                        ? "Database"
+                        : "Page";
+                  return (
+                    <button
+                      className="template-card"
+                      key={template.id}
+                      disabled={needsSpace}
+                      aria-label={`Use ${levelLabel} template: ${template.title}`}
+                      aria-describedby={
+                        needsSpace
+                          ? `template-${template.id}-requirement`
+                          : undefined
+                      }
+                      onClick={() =>
+                        create({
+                          parent:
+                            template.level === "space"
+                              ? root
+                              : spaces[0]?.id || root,
+                          kind: template.level,
+                          template: template.id,
+                          title: template.title,
+                        })
+                      }
+                    >
+                      <span className="template-icon">{template.icon}</span>
+                      <span className="template-level">{levelLabel}</span>
+                      <h3>{template.title}</h3>
+                      <p>{template.description}</p>
+                      <span className="template-meta">
+                        {template.category}
+                        {template.resources > 1
+                          ? ` · creates ${template.resources} resources`
+                          : ""}
+                      </span>
+                      {needsSpace ? (
+                        <span
+                          className="template-use"
+                          id={`template-${template.id}-requirement`}
+                        >
+                          Create a space first
+                        </span>
+                      ) : (
+                        <span className="template-use">
+                          Use template <ArrowRight size={15} />
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       ) : (
         <>

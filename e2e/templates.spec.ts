@@ -1,0 +1,155 @@
+import { test, expect, type Page } from "@playwright/test";
+import { recoverOnce, assertWorkspaceShell } from "./support/readiness";
+
+// Wave X X2.5 (W25-T): deployed browser acceptance for the curated template
+// library. Native tests cover every definition; this covers the representative
+// execution classes end to end. Readiness reuses the shared CI-H2 primitive -
+// no sleeps and no local retry logic.
+
+const email = "browser@example.test",
+  password = "browser-password-123";
+
+async function login(page: Page) {
+  await page.goto("/");
+  await expect(page.locator("h1")).toBeVisible({ timeout: 30000 });
+  if (
+    await page
+      .getByRole("heading", { name: "Make yourself at home." })
+      .isVisible()
+  ) {
+    // This spec may run before the workspace workflow has set up the instance.
+    await page
+      .getByLabel("Setup token", { exact: true })
+      .fill(process.env.E2E_SETUP_TOKEN || "e2e-setup-token");
+    await page.getByLabel("Organisation", { exact: true }).fill("OpenJM");
+    await page.getByLabel("Workspace", { exact: true }).fill("Team workspace");
+    await page.getByLabel("Your name", { exact: true }).fill("Shane Evans");
+    await page.getByLabel("Email", { exact: true }).fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await page
+      .getByRole("button", { name: "Create workspace", exact: true })
+      .click();
+  } else if (
+    await page.getByRole("button", { name: "Sign in", exact: true }).isVisible()
+  ) {
+    await page.getByLabel("Email", { exact: true }).fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  }
+  await recoverOnce(
+    "templates-shell",
+    () => assertWorkspaceShell(page),
+    async () => {
+      await page.goto("/");
+    },
+  );
+}
+
+test("W25-T browser: browse, filter, instantiate and verify template classes", async ({
+  page,
+}) => {
+  test.setTimeout(240000);
+  await login(page);
+
+  // Category browsing and type distinction.
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Templates", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(/of \d+ templates/)).toBeVisible();
+
+  const typeFilter = page.getByLabel("Filter templates by type");
+  await typeFilter.selectOption("space");
+  const spaceCards = page.locator(".template-card");
+  await expect(spaceCards.first().getByText("Multi-resource")).toBeVisible();
+  expect(await spaceCards.count()).toBeGreaterThanOrEqual(5);
+
+  await typeFilter.selectOption("database");
+  await expect(page.locator(".template-card").first().getByText("Database")).toBeVisible();
+  await typeFilter.selectOption("page");
+  await expect(page.locator(".template-card").first().getByText("Page", { exact: true })).toBeVisible();
+  await typeFilter.selectOption("All");
+
+  const categoryFilter = page.getByLabel("Filter templates by category");
+  await categoryFilter.selectOption("HR & People");
+  await expect(
+    page.locator(".template-card").filter({ hasText: "HR Workspace" }),
+  ).toBeVisible();
+
+  // Multi-resource instantiation: Project Management (cards open a create dialog).
+  await categoryFilter.selectOption("Projects & Delivery");
+  await page
+    .locator(".template-card")
+    .filter({ hasText: "Project Management" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Create something new" });
+  await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue(
+    "Project Management",
+  );
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(
+    "Project Management",
+    { timeout: 30000 },
+  );
+
+  // Database instantiation: Sales pipeline, with its schema, views and starter record.
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
+  await categoryFilter.selectOption("Sales & CRM");
+  await page
+    .locator(".template-card")
+    .filter({ hasText: "Sales pipeline" })
+    .click();
+  await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue(
+    "Sales pipeline",
+  );
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByRole("table")).toBeVisible({ timeout: 30000 });
+  // Record values render in editable cells, so assert the starter data through
+  // the deployed API rather than cell text.
+  const pipelineId = new URL(page.url()).searchParams.get("page");
+  expect(pipelineId, "created database must be open").toBeTruthy();
+  const pipelineRows = await (
+    await page.request.get(`/api/v1/databases/${pipelineId}/records`)
+  ).json();
+  expect(pipelineRows.map((row: any) => row.values.name)).toContain(
+    "Example: Acme renewal",
+  );
+  // The template's own board view exists and is usable.
+  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await expect(page.getByRole("table")).toHaveCount(0);
+
+  // Remapped cross-resource relation, proven on the deployed stack.
+  const roots = await (await page.request.get("/api/v1/resources")).json();
+  const workspaceRoot = roots[0];
+  const rootChildren = await (
+    await page.request.get(
+      `/api/v1/resources?parent_id=${workspaceRoot.id}&limit=200`,
+    )
+  ).json();
+  const space = rootChildren.find(
+    (r: any) => r.title === "Project Management",
+  );
+  expect(space, "multi-resource template space must exist").toBeTruthy();
+  const children = await (
+    await page.request.get(`/api/v1/resources?parent_id=${space.id}&limit=200`)
+  ).json();
+  const tasks = children.find((c: any) => c.title === "Tasks");
+  const projects = children.find((c: any) => c.title === "Projects");
+  const taskRows = await (
+    await page.request.get(`/api/v1/databases/${tasks.id}/records`)
+  ).json();
+  const projectRows = await (
+    await page.request.get(`/api/v1/databases/${projects.id}/records`)
+  ).json();
+  expect(
+    taskRows[0].values.project,
+    "starter task must reference the generated starter project record",
+  ).toEqual([projectRows[0].id]);
+
+  // Navigation into a created resource, with its starter data present.
+  await page.goto("/?page=" + tasks.id);
+  await expect(page.getByRole("table")).toBeVisible({ timeout: 30000 });
+  expect(taskRows.map((row: any) => row.values.name)).toContain(
+    "Example: draft brief",
+  );
+});
