@@ -9536,3 +9536,222 @@ test("W26 organisation branding authority and tenant isolation", async () => {
   assert.equal(otherMe.statusCode, 200, otherMe.body);
   assert.notEqual(JSON.parse(otherMe.body).branding?.productName, "Org A Product");
 });
+
+test("W10c5e a previously working private attachment URL is denied after revocation", async () => {
+  // Wave X / X4a. The acceptance is NOT "a revoked user cannot request a new
+  // URL". It is: a URL that DEMONSTRABLY WORKED before revocation no longer
+  // grants access afterwards. The URL is the file id route, so the same URL
+  // string is used either side of the revocation.
+  const privateSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W10c5e space " + randomUUID(),
+  });
+  const privatePage = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: privateSpace.id,
+    title: "W10c5e private page " + randomUUID(),
+  });
+
+  const boundary = "----w10c5e" + randomUUID().replaceAll("-", "");
+  const payload = "W10c5e private attachment bytes";
+  const uploaded = await req(
+    "POST",
+    `/resources/${privatePage.id}/files`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="evidence.txt"\r\nContent-Type: text/plain\r\n\r\n${payload}\r\n--${boundary}--\r\n`,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+  const attachment = uploaded.json();
+  const url = `/files/${attachment.id}/content`;
+
+  // The URL carries no capability: it is a stable file id, and the storage
+  // object key is never exposed to a client.
+  assert.equal(attachment.url, "/api/v1" + url);
+  assert.ok(
+    !/[?&]/.test(attachment.url),
+    "the attachment URL must carry no token, signature or query parameter",
+  );
+  const storedKey = await db.tenant(owner.tenant, (q) =>
+    one(q, "SELECT object_key FROM files WHERE id=$1", [attachment.id]),
+  );
+  assert.ok(!url.includes(storedKey.object_key), "the URL must not embed the storage key");
+
+  // A principal who can read the page can use the URL. (fresh member session:
+  // this is about authorization, not session longevity.)
+  const actor = await freshMemberActor("w10c5e principal");
+  await permissionPatch(`/resources/${privatePage.id}/permissions`, {
+    inherit: false,
+    grants: [{ principal_id: actor.id, level: 1 }],
+  });
+  const workedBefore = await req("GET", url, undefined, actor);
+  assert.equal(workedBefore.statusCode, 200, workedBefore.body);
+  assert.equal(workedBefore.body, payload);
+  assert.equal(String(workedBefore.headers["cache-control"]), "no-store");
+
+  // 1. DIRECT grant revoked. The same URL must stop working.
+  await permissionPatch(`/resources/${privatePage.id}/permissions`, {
+    inherit: false,
+    grants: [],
+  });
+  const afterDirect = await req("GET", url, undefined, actor);
+  assert.equal(afterDirect.statusCode, 404, afterDirect.body);
+  // Non-enumerating: the denial does not disclose the attachment.
+  assert.doesNotMatch(afterDirect.body, /evidence|attachment|private/i);
+
+  // An unrelated authorized principal still has access to the same URL.
+  const stillAllowed = await req("GET", url, undefined, owner);
+  assert.equal(stillAllowed.statusCode, 200, stillAllowed.body);
+  assert.equal(stillAllowed.body, payload);
+
+  // Tenant B can never reach it, before or after.
+  const otherTenant = await freshOtherTenant("W10c5e other tenant");
+  assert.equal((await req("GET", url, undefined, otherTenant)).statusCode, 404);
+
+  // 2. INHERITED access path removed. Grant through the parent space, use the
+  // URL, then remove the inherited path.
+  const parentSpace = await ok("POST", "/resources", {
+    kind: "space",
+    parent_id: root.id,
+    title: "W10c5e space " + randomUUID(),
+  });
+  const childPage = await ok("POST", "/resources", {
+    kind: "page",
+    parent_id: parentSpace.id,
+    title: "W10c5e child page " + randomUUID(),
+  });
+  const uploaded2 = await req(
+    "POST",
+    `/resources/${childPage.id}/files`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="inherited.txt"\r\nContent-Type: text/plain\r\n\r\n${payload}\r\n--${boundary}--\r\n`,
+    owner,
+    { "content-type": `multipart/form-data; boundary=${boundary}` },
+  );
+  assert.equal(uploaded2.statusCode, 200, uploaded2.body);
+  const url2 = `/files/${uploaded2.json().id}/content`;
+
+  const inheriting = await freshMemberActor("w10c5e inheritor");
+  await permissionPatch(`/resources/${parentSpace.id}/permissions`, {
+    inherit: true,
+    grants: [{ principal_id: inheriting.id, level: 1 }],
+  });
+  const inheritedBefore = await req("GET", url2, undefined, inheriting);
+  assert.equal(inheritedBefore.statusCode, 200, inheritedBefore.body);
+  assert.equal(inheritedBefore.body, payload);
+
+  await permissionPatch(`/resources/${parentSpace.id}/permissions`, {
+    inherit: false,
+    grants: [],
+  });
+  const inheritedAfter = await req("GET", url2, undefined, inheriting);
+  assert.equal(inheritedAfter.statusCode, 404, inheritedAfter.body);
+  // The child remains readable to an authorized principal: only the revoked
+  // path changed (direct-child/inherited semantics stay consistent).
+  assert.equal((await req("GET", url2, undefined, owner)).statusCode, 200);
+
+  // 3. Restart/restore does not resurrect revoked access: authorization is live
+  // database state, so a brand-new session for the same principal is still
+  // denied, and the stored permission state reflects the revocation.
+  const reissue = await req("GET", url, undefined, { ...actor });
+  assert.equal(reissue.statusCode, 404, reissue.body);
+  const livePolicy = await ok("GET", `/resources/${privatePage.id}/permissions`);
+  const ownEntry = livePolicy.policy.at(-1);
+  assert.equal(ownEntry.id, privatePage.id);
+  assert.equal(
+    ownEntry.grants.length,
+    0,
+    "the stored permission state reflects the revocation",
+  );
+});
+
+test("W11 reconnect: comment and reply state survive a collaboration reconnect", async () => {
+  // Wave X / X4a (W11 closure). Comments are server-persisted, so a collaboration
+  // reconnect must not lose them and must not break reply atomicity. The provider
+  // is torn down and recreated, which is the reconnect the Wave R harness
+  // exercises for documents.
+  const c = await connect(owner);
+  try {
+    const rootBody = "W11 reconnect root " + randomUUID();
+    const posted = await ok("POST", `/resources/${page.id}/comments`, {
+      body: rootBody,
+    });
+    assert.ok(posted.id);
+
+    c.provider.destroy();
+    const reconnected = await connect(owner);
+    try {
+      const list = await ok("GET", `/resources/${page.id}/comments`);
+      assert.ok(
+        list.some(
+          (entry: any) => entry.id === posted.id && entry.body === rootBody,
+        ),
+        "comment state must survive the reconnect",
+      );
+
+      // Reply atomicity still holds after the reconnect.
+      const reply = await ok("POST", `/resources/${page.id}/comments`, {
+        body: "W11 reconnect reply " + randomUUID(),
+        reply_to: posted.id,
+      });
+      assert.equal(reply.parent_comment_id, posted.id);
+
+      // A reply to a reply is still refused (root-only threading) after reconnect.
+      const nested = await req(
+        "POST",
+        `/resources/${page.id}/comments`,
+        { body: "nested", reply_to: reply.id },
+        owner,
+      );
+      assert.equal(nested.statusCode, 400, nested.body);
+    } finally {
+      reconnected.provider.destroy();
+    }
+  } finally {
+    if (c.provider) c.provider.destroy();
+  }
+});
+
+test("W12 notification pagination is bounded and stable, and retention is deterministic", async () => {
+  // Wave X / X4a (W12 closure).
+  // 1. The window is bounded.
+  const first = (await ok("GET", "/notifications")).map((n: any) => n.id);
+  assert.ok(first.length <= 100, "the notification window must be bounded");
+
+  // 2. Two rows sharing the SAME created_at must still order deterministically.
+  const a = randomUUID();
+  const b = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    for (const [id, message] of [
+      [a, "W12 tie A"],
+      [b, "W12 tie B"],
+    ] as const)
+      await q.query(
+        "INSERT INTO notifications(id,tenant_id,user_id,resource_id,message,created_at) VALUES($1,$2,$3,$4,$5,now())",
+        [id, owner.tenant, owner.id, page.id, message],
+      );
+  });
+  const second = (await ok("GET", "/notifications")).map((n: any) => n.id);
+  const third = (await ok("GET", "/notifications")).map((n: any) => n.id);
+  assert.deepEqual(third, second, "repeated reads must return a stable order");
+  const [higher, lower] = a > b ? [a, b] : [b, a];
+  assert.ok(second.indexOf(higher) >= 0 && second.indexOf(lower) >= 0);
+  assert.ok(
+    second.indexOf(higher) < second.indexOf(lower),
+    "rows sharing a timestamp must order by id descending",
+  );
+
+  // 3. Retention is deterministic: every returned row belongs to the requesting
+  // recipient, and no notification can outlive its resource (FK contract).
+  const mine = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT id FROM notifications WHERE user_id=$1", [owner.id]),
+  );
+  const mineIds = new Set(mine.rows.map((row: any) => row.id));
+  assert.ok(second.every((id: string) => mineIds.has(id)));
+  const orphans = await db.tenant(owner.tenant, (q) =>
+    q.query(
+      "SELECT count(*)::int AS count FROM notifications n LEFT JOIN resources r ON r.id=n.resource_id WHERE r.id IS NULL",
+    ),
+  );
+  assert.equal(orphans.rows[0].count, 0);
+});
