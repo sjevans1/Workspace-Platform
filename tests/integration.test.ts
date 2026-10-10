@@ -9920,3 +9920,352 @@ test("W04 admin-assisted mail-free recovery is scoped, one-time, expiring and au
   // 16. Nothing above required SMTP: the flow ran with no mail configuration.
   assert.ok(!process.env.SMTP_HOST && !process.env.MAIL_URL);
 });
+
+test("W02 tenant IdP activation and exact callback binding", async () => {
+  // Wave X / X4b-1 (W02). Hostile cases first-class. Uses its own app instance so
+  // its request budget is independent, and injects the tenant provider factory
+  // through the same seam the deployment provider already uses.
+  const savedOrigins = process.env.OIDC_TENANT_ISSUER_ORIGINS;
+  process.env.OIDC_TENANT_ISSUER_ORIGINS =
+    "https://idp-a.example.test,https://idp-b.example.test";
+  try {
+    const profileEmail = `w02-sso-${randomUUID()}@example.test`;
+    const profileSubject = `sub-${randomUUID()}`;
+    const tenantOidc = (settings: any) => ({
+      label: settings.label,
+      issuer: new URL(settings.issuer).href,
+      async start(redirectUri: string) {
+        const state = `state-${randomUUID()}`,
+          codeVerifier = `verifier-${randomUUID()}`,
+          nonce = `nonce-${randomUUID()}`,
+          url = new URL("https://idp.tenant.test/authorize");
+        url.searchParams.set("state", state);
+        url.searchParams.set("redirect_uri", redirectUri);
+        return { url: url.href, state, codeVerifier, nonce };
+      },
+      async finish() {
+        return {
+          issuer: new URL(settings.issuer).href,
+          subject: profileSubject,
+          email: profileEmail,
+          name: "SSO User",
+          sid: `sid-${profileSubject}`,
+        };
+      },
+    });
+    const w02 = await buildApp(
+      db,
+      undefined,
+      true,
+      fakeOidc,
+      fakeAntivirus,
+      tenantOidc as any,
+    );
+    const call = (
+      method: "GET" | "POST" | "PATCH" | "DELETE",
+      path: string,
+      data?: any,
+      actor: any = owner,
+    ) =>
+      w02.inject({
+        method,
+        url: `/api/v1${path}`,
+        headers: {
+          ...(actor ? { cookie: actor.cookie, "x-csrf-token": actor.csrf } : {}),
+          ...(data !== undefined ? { "content-type": "application/json" } : {}),
+        },
+        ...(data !== undefined ? { payload: data } : {}),
+      });
+    const callback = (state: string) =>
+      w02.inject({
+        method: "GET",
+        url: `/api/v1/auth/oidc/callback?state=${encodeURIComponent(state)}`,
+        headers: { cookie: `workspace_oidc_state=${state}` },
+      });
+    const startFor = async (tenant: string, provider: string) => {
+      const r = await call(
+        "GET",
+        `/auth/oidc/start?tenant=${tenant}&provider=${provider}`,
+        undefined,
+        null,
+      );
+      assert.equal(r.statusCode, 302, r.body);
+      return new URL(String(r.headers.location)).searchParams.get("state")!;
+    };
+    const providerBody = {
+      label: "W02 IdP",
+      issuer: "https://idp-b.example.test",
+      client_id: "client-b",
+      client_secret: "secret-b-123456",
+      token_auth_method: "client_secret_basic",
+    };
+
+    const tenantB = await freshOtherTenant("W02 tenant B");
+    const regB = await call("POST", "/identity/providers", providerBody, tenantB);
+    assert.equal(regB.statusCode, 200, regB.body);
+    const providerB = regB.json();
+
+    // provider created disabled; a disabled provider cannot start authentication.
+    assert.equal(providerB.enabled, false, "a new provider starts disabled");
+    const disabledStart = await call(
+      "GET",
+      `/auth/oidc/start?tenant=${tenantB.tenant}&provider=${providerB.id}`,
+      undefined,
+      null,
+    );
+    assert.equal(disabledStart.statusCode, 404, disabledStart.body);
+
+    // non-admin cannot activate.
+    const nonAdmin = await freshMemberActor("W02 non-admin");
+    const deniedActivation = await call(
+      "PATCH",
+      `/identity/providers/${providerB.id}`,
+      { enabled: true },
+      nonAdmin,
+    );
+    assert.equal(deniedActivation.statusCode, 403, deniedActivation.body);
+
+    // activation bumps the revision and enables selection.
+    const activated = await call(
+      "PATCH",
+      `/identity/providers/${providerB.id}`,
+      { enabled: true },
+      tenantB,
+    );
+    assert.equal(activated.statusCode, 200, activated.body);
+    assert.equal(activated.json().enabled, true);
+    assert.equal(activated.json().revision, providerB.revision + 1);
+
+    // tenant without provider / provider without tenant both fail.
+    for (const query of [
+      `?tenant=${tenantB.tenant}`,
+      `?provider=${providerB.id}`,
+    ]) {
+      const partial = await call("GET", `/auth/oidc/start${query}`, undefined, null);
+      assert.equal(partial.statusCode, 400, partial.body);
+    }
+
+    // cross-tenant provider selection fails (tenant A cannot select B's provider).
+    const crossSelect = await call(
+      "GET",
+      `/auth/oidc/start?tenant=${owner.tenant}&provider=${providerB.id}`,
+      undefined,
+      null,
+    );
+    assert.equal(crossSelect.statusCode, 404, crossSelect.body);
+
+    // all five binding fields are persisted together.
+    const boundState = await startFor(tenantB.tenant, providerB.id);
+    const bound = await db.system((q: any) =>
+      one(q, "SELECT * FROM oidc_login_states WHERE state_hash=$1", [
+        hash(boundState),
+      ]),
+    );
+    assert.equal(bound.tenant_id, tenantB.tenant);
+    assert.equal(bound.provider_id, providerB.id);
+    assert.equal(bound.provider_revision, providerB.revision + 1);
+    assert.equal(bound.expected_issuer, "https://idp-b.example.test/");
+    assert.equal(bound.expected_client_id, "client-b");
+
+    // state is single-use: unknown state is rejected outright.
+    const unknownState = await callback(`unknown-${randomUUID()}`);
+    assert.equal(unknownState.statusCode, 400, unknownState.body);
+
+    // provider disabled AFTER start fails at callback.
+    const afterDisableState = await startFor(tenantB.tenant, providerB.id);
+    await call(
+      "PATCH",
+      `/identity/providers/${providerB.id}`,
+      { enabled: false },
+      tenantB,
+    );
+    const afterDisable = await callback(afterDisableState);
+    assert.equal(afterDisable.statusCode, 403, afterDisable.body);
+    await call(
+      "PATCH",
+      `/identity/providers/${providerB.id}`,
+      { enabled: true },
+      tenantB,
+    );
+
+    // provider revision changed AFTER start fails at callback.
+    const staleState = await startFor(tenantB.tenant, providerB.id);
+    await call(
+      "PATCH",
+      `/identity/providers/${providerB.id}`,
+      { enabled: true },
+      tenantB,
+    );
+    const afterRevision = await callback(staleState);
+    assert.equal(afterRevision.statusCode, 403, afterRevision.body);
+
+    // issuer mismatch fails at callback.
+    const issuerState = await startFor(tenantB.tenant, providerB.id);
+    await db.tenant(tenantB.tenant, (q: any) =>
+      q.query("UPDATE oidc_login_states SET expected_issuer=$2 WHERE state_hash=$1", [
+        hash(issuerState),
+        "https://idp-a.example.test/",
+      ]),
+    );
+    assert.equal((await callback(issuerState)).statusCode, 403);
+
+    // client-ID mismatch fails at callback.
+    const clientState = await startFor(tenantB.tenant, providerB.id);
+    await db.tenant(tenantB.tenant, (q: any) =>
+      q.query(
+        "UPDATE oidc_login_states SET expected_client_id=$2 WHERE state_hash=$1",
+        [hash(clientState), "client-a"],
+      ),
+    );
+    assert.equal((await callback(clientState)).statusCode, 403);
+
+    // invitation tenant mismatch fails: an invitation for tenant A presented
+    // through tenant B's provider.
+    const invited = `w02-invited-${randomUUID()}@example.test`;
+    const invitation = await ok("POST", "/members/invite", {
+      name: "W02 Invitee",
+      email: invited,
+      role: "member",
+    });
+    const inviteToken = new URL(invitation.url).searchParams.get("invite")!;
+    const crossInviteState = await startFor(tenantB.tenant, providerB.id);
+    await callback(crossInviteState); // consume the state cleanly is not needed
+    const inviteStart = await call(
+      "GET",
+      `/auth/oidc/start?tenant=${tenantB.tenant}&provider=${providerB.id}&invite=${encodeURIComponent(inviteToken)}`,
+      undefined,
+      null,
+    );
+    assert.equal(inviteStart.statusCode, 302, inviteStart.body);
+    const inviteState = new URL(
+      String(inviteStart.headers.location),
+    ).searchParams.get("state")!;
+    // The SSO identity email differs from the invitation email, so use a matching
+    // identity for this case by pointing the profile at the invited address.
+    const inviteeOidc = (settings: any) => ({
+      ...tenantOidc(settings),
+      async finish() {
+        return {
+          issuer: new URL(settings.issuer).href,
+          subject: `sub-${randomUUID()}`,
+          email: invited,
+          name: "W02 Invitee",
+          sid: `sid-${randomUUID()}`,
+        };
+      },
+    });
+    const w02Invite = await buildApp(
+      db,
+      undefined,
+      false,
+      fakeOidc,
+      fakeAntivirus,
+      inviteeOidc as any,
+    );
+    const crossInvite = await w02Invite.inject({
+      method: "GET",
+      url: `/api/v1/auth/oidc/callback?state=${encodeURIComponent(inviteState)}`,
+      headers: { cookie: `workspace_oidc_state=${inviteState}` },
+    });
+    assert.equal(crossInvite.statusCode, 403, crossInvite.body);
+    assert.match(crossInvite.body, /Invitation does not belong to this organisation/);
+
+    // A user with memberships in BOTH tenants, whose membership order would
+    // otherwise pick tenant A, authenticating through tenant B's provider must
+    // produce a session whose ACTIVE tenant is B.
+    const ssoUser = randomUUID();
+    await db.tenant(owner.tenant, async (q: any) => {
+      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [
+        ssoUser,
+        profileEmail,
+        "SSO User",
+      ]);
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+        [owner.tenant, ssoUser],
+      );
+    });
+    await db.tenant(tenantB.tenant, (q: any) =>
+      q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+        [tenantB.tenant, ssoUser],
+      ),
+    );
+    const landingState = await startFor(tenantB.tenant, providerB.id);
+    const landing = await callback(landingState);
+    assert.equal(landing.statusCode, 302, landing.body);
+    const setCookies = landing.headers["set-cookie"];
+    const cookieList = Array.isArray(setCookies)
+      ? setCookies.map(String)
+      : [String(setCookies)];
+    const sessionValue = cookieList
+      .find((entry) => entry.startsWith("workspace_session="))!
+      .split(";")[0]
+      .split("=")[1];
+    const me = await w02.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { cookie: `workspace_session=${sessionValue}` },
+    });
+    assert.equal(me.statusCode, 200, me.body);
+    assert.equal(
+      me.json().organisation.id,
+      tenantB.tenant,
+      "a tenant-bound sign-in must land in the bound tenant, not memberships[0]",
+    );
+    // Provenance recorded for the session that W03 depends on.
+    const sessionRow = await db.system((q: any) =>
+      one(q, "SELECT oidc_issuer,oidc_subject FROM sessions WHERE token_hash=$1", [
+        hash(sessionValue),
+      ]),
+    );
+    assert.equal(sessionRow.oidc_issuer, "https://idp-b.example.test/");
+    assert.equal(sessionRow.oidc_subject, profileSubject);
+
+    // No IdP group/claim can produce owner/admin privilege: the login created no
+    // membership and left the existing role untouched.
+    const role = await db.tenant(tenantB.tenant, (q: any) =>
+      one(q, "SELECT role FROM memberships WHERE tenant_id=$1 AND user_id=$2", [
+        tenantB.tenant,
+        ssoUser,
+      ]),
+    );
+    assert.equal(role.role, "member");
+
+    // replay of a consumed state fails.
+    assert.equal((await callback(landingState)).statusCode, 400);
+
+    // provider revoked after start fails at callback.
+    const revokeState = await startFor(tenantB.tenant, providerB.id);
+    await call("DELETE", `/identity/providers/${providerB.id}`, undefined, tenantB);
+    assert.equal((await callback(revokeState)).statusCode, 403);
+
+    // deployment-level OIDC is unchanged: no tenant/provider means the deployment
+    // provider is used and the state row stays unbound.
+    const deploymentStart = await call("GET", "/auth/oidc/start", undefined, null);
+    assert.equal(deploymentStart.statusCode, 302, deploymentStart.body);
+    const deploymentState = new URL(
+      String(deploymentStart.headers.location),
+    ).searchParams.get("state")!;
+    const deploymentBound = await db.system((q: any) =>
+      one(q, "SELECT * FROM oidc_login_states WHERE state_hash=$1", [
+        hash(deploymentState),
+      ]),
+    );
+    assert.equal(deploymentBound.tenant_id, null);
+    assert.equal(deploymentBound.provider_id, null);
+    assert.equal(deploymentBound.expected_issuer, null);
+
+    // local break-glass is unchanged.
+    const localLogin = await w02.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: { email: "owner@example.test", password: "test-password-123" },
+    });
+    assert.equal(localLogin.statusCode, 200, localLogin.body);
+  } finally {
+    if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
+    else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
+  }
+});

@@ -1129,7 +1129,7 @@ export async function buildApp(
             await q.query("SELECT * FROM user_tenants($1)", [user.id])
           ).rows;
           assert(memberships.length, 403, "No active membership");
-          const selected =
+          let selected =
             (invitation &&
               memberships.find(
                 (m: any) => m.tenant_id === invitation.tenant_id,
@@ -1149,6 +1149,11 @@ export async function buildApp(
               403,
               "No active membership in the selected organisation",
             );
+            // The bound membership IS the session's tenant. No fallback to
+            // memberships[0]: with several memberships the pre-existing selection
+            // could otherwise create a session for an organisation the
+            // authentication did not target.
+            selected = boundMembership;
           }
 
           await q.query("SELECT set_config('app.tenant_id',$1,true)", [
@@ -3998,9 +4003,10 @@ function dataRoutes(
       }
       const updated = await one(
         q,
-        "UPDATE oidc_tenant_providers SET enabled=$3,revision=revision+1" +
+        "UPDATE oidc_tenant_providers SET enabled=$3," +
+          " activated_at=CASE WHEN $3 THEN now() ELSE NULL END, revision=revision+1" +
           " WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL" +
-          " RETURNING id,label,issuer,client_id,enabled,revision,revoked_at",
+          " RETURNING id,label,issuer,client_id,enabled,activated_at,revision,revoked_at",
         [a.tenant_id, providerId, v.enabled],
       );
       await emit(
