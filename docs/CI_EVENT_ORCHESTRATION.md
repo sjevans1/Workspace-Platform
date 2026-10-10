@@ -2,6 +2,32 @@
 
 Issue: #132
 
+## Status: retired (2026-10-10)
+
+This loop is retired and disabled. It duplicated a capability the development agent already exercises in-session: CI runs are watched to completion with `gh run watch` as a background process (`notify_on_complete`), and the completion notification is what drives the next step. Running both created two triggers for the same event, a second writer on any branch an event named, and infrastructure that can fail silently and then needs manual repair. For this workflow the marginal value did not justify that cost.
+
+Current state:
+
+- Repository webhook `692802160` is inactive, so no `workflow_run` deliveries are sent.
+- Queue delivery for `workspace-ci-events` is paused.
+- `workspace-ci-agent-bridge.service` and `workspace-ci-agent-tunnel.service` are stopped and disabled, and the bridge port is closed.
+- The Worker, D1 database, queue, DLQ, code, secrets and this document are all kept, so the loop can be re-enabled without a rebuild.
+
+To re-enable, restore in this order:
+
+```bash
+systemctl --user enable --now workspace-ci-agent-bridge.service workspace-ci-agent-tunnel.service
+source ~/.config/workspace-ci-orchestrator/cloudflare.env
+CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx --yes wrangler@4.147.0 queues resume-delivery workspace-ci-events
+gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -F active=true
+```
+
+Restarting the tunnel republishes `AGENT_DISPATCH_URL` and redeploys the Worker automatically.
+
+Before depending on it again, add a liveness check on the public tunnel hostname. A `cloudflared` quick tunnel that loses its edge connection stays alive and reports `active` while its hostname stops resolving, so the unit never restarts and the loop fails silently while GitHub deliveries, the Worker health check, and the bridge all still look healthy. Prefer a named tunnel with an Access service-token policy once a managed DNS zone is available.
+
+Last live model pin before retirement: provider `opencode-go`, model `deepseek-v4.1-flash`, set in `~/.config/workspace-ci-orchestrator/bridge.env`. The pin examples further down that name `openrouter` and `z-ai/glm-5.3-flash` are historical and no longer applied.
+
 ## Goal
 
 Wake the development agent when a relevant CI workflow reaches a terminal state instead of polling GitHub or requiring a human "check in".
@@ -423,12 +449,14 @@ curl --fail --request POST \
 
 Inspect only operational metadata: delivery ID, repository, workflow run ID, SHA, conclusion, attempt count and timestamps. To redrive, publish the unchanged normalized `body` to the main queue's `/messages` endpoint, verify it reaches the bridge, then acknowledge the DLQ lease through `/messages/ack`. Never acknowledge first. Never alter the delivery ID during redrive.
 
-### Temporarily disable the event loop
+### Disable the event loop
 
-Pause new GitHub events and queue delivery without deleting state:
+The loop is currently retired; see the status section at the top of this document. The commands below are the mechanism for pausing it, or re-enabling it later.
+
+Pause new GitHub events and queue delivery without deleting state. GitHub expects a real boolean, so use `-F` (typed) rather than `-f`, which sends the string `"false"` and is rejected with HTTP 422:
 
 ```bash
-gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -f active=false
+gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -F active=false
 source ~/.config/workspace-ci-orchestrator/cloudflare.env
 CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx --yes wrangler@4.147.0 queues pause-delivery workspace-ci-events
 ```
@@ -438,7 +466,7 @@ Resume in the opposite order:
 ```bash
 source ~/.config/workspace-ci-orchestrator/cloudflare.env
 CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" npx --yes wrangler@4.147.0 queues resume-delivery workspace-ci-events
-gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -f active=true
+gh api --method PATCH repos/sjevans1/Workspace-Platform/hooks/692802160 -F active=true
 ```
 
 The hourly/manual CI-checking fallback remains enabled during the reliability period. To operate manually, use exact-head `gh pr checks` and `gh run view` commands, inspect failed jobs only, make one focused correction, push, and stop. Do not remove the hourly fallback until multiple real event-driven CI cycles have completed reliably.
