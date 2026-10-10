@@ -41,3 +41,27 @@ export function defaultBranding(env: NodeJS.ProcessEnv = process.env) {
     termsUrl: env.TERMS_URL || "",
   });
 }
+
+/**
+ * Wave X / X3 (W26): build a complete, validated branding object for an
+ * ORGANISATION row from partial organisation-level overrides.
+ *
+ * Authority: this produces only the value stored on an organisation, which
+ * applies after sign-in to that organisation. Deployment branding is read from
+ * the deployment environment and is never written or overridden here, so no
+ * caller of this function can change the sign-in surface or another tenant.
+ *
+ * Unspecified keys fall back to the deployment defaults, so a stored row is
+ * always a complete object valid against the one branding schema. Malformed
+ * values (including an accent that cannot carry the required UI states) are
+ * rejected by that schema.
+ */
+export function organisationBranding(
+  overrides: Partial<z.infer<typeof brandingSchema>> = {},
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const defined = Object.fromEntries(
+    Object.entries(overrides).filter(([, value]) => value !== undefined),
+  );
+  return brandingSchema.parse({ ...defaultBranding(env), ...defined });
+}

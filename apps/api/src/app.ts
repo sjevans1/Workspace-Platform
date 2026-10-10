@@ -69,6 +69,7 @@ import {
 import {
   defaultBranding,
   brandingSchema,
+  organisationBranding,
 } from "../../../packages/branding/index.ts";
 import { emit, encrypt } from "../../../packages/events/index.ts";
 import {
@@ -1047,13 +1048,35 @@ export async function buildApp(
               email: z.email().transform((s) => s.toLowerCase()),
               password: z.string(),
               demo: z.boolean().default(true),
+              // Wave X / X3 (W26): the first administrator may set ORGANISATION
+              // identity only. Deployment/provider branding stays
+              // operator-controlled through deployment configuration and is not
+              // reachable from setup, so this can never change sign-in identity.
+              organisationBranding: z
+                .object({
+                  productName: title.optional(),
+                  primaryAccent: z
+                    .string()
+                    .regex(/^#[a-f0-9]{6}$/i)
+                    .optional(),
+                  logoLight: z.string().max(2048).optional(),
+                  logoDark: z.string().max(2048).optional(),
+                  legalName: z.string().max(120).optional(),
+                })
+                .strict()
+                .optional(),
             })
             .strict(),
           r,
         ),
         tenant = randomUUID(),
         user = randomUUID(),
-        encoded = await passwordHash(v.password);
+        encoded = await passwordHash(v.password),
+        // Validated by the shared branding schema (including the contrast rule),
+        // so malformed organisation branding is rejected before persistence.
+        orgBranding = v.organisationBranding
+          ? organisationBranding(v.organisationBranding)
+          : undefined;
       const t = await db.tenant(tenant, async (q) => {
         await q.query("SELECT pg_advisory_xact_lock(8831242)");
         assert(
@@ -1061,10 +1084,10 @@ export async function buildApp(
           409,
           "Setup already completed",
         );
-        await q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [
-          tenant,
-          v.organisation,
-        ]);
+        await q.query(
+          "INSERT INTO organisations(id,name,branding) VALUES($1,$2,$3)",
+          [tenant, v.organisation, orgBranding ? json(orgBranding) : null],
+        );
         await q.query(
           "INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)",
           [user, v.name, v.email, encoded],
