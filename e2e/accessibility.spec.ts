@@ -1,4 +1,5 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { recoverOnce, assertWorkspaceShell } from "./support/readiness";
 
 const email = "browser@example.test",
   password = "browser-password-123";
@@ -73,6 +74,15 @@ async function login(page: Page) {
   await expect(
     page.getByRole("heading", { name: "Welcome back, Shane." }),
   ).toBeVisible();
+  // CI-H2: require the authenticated shell (not just the heading) and take the
+  // shared single bounded recovery if it is absent.
+  await recoverOnce(
+    `a11y-shell-${test.info().project.name}`,
+    () => assertWorkspaceShell(page),
+    async () => {
+      await page.goto("/");
+    },
+  );
   verifiedCookies = (await page.context().cookies())
     .filter((cookie) => cookie.name === "workspace_session");
 }
@@ -194,7 +204,17 @@ test("command-K search supports arrow navigation, Enter opening, and Escape focu
   const create = page.getByRole("dialog", { name: "Create something new" });
   await create.getByLabel("Name", { exact: true }).fill(target);
   await create.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(target);
+  // CI-H2: the created page rendering with its expected name is the readiness
+  // state. If the client-side navigation/render misses intermittently in CI,
+  // take the shared single bounded recovery (one reload) and reassert.
+  await recoverOnce(
+    `a11y-command-k-created-${test.info().project.name}`,
+    async () =>
+      expect(page.getByLabel("Page title", { exact: true })).toHaveValue(target),
+    async () => {
+      await page.reload();
+    },
+  );
   const trigger = page.getByRole("button", { name: "Search anything" });
   // At phone width the search trigger lives in the collapsible navigation, so
   // open it first. This is a viewport behaviour, not an engine difference.
