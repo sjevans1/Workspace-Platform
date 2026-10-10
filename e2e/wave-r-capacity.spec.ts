@@ -24,9 +24,41 @@ async function login(page: Page) {
   // skip sign-in whenever the page had not rendered yet.
   await expect(signIn.or(heading)).toBeVisible({ timeout: 30000 });
   if (await signIn.isVisible()) {
-    await page.getByLabel("Email", { exact: true }).fill(email);
-    await page.getByLabel("Password", { exact: true }).fill(password);
-    await signIn.click();
+    // Sign in the way the accepted accessibility login does: wait for the real
+    // login request, verify its outcome, and honor a rate limit with bounded
+    // backoff. A blind fill-and-click silently no-ops when the click lands
+    // before the page is interactive, and it cannot distinguish a 429 from a
+    // successful sign-in, which is how this step failed at its entry check.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await page.getByLabel("Email", { exact: true }).fill(email);
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      const response = page.waitForResponse(
+        (r) =>
+          r.url().includes("/api/v1/auth/login") &&
+          r.request().method() === "POST",
+      );
+      await signIn.click();
+      const loginResponse = await response;
+      if (loginResponse.status() !== 429) {
+        expect(
+          loginResponse.ok(),
+          "Login should succeed or return a bounded rate limit",
+        ).toBeTruthy();
+        break;
+      }
+      const retry = Number(loginResponse.headers()["retry-after"] || 0);
+      const body = await loginResponse.json().catch(() => ({}));
+      const fromBody = Number(
+        String(body.error || "").match(/retry in (\d+) seconds?/i)?.[1] || 0,
+      );
+      const seconds = retry || fromBody || 10;
+      expect(
+        seconds,
+        "Retry-After must match the sign-in route's production window",
+      ).toBeLessThanOrEqual(300);
+      if (attempt === 1) throw Error("Exceeded bounded rate-limit retries");
+      await page.waitForTimeout((seconds + 1) * 1000);
+    }
   }
   // CI-H2 ordering: establish the authenticated Workspace shell through the
   // shared readiness primitive BEFORE any legacy content assertion, so a

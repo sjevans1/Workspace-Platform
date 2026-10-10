@@ -335,6 +335,17 @@ jobs:
           # dedicated test may restart only the collaboration service and must
           # prove it reacquires health before continuing.
           npx playwright test e2e/wave-r-harness.spec.ts
+      - name: Wait for auth rate-limit budget before W24-R
+        run: |
+          # The deployed browser workflow just ran Chromium, Firefox and WebKit
+          # across three viewports against the same Caddy inbound IP. Check the
+          # shared general budget and API liveness ONLY. The sign-in budget is
+          # never probed: any credential probe consumes one of the sign-in
+          # route's 10-per-5-minutes production attempts and can cause W24-R's
+          # legitimate login to be rejected with 429. W24-R's own login honors
+          # a 429 with the server-directed Retry-After and fails hard if it
+          # persists.
+          bash scripts/ci/wait-for-auth-budget.sh
       - name: Qualify W24-R collaboration capacity
         env:
           E2E_BASE_URL: http://localhost:8080
@@ -386,45 +397,12 @@ jobs:
       - name: Replenish browser rate-limit window without changing policy
         run: |
           # Chromium/Firefox and preceding deployed workflows share Caddy's
-          # inbound IP in CI. Wait for real response-header budget recovery.
-          # The API's production rate limiting remains enabled and unchanged.
-          remaining=""
-          for attempt in $(seq 1 24); do
-            headers="$(curl -sS -D - -o /dev/null http://localhost:8080/api/v1/auth/methods)"
-            remaining="$(printf '%s\n' "$headers" | awk 'tolower($1)=="x-ratelimit-remaining:" { gsub("\r","",$2); print $2; exit }')"
-            if [[ "$remaining" =~ ^[0-9]+$ ]] && [ "$remaining" -ge 240 ]; then
-              break
-            fi
-            sleep 5
-          done
-          if ! { [[ "$remaining" =~ ^[0-9]+$ ]] && [ "$remaining" -ge 240 ]; }; then
-            echo "Shared test rate-limit window did not recover" >&2
-            exit 1
-          fi
-          echo "Rate-limit budget available for isolated browser acceptance: $remaining"
-          # The sign-in route keeps its own strict production budget
-          # (10 attempts / 5 minutes per network) which the shared IP exhausts
-          # during the preceding browser workflows. Wait for the server's own
-          # retry hint instead of weakening or bypassing that limiter.
-          for attempt in $(seq 1 12); do
-            code="$(curl -sS -o /tmp/login-probe.json -D /tmp/login-probe.headers -w '%{http_code}' \
-              -X POST -H 'Content-Type: application/json' \
-              -d '{"email":"rate-limit-probe@example.test","password":"probe-not-a-real-credential"}' \
-              http://localhost:8080/api/v1/auth/login)"
-            if [ "$code" != "429" ]; then
-              echo "Sign-in rate-limit budget available (status $code)"
-              exit 0
-            fi
-            wait="$(awk 'tolower($1)=="retry-after:"{gsub("\r","",$2); print $2; exit}' /tmp/login-probe.headers)"
-            if ! [[ "$wait" =~ ^[0-9]+$ ]]; then
-              wait="$(sed -n 's/.*retry in \([0-9][0-9]*\) second.*/\1/p' /tmp/login-probe.json | head -1)"
-            fi
-            [[ "$wait" =~ ^[0-9]+$ ]] || wait=10
-            echo "Sign-in limited; waiting ${wait}s before retry $attempt"
-            sleep "$((wait + 2))"
-          done
-          echo "Sign-in rate-limit window did not recover" >&2
-          exit 1
+          # inbound IP in CI. Reuse the shared helper so every qualification
+          # that needs a fresh authenticated session waits for real
+          # response-header budget recovery and the server's own sign-in retry
+          # hint. The API's production rate limiting remains enabled and
+          # unchanged.
+          bash scripts/ci/wait-for-auth-budget.sh
       - name: Qualify W24 whole-stack capacity
         env:
           E2E_BASE_URL: http://localhost:8080
@@ -440,6 +418,11 @@ jobs:
           # lock pressure, worker and queue backlog. Writes
           # capacity-results/w24-reference-host.json.
           npx playwright test e2e/w24-capacity.spec.ts
+      - name: Wait for auth rate-limit budget before accessibility matrix
+        run: |
+          # Runs after the W24 whole-stack load. Non-mutating: checks the shared
+          # general budget and API liveness only, never the sign-in budget.
+          bash scripts/ci/wait-for-auth-budget.sh
       - name: Verify keyboard accessibility across engines and viewports
         run: |
           # Wave X X1: Chromium, Firefox and WebKit x desktop/tablet/phone.
