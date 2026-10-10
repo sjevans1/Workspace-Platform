@@ -12,6 +12,7 @@ import {
 
 export { TEMPLATE_CATEGORIES };
 export type { TemplateDefinition };
+export { catalog };
 
 const problems = validateCatalog(catalog);
 if (problems.length)

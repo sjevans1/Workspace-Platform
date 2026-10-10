@@ -4,6 +4,7 @@
 // versioned; they reference internal resources symbolically and never embed
 // UUIDs or tenant IDs. See ./schema.ts for the schema and validator.
 import type {
+  TemplateCategory,
   TemplateDefinition,
   TemplateProperty,
   TemplateResource,
@@ -42,11 +43,12 @@ const page = (
   description: string,
   icon: string,
   headings: string[],
+  category: TemplateCategory,
 ): TemplateDefinition => ({
   id: title_.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
   version: 1,
   level: "page",
-  category: "Knowledge",
+  category,
   title: title_,
   description,
   icon,
@@ -74,37 +76,37 @@ const pageTemplates: TemplateDefinition[] = [
     "Procedure",
     "Responsibilities",
     "Review",
-  ]),
+  ], "Operations"),
   page("Meeting notes", "Turn conversations into clear next steps.", "☷", [
     "Attendees",
     "Agenda",
     "Decisions",
     "Actions",
-  ]),
+  ], "Meetings"),
   page("Project brief", "Frame a project before work starts.", "◈", [
     "Objective",
     "Scope and out of scope",
     "Milestones",
     "Risks",
-  ]),
+  ], "Projects & Delivery"),
   page("Decision log", "Remember the why behind the what.", "◎", [
     "Decision",
     "Context",
     "Alternatives considered",
     "Owner and follow-up",
-  ]),
+  ], "Management"),
   page("Policy", "State a rule clearly and make it reviewable.", "⚖", [
     "Policy statement",
     "Applies to",
     "Exceptions",
     "Review cycle",
-  ]),
+  ], "Risk & Compliance"),
   page("Weekly review", "Close the week and set the next one.", "◷", [
     "Wins",
     "Blockers",
     "Decisions needed",
     "Next week's focus",
-  ]),
+  ], "Personal Productivity"),
 ];
 
 // ---------------------------------------------------------------------------
@@ -506,7 +508,7 @@ const spaceTemplates: TemplateDefinition[] = [
             {
               key: "example_task",
               values: { name: "Example: draft brief", status: "Not started" },
-              refs: { project: ["resources.example_project"] },
+              refs: { project: ["records.example_project"] },
             },
           ],
         ),
@@ -564,7 +566,7 @@ const spaceTemplates: TemplateDefinition[] = [
             {
               key: "example_candidate",
               values: { name: "Example: candidate", status: "Applied" },
-              refs: { person: ["resources.example_person"] },
+              refs: { person: ["records.example_person"] },
             },
           ],
         ),
@@ -610,7 +612,7 @@ const spaceTemplates: TemplateDefinition[] = [
             {
               key: "example_engagement",
               values: { name: "Example: onboarding project", status: "Scoping" },
-              refs: { client: ["resources.example_client"] },
+              refs: { client: ["records.example_client"] },
             },
           ],
         ),

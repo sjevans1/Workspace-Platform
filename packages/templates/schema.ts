@@ -141,8 +141,10 @@ export function validateCatalog(
           problems.push(`${at}raw internal id used as a record key`);
         for (const values of Object.values(record.refs || {}))
           for (const ref of values)
-            if (!SYMBOLIC.test(ref) && !/^resources\.|^records\./.test(ref))
-              problems.push(`${at}record reference ${ref} must be symbolic`);
+            if (!/^records\.[A-Za-z0-9_]+$/.test(ref))
+              problems.push(
+                `${at}record reference ${ref} must be a records.<key> symbolic reference`,
+              );
       }
       for (const view of r.views || []) {
         if (!["table", "board", "calendar"].includes(String(view.config?.type)))
