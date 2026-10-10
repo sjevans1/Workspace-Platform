@@ -26,9 +26,10 @@ import {
   encodeDatabasePageCursor,
   newDatabasePageCursor,
 } from "../../../packages/database/page-cursor.ts";
-import { oidcFromEnv, type OidcProvider } from "../../../packages/auth/oidc.ts";
+import { oidcFromEnv, oidcFromConfig, type OidcProvider } from "../../../packages/auth/oidc.ts";
 import {
   sealTenantOidcSecret,
+  openTenantOidcSecret,
   validateTenantOidcRegistration,
 } from "../../../packages/auth/tenant-provider.ts";
 import {
@@ -434,6 +435,11 @@ export async function buildApp(
   logging = true,
   oidc: OidcProvider | null = oidcFromEnv(),
   antivirus: Antivirus = createAntivirus(),
+  // Wave X / X4b-1 (W02): the factory that turns a registered tenant provider's
+  // settings into an active provider. Injectable for the same reason the
+  // deployment provider above is: production always uses oidcFromConfig, and the
+  // acceptance can drive the tenant path without a network identity provider.
+  tenantOidc: typeof oidcFromConfig = oidcFromConfig,
 ) {
   assert(
     /^[a-f0-9]{64}$/i.test(process.env.ENCRYPTION_KEY || ""),
@@ -849,22 +855,91 @@ export async function buildApp(
       logLevel: "warn",
     },
     async (r, reply) => {
-      assert(oidc, 404, "OIDC sign-in is not configured");
       const p = query(r),
         invite = p.invite
           ? z.string().min(20).max(200).parse(p.invite)
           : undefined,
-        started = await oidc.start(oidcRedirectUri);
+        selectedTenant = p.tenant ? uuid.parse(p.tenant) : undefined,
+        selectedProvider = p.provider ? uuid.parse(p.provider) : undefined;
+      // Wave X / X4b-1 (W02): tenant/provider selection is explicit and must be
+      // supplied as a pair. With neither, the deployment provider is used exactly
+      // as before, so deployment-level OIDC is untouched.
+      assert(
+        Boolean(selectedTenant) === Boolean(selectedProvider),
+        400,
+        "Supply tenant and provider together",
+      );
+      let provider = oidc,
+        binding: {
+          tenant_id: string;
+          provider_id: string;
+          provider_revision: number;
+          expected_issuer: string;
+          expected_client_id: string;
+        } | null = null;
+      if (selectedTenant && selectedProvider) {
+        // Only an operator-ACTIVATED, unrevoked provider of that tenant is
+        // selectable. The row is read inside the selected tenant's own context, so
+        // RLS and the explicit tenant filter both apply.
+        const row = await db.tenant(selectedTenant, (q) =>
+          one(
+            q,
+            "SELECT * FROM oidc_tenant_providers WHERE tenant_id=$1 AND id=$2 AND enabled AND revoked_at IS NULL",
+            [selectedTenant, selectedProvider],
+          ),
+        );
+        assert(row, 404, "Identity provider not available");
+        const secret = row.client_secret_encrypted
+          ? openTenantOidcSecret(
+              row.client_secret_encrypted,
+              row.tenant_id,
+              row.id,
+            )
+          : undefined;
+        // Defence in depth: the issuer must still satisfy the operator allowlist
+        // posture at USE time, not only at registration or activation.
+        validateTenantOidcRegistration({
+          label: row.label,
+          issuer: row.issuer,
+          clientId: row.client_id,
+          clientSecret: secret,
+          tokenAuthMethod: row.token_auth_method,
+          scopes: row.scopes,
+        });
+        provider = tenantOidc({
+          issuer: row.issuer,
+          clientId: row.client_id,
+          clientSecret: secret,
+          label: row.label,
+          scopes: row.scopes,
+          requireVerifiedEmail: row.require_verified_email,
+          tokenEndpointAuthMethod: row.token_auth_method,
+        });
+        binding = {
+          tenant_id: row.tenant_id,
+          provider_id: row.id,
+          provider_revision: row.revision,
+          expected_issuer: new URL(row.issuer).href,
+          expected_client_id: row.client_id,
+        };
+      }
+      assert(provider, 404, "OIDC sign-in is not configured");
+      const started = await provider.start(oidcRedirectUri);
       await db.systemTransaction(async (q) => {
         await q.query("DELETE FROM oidc_login_states WHERE expires_at<=now()");
         await q.query(
-          "INSERT INTO oidc_login_states(state_hash,code_verifier,nonce,invite_token_hash,return_to) VALUES($1,$2,$3,$4,$5)",
+          "INSERT INTO oidc_login_states(state_hash,code_verifier,nonce,invite_token_hash,return_to,tenant_id,provider_id,provider_revision,expected_issuer,expected_client_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
           [
             hash(started.state),
             started.codeVerifier,
             started.nonce,
             invite ? hash(invite) : null,
             safeReturnTo(p.return_to),
+            binding?.tenant_id ?? null,
+            binding?.provider_id ?? null,
+            binding?.provider_revision ?? null,
+            binding?.expected_issuer ?? null,
+            binding?.expected_client_id ?? null,
           ],
         );
       });
@@ -899,12 +974,67 @@ export async function buildApp(
       );
       assert(pending, 400, "OIDC login state expired or already used");
 
-      const profile = await oidc.finish(new URL(r.url, appUrl), {
-          state,
-          codeVerifier: pending.code_verifier,
-          nonce: pending.nonce,
-        }),
-        sessionToken = await db.systemTransaction(async (q) => {
+      // Wave X / X4b-1 (W02): a tenant-bound state is revalidated EXACTLY against
+      // the provider that issued it. Every failure is fail-closed.
+      let activeProvider = oidc;
+      if (pending.provider_id) {
+        activeProvider = await db.tenant(pending.tenant_id, async (q) => {
+          const row = await one(
+            q,
+            "SELECT * FROM oidc_tenant_providers WHERE tenant_id=$1 AND id=$2",
+            [pending.tenant_id, pending.provider_id],
+          );
+          assert(row, 403, "Identity provider is no longer available");
+          assert(
+            row.enabled && !row.revoked_at,
+            403,
+            "Identity provider is not active",
+          );
+          assert(
+            row.revision === pending.provider_revision,
+            403,
+            "Identity provider configuration changed",
+          );
+          assert(
+            row.issuer === pending.expected_issuer,
+            403,
+            "Identity provider issuer mismatch",
+          );
+          assert(
+            row.client_id === pending.expected_client_id,
+            403,
+            "Identity provider client mismatch",
+          );
+          const secret = row.client_secret_encrypted
+            ? openTenantOidcSecret(
+                row.client_secret_encrypted,
+                row.tenant_id,
+                row.id,
+              )
+            : undefined;
+          return tenantOidc({
+            issuer: row.issuer,
+            clientId: row.client_id,
+            clientSecret: secret,
+            label: row.label,
+            scopes: row.scopes,
+            requireVerifiedEmail: row.require_verified_email,
+            tokenEndpointAuthMethod: row.token_auth_method,
+          });
+        });
+      }
+      assert(activeProvider, 404, "OIDC sign-in is not configured");
+
+      const profile = await activeProvider.finish(new URL(r.url, appUrl), {
+        state,
+        codeVerifier: pending.code_verifier,
+        nonce: pending.nonce,
+      });
+      // The token exchange must be for the issuer bound at start.
+      if (pending.provider_id)
+        assert(profile.issuer === pending.expected_issuer, 403, "Issuer mismatch");
+
+      const sessionToken = await db.systemTransaction(async (q) => {
           let identity = await one(
               q,
               "SELECT user_id FROM oidc_identities WHERE issuer=$1 AND subject=$2",
@@ -929,6 +1059,14 @@ export async function buildApp(
 
           if (pending.invite_token_hash) {
             assert(invitation, 400, "Invitation invalid or expired");
+            // Wave X / X4b-1 (W02): an invitation from another tenant can never be
+            // redeemed through this tenant's provider.
+            if (pending.provider_id)
+              assert(
+                invitation.tenant_id === pending.tenant_id,
+                403,
+                "Invitation does not belong to this organisation",
+              );
             assert(
               invitation.email === profile.email,
               403,
@@ -997,6 +1135,21 @@ export async function buildApp(
                 (m: any) => m.tenant_id === invitation.tenant_id,
               )) ||
             memberships[0];
+          // Wave X / X4b-1 (W02): a sign-in through a tenant-bound provider must
+          // LAND in that tenant. Falling back to memberships[0] while
+          // authenticating against a different tenant's provider would be a
+          // provenance/tenant confusion, so the bound tenant's active membership
+          // is required.
+          if (pending.provider_id) {
+            const boundMembership = memberships.find(
+              (m: any) => m.tenant_id === pending.tenant_id,
+            );
+            assert(
+              boundMembership,
+              403,
+              "No active membership in the selected organisation",
+            );
+          }
 
           await q.query("SELECT set_config('app.tenant_id',$1,true)", [
             selected.tenant_id,
@@ -3804,6 +3957,59 @@ function dataRoutes(
       assert(revoked, 404, "Identity provider not found");
       await emit(q, a, "identity.provider_revoked", null);
       return { ok: true, ...revoked };
+    },
+  );
+  // Wave X / X4b-1 (W02): explicit activation. A registered provider starts
+  // disabled and can only sign users in once an operator/admin activates it.
+  // Every activation state change bumps `revision`, so any authorization state
+  // already issued against the previous configuration fails closed at callback.
+  route(
+    "PATCH",
+    "/identity/providers/:id",
+    "Activate or deactivate a tenant OIDC provider",
+    async (q, a, r) => {
+      admin(a);
+      const providerId = uuid.parse(params(r).id);
+      const v = body(z.object({ enabled: z.boolean() }).strict(), r);
+      const existing = await one(
+        q,
+        "SELECT * FROM oidc_tenant_providers WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL",
+        [a.tenant_id, providerId],
+      );
+      assert(existing, 404, "Identity provider not found");
+      if (v.enabled) {
+        // Re-assert the SSRF/allowlist posture at the moment of activation: an
+        // issuer that is no longer operator-approved cannot be switched on.
+        const secret = existing.client_secret_encrypted
+          ? openTenantOidcSecret(
+              existing.client_secret_encrypted,
+              existing.tenant_id,
+              existing.id,
+            )
+          : undefined;
+        validateTenantOidcRegistration({
+          label: existing.label,
+          issuer: existing.issuer,
+          clientId: existing.client_id,
+          clientSecret: secret,
+          tokenAuthMethod: existing.token_auth_method,
+          scopes: existing.scopes,
+        });
+      }
+      const updated = await one(
+        q,
+        "UPDATE oidc_tenant_providers SET enabled=$3,revision=revision+1" +
+          " WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL" +
+          " RETURNING id,label,issuer,client_id,enabled,revision,revoked_at",
+        [a.tenant_id, providerId, v.enabled],
+      );
+      await emit(
+        q,
+        a,
+        v.enabled ? "identity.provider_activated" : "identity.provider_deactivated",
+        null,
+      );
+      return updated;
     },
   );
   route(
