@@ -90,21 +90,52 @@ test("CI-H2 readiness: persistent absence fails hard after one recovery", async 
 });
 
 test("CI-H2 ordering: entry readiness precedes the legacy content assertion", async () => {
-  const specs = [
-    "../e2e/wave-r-capacity.spec.ts",
-    "../e2e/accessibility.spec.ts",
+  // Each spec declares its legacy content assertion differently: the capacity
+  // login hoists a heading locator and asserts the statement later, while the
+  // accessibility login asserts the heading inline. Check the actual assertion
+  // site in each case.
+  const cases = [
+    {
+      spec: "../e2e/wave-r-capacity.spec.ts",
+      legacy: "await expect(heading).toBeVisible();",
+    },
+    {
+      spec: "../e2e/accessibility.spec.ts",
+      legacy: 'name: "Welcome back, Shane."',
+    },
   ];
-  for (const spec of specs) {
+  for (const { spec, legacy } of cases) {
     const source = await readFile(fileURLToPath(new URL(spec, import.meta.url)), "utf8");
     const readiness = source.indexOf("recoverOnce(");
-    const legacyHeading = source.indexOf('name: "Welcome back, Shane."');
+    const legacyAssertion = source.indexOf(legacy);
     assert.ok(readiness >= 0, `${spec} must use the shared readiness primitive`);
-    assert.ok(legacyHeading >= 0, `${spec} must keep its legacy heading assertion`);
+    assert.ok(legacyAssertion >= 0, `${spec} must keep its legacy heading assertion`);
     assert.ok(
-      readiness < legacyHeading,
+      readiness < legacyAssertion,
       `${spec}: shell readiness must be established before the legacy content assertion`,
     );
   }
+});
+
+test("CI-H2 entry state: login waits deterministically before deciding to sign in", async () => {
+  const source = await readFile(
+    fileURLToPath(new URL("../e2e/wave-r-capacity.spec.ts", import.meta.url)),
+    "utf8",
+  );
+  const deterministicWait = source.indexOf("signIn.or(heading)");
+  const visibilityDecision = source.indexOf("await signIn.isVisible()");
+  assert.ok(
+    deterministicWait >= 0,
+    "the capacity login must wait for the sign-in form or the authenticated shell",
+  );
+  assert.ok(
+    visibilityDecision >= 0,
+    "the capacity login must still branch on the presented entry state",
+  );
+  assert.ok(
+    deterministicWait < visibilityDecision,
+    "the deterministic entry-state wait must precede the sign-in decision, otherwise a page that has not rendered yet is treated as already authenticated",
+  );
 });
 
 test("CI-H2 invariant: W24-R capacity criteria are untouched by this change", async () => {

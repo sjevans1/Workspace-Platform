@@ -16,7 +16,13 @@ function compose(args: string[]) {
 
 async function login(page: Page) {
   await page.goto("/");
+  const heading = page.getByRole("heading", { name: "Welcome back, Shane." });
   const signIn = page.getByRole("button", { name: "Sign in", exact: true });
+  // Deterministic entry state: wait for whichever state the application
+  // presents (an already-authenticated shell, or the sign-in form) before
+  // deciding whether to authenticate. An instantaneous visibility check would
+  // skip sign-in whenever the page had not rendered yet.
+  await expect(signIn.or(heading)).toBeVisible({ timeout: 30000 });
   if (await signIn.isVisible()) {
     await page.getByLabel("Email", { exact: true }).fill(email);
     await page.getByLabel("Password", { exact: true }).fill(password);
@@ -35,9 +41,7 @@ async function login(page: Page) {
     },
   );
   // Legacy assertion retained, now guaranteed to run after shell readiness.
-  await expect(
-    page.getByRole("heading", { name: "Welcome back, Shane." }),
-  ).toBeVisible();
+  await expect(heading).toBeVisible();
 }
 
 async function waitForCollabHealth(expectedConnections?: number) {
