@@ -28,6 +28,17 @@ export function getTemplate(id: string): TemplateDefinition | undefined {
   return templatesById[id];
 }
 
+/** Count of resources a template creates (root included). */
+function resourceCount(definition: TemplateDefinition): number {
+  let count = 0;
+  const walk = (node: { children?: any[] }) => {
+    count += 1;
+    for (const child of node.children || []) walk(child);
+  };
+  walk(definition.resource as any);
+  return count;
+}
+
 /** Deterministic catalog metadata for the API and UI. */
 export function templateSummaries() {
   return catalog
@@ -40,10 +51,16 @@ export function templateSummaries() {
       level,
       category,
       version,
+      resources: resourceCount(templatesById[id]),
     }))
     .sort((a, b) =>
       a.category === b.category
         ? a.title.localeCompare(b.title)
         : a.category.localeCompare(b.category),
     );
+}
+
+/** Categories that actually have templates, in deterministic order. */
+export function templateCategories(): string[] {
+  return [...new Set(templateSummaries().map((s) => s.category))];
 }

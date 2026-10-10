@@ -2588,3 +2588,50 @@ textarea:focus-visible {
 .feature-example>div{display:grid;gap:.12rem}
 .feature-example strong{color:var(--text);font-size:.78rem;letter-spacing:.04em;text-transform:uppercase}
 .feature-example.compact{margin:.55rem 0 .8rem;padding:.65rem .75rem;font-size:.84rem}
+
+/* Wave X X2.5: curated template browser */
+.template-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 0 20px;
+}
+.template-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.template-filter select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+}
+.template-filter select:focus-visible {
+  outline: 2px solid #7e9469;
+  outline-offset: 2px;
+}
+.template-level {
+  display: inline-block;
+  margin: 12px 0 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eff3e8;
+  color: #5c6f49;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.template-meta {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+.template-empty {
+  padding: 24px 0;
+  opacity: 0.75;
+}
