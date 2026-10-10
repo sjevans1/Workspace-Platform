@@ -99,6 +99,11 @@ import {
   blocksToMarkdown,
   project,
 } from "../../../packages/editor/server.ts";
+import {
+  getTemplate as getCuratedTemplate,
+  templateSummaries,
+} from "../../../packages/templates/index.ts";
+import { instantiateTemplate } from "./template-instantiate.ts";
 import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
 import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import {
@@ -1348,6 +1353,19 @@ export async function buildApp(
       r,
     );
     scope(a, pageScope(v.kind, true));
+    // Wave X X2.5: curated templates instantiate through the safe
+    // composition/instantiation layer (fresh tenant-local ids, symbolic
+    // reference remapping, atomic rollback). Legacy built-ins keep working.
+    const curated = v.template ? getCuratedTemplate(v.template) : undefined;
+    if (curated) {
+      assert(
+        curated.level === v.kind,
+        400,
+        "Template does not match resource type",
+      );
+      assert(v.parent_id, 400, "Parent required");
+      return instantiateTemplate(q, a, curated, v.parent_id);
+    }
     const template = v.template ? templates[v.template] : undefined;
     assert(!v.template || template, 400, "Unknown template");
     assert(
@@ -1978,14 +1996,7 @@ export async function buildApp(
     "GET",
     "/templates",
     "List built-in templates",
-    async () =>
-      Object.entries(templates).map(([id, t]) => ({
-        id,
-        title: t.title,
-        description: t.description,
-        icon: t.icon,
-        kind: t.kind,
-      })),
+    async () => templateSummaries(),
     "workspace.read",
   );
   dataRoutes(route, storage, antivirus, antivirusMetrics);
