@@ -1,6 +1,7 @@
 import { test as setup, expect } from "@playwright/test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { seedVisualFixture, FIXTURE_PATH } from "./support/visual-fixture";
 
 // Wave X: authenticate ONCE and persist the real session for every engine and
 // viewport project.
@@ -63,4 +64,11 @@ setup("authenticate once for the engine and viewport matrix", async ({ page }) =
   ).toBeVisible({ timeout: 30000 });
   mkdirSync(dirname(statePath), { recursive: true });
   await page.context().storageState({ path: statePath });
+  // Only the visual config seeds the on-screen fixture (set by its config
+  // module), so the compatibility and harness runs do not pay for it.
+  if (process.env.E2E_SEED_VISUAL_FIXTURE === "1") {
+    const fixture = await seedVisualFixture(page);
+    mkdirSync(dirname(FIXTURE_PATH), { recursive: true });
+    writeFileSync(FIXTURE_PATH, JSON.stringify(fixture));
+  }
 });

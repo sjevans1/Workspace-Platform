@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      update_visual_baselines:
+        description: "Regenerate visual baselines and upload them as an artifact (never auto-committed)"
+        type: boolean
+        default: false
 concurrency:
   group: workspace-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -112,10 +117,11 @@ jobs:
     # addition to deployment, the browser workflow, the Wave R harness, the
     # W24-R collaboration capacity run, the isolated restore drill, the
     # malware/storage checks, accessibility across three engines and three
-    # viewports, the Wave X X0 engine/viewport harness and trusted TLS, which
-    # together exceed the previous allowance on a hosted runner. This raises only
-    # the CI wall-clock budget; no product or security limit changes.
-    timeout-minutes: 55
+    # viewports, the Wave X X0 engine/viewport harness, the X2 visual regression
+    # check and trusted TLS, which together exceed the previous allowance on a
+    # hosted runner. This raises only the CI wall-clock budget; no product or
+    # security limit changes.
+    timeout-minutes: 60
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -274,6 +280,49 @@ jobs:
             throw new Error("Unexpected EICAR signature: " + infected.signature);
           console.log("Malware scanner acceptance passed:", infected.signature);
           NODE
+      # Wave X X2 runs FIRST among browser steps, immediately after the stack is
+      # verified healthy and before any test creates or mutates Workspace
+      # resources. The snapshot surfaces render workspace-wide state (sidebar
+      # resource tree, recently viewed, page chrome), so their baselines are only
+      # reproducible against a pristine seeded workspace. Running this later
+      # produced 0.02-0.05 content differences no matter how exact the baselines.
+      # It is also the first authenticated step, so the sign-in budget is
+      # untouched.
+      - name: Regenerate visual baselines (manual dispatch only)
+        if: github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Explicit, human-triggered baseline update. A normal CI run never
+          # updates baselines; the regenerated files are uploaded for review and
+          # commit (see docs/VISUAL_REGRESSION.md). The canary is excluded so it
+          # cannot overwrite a real baseline.
+          npx playwright test --config=playwright.visual.config.ts --grep-invert "@canary" --update-snapshots
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines
+        with:
+          name: visual-baselines
+          path: e2e/visual.spec.ts-snapshots
+      - name: Verify visual regression against committed baselines
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines) }}
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # Chromium-only deterministic snapshots (light/dark x desktop/phone).
+          # Baselines are committed artefacts and CI NEVER updates them. Only
+          # Chromium is used; cross-engine pixel baselines are deliberately not
+          # maintained. Tolerance (0.002) is deliberately unchanged.
+          npx playwright test --config=playwright.visual.config.ts --grep-invert "@canary"
+          # Prove the harness detects intentional visual drift: the canary MUST
+          # fail. A passing canary means the comparison is not actually running.
+          if npx playwright test --config=playwright.visual.config.ts --grep "@canary"; then
+            echo "Visual canary did NOT detect intentional drift" >&2
+            exit 1
+          else
+            echo "Visual canary correctly detected intentional drift"
+          fi
       - name: Verify deployed browser workflow
         run: node scripts/test-deployment.mjs
       - name: Verify Wave R fault-injection harness
