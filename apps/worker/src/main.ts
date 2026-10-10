@@ -1,7 +1,11 @@
 import { Database } from "../../../packages/database/index.ts";
+import { assertDeploymentValid } from "../../../packages/deployment/index.ts";
 import { startInternalHealthServer } from "../../../packages/operations/health.ts";
 import { startWorker, workerHealthState } from "./worker.ts";
 
+// Wave X / X3 (W26): fail closed on invalid deployment configuration before the
+// service starts. Service scope, so only settings this service receives.
+assertDeploymentValid(process.env, "worker");
 const db = new Database(),
   stopWorker = startWorker(db),
   maxTickMs = Math.max(

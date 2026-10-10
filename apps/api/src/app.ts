@@ -69,7 +69,9 @@ import {
 import {
   defaultBranding,
   brandingSchema,
+  organisationBranding,
 } from "../../../packages/branding/index.ts";
+import { validateDeployment } from "../../../packages/deployment/index.ts";
 import { emit, encrypt } from "../../../packages/events/index.ts";
 import {
   beginEventCursor,
@@ -1047,13 +1049,35 @@ export async function buildApp(
               email: z.email().transform((s) => s.toLowerCase()),
               password: z.string(),
               demo: z.boolean().default(true),
+              // Wave X / X3 (W26): the first administrator may set ORGANISATION
+              // identity only. Deployment/provider branding stays
+              // operator-controlled through deployment configuration and is not
+              // reachable from setup, so this can never change sign-in identity.
+              organisationBranding: z
+                .object({
+                  productName: title.optional(),
+                  primaryAccent: z
+                    .string()
+                    .regex(/^#[a-f0-9]{6}$/i)
+                    .optional(),
+                  logoLight: z.string().max(2048).optional(),
+                  logoDark: z.string().max(2048).optional(),
+                  legalName: z.string().max(120).optional(),
+                })
+                .strict()
+                .optional(),
             })
             .strict(),
           r,
         ),
         tenant = randomUUID(),
         user = randomUUID(),
-        encoded = await passwordHash(v.password);
+        encoded = await passwordHash(v.password),
+        // Validated by the shared branding schema (including the contrast rule),
+        // so malformed organisation branding is rejected before persistence.
+        orgBranding = v.organisationBranding
+          ? organisationBranding(v.organisationBranding)
+          : undefined;
       const t = await db.tenant(tenant, async (q) => {
         await q.query("SELECT pg_advisory_xact_lock(8831242)");
         assert(
@@ -1061,10 +1085,20 @@ export async function buildApp(
           409,
           "Setup already completed",
         );
-        await q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [
-          tenant,
-          v.organisation,
-        ]);
+        // The branding column is NOT NULL DEFAULT '{}', so only name it when the
+        // administrator actually supplied organisation branding. Otherwise the
+        // original insert is used and the existing default applies, which keeps
+        // existing installations and upgrades behaving exactly as before.
+        if (orgBranding)
+          await q.query(
+            "INSERT INTO organisations(id,name,branding) VALUES($1,$2,$3)",
+            [tenant, v.organisation, json(orgBranding)],
+          );
+        else
+          await q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [
+            tenant,
+            v.organisation,
+          ]);
         await q.query(
           "INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)",
           [user, v.name, v.email, encoded],
@@ -3299,6 +3333,23 @@ function dataRoutes(
       await emit(q, a, "permission.updated", id(r));
       return { ok: true, revision: current.permission_revision + 1 };
     },
+  );
+  // Wave X / X3 (W26): operator/admin-readable deployment summary. Reuses the
+  // shared deployment validator and the existing readiness primitives rather
+  // than adding a monitoring subsystem. Safe fields only: profile, storage and
+  // encryption posture, antivirus, local auth, deployment OIDC, branding state
+  // and validation issues. Secret VALUES are never read here; settings whose
+  // value is secret appear as names only.
+  route(
+    "GET",
+    "/admin/deployment",
+    "Read the safe deployment summary",
+    async (q, a) => {
+      admin(a);
+      const report = validateDeployment(process.env, "api");
+      return { valid: report.ok, summary: report.summary, issues: report.issues };
+    },
+    "workspace.read",
   );
   route(
     "PATCH",

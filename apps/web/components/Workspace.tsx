@@ -1591,6 +1591,16 @@ function Login({
             email: v.email,
             password: v.password,
             demo: v.demo === "on",
+            // Wave X / X3 (W26): organisation-level identity only. Deployment
+            // branding controls the sign-in surface and is set by the operator
+            // through deployment configuration, never from first-run setup.
+            ...(String(v.organisationAccent || "").trim()
+              ? {
+                  organisationBranding: {
+                    primaryAccent: String(v.organisationAccent).trim(),
+                  },
+                }
+              : {}),
           }),
         });
         const result = await r.json();
@@ -1682,6 +1692,18 @@ function Login({
                   />
                 </Field>
               </div>
+              <Field label="Organisation accent (optional)">
+                <input
+                  name="organisationAccent"
+                  placeholder="#177a64"
+                  pattern="^#[0-9a-fA-F]{6}$"
+                />
+              </Field>
+              <p className="muted small-text">
+                Your organisation accent applies to this organisation’s
+                signed-in workspace. The sign-in screen uses the deployment’s
+                branding, which an organisation cannot change.
+              </p>
               <Field label="Your name">
                 <input name="name" required autoComplete="name" />
               </Field>

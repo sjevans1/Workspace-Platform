@@ -253,8 +253,15 @@ export default function Settings({
         <section className="settings-section">
           <h2>Brand identity</h2>
           <p className="muted">
-            These settings apply to your organisation’s signed-in workspace. The
-            deployment’s environment sets the sign-in branding.
+            Organisation branding applies <strong>after sign-in</strong>, to this
+            organisation only. The <strong>deployment</strong> controls the
+            sign-in surface, so these settings never change what an unauthenticated
+            visitor sees, and never affect another organisation.
+          </p>
+          <p className="muted">
+            The accent must stay readable: it carries the primary button and the
+            accent indicators on both the light and dark surfaces. An accent that
+            cannot is rejected when you save.
           </p>
           <form
             className="form"
