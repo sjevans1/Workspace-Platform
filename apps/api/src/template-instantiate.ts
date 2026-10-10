@@ -39,18 +39,21 @@ export async function instantiateTemplate(
   a: Actor,
   def: TemplateDefinition,
   parentId: string,
+  rootTitle?: string,
 ) {
   const resourceIds = new Map<string, string>();
   const recordIds = new Map<string, string>();
   await q.query(`SAVEPOINT ${SAVEPOINT}`);
   try {
     const nodes = resourcesDepthFirst(def.resource);
+    let root: any;
 
     // Pass 1: create every resource so all ids exist before references resolve.
     for (const node of nodes) {
       const created = await createResource(q, a, {
         kind: node.kind,
-        title: node.title,
+        title:
+          node.key === def.resource.key && rootTitle ? rootTitle : node.title,
         // The template root goes under the caller's parent; every other node
         // goes under the resource created for its symbolic parent key.
         parent_id:
@@ -60,6 +63,7 @@ export async function instantiateTemplate(
         icon: node.icon,
         blocks: node.blocks || [],
       });
+      if (node.key === def.resource.key) root = created;
       resourceIds.set(node.key, created.id);
     }
 
@@ -117,7 +121,7 @@ export async function instantiateTemplate(
     }
 
     await q.query(`RELEASE SAVEPOINT ${SAVEPOINT}`);
-    return { id: resourceIds.get(def.resource.key)! };
+    return root;
   } catch (error) {
     await q.query(`ROLLBACK TO SAVEPOINT ${SAVEPOINT}`);
     throw error;

@@ -1344,7 +1344,7 @@ export async function buildApp(
       z
         .object({
           kind: z.enum(["workspace", "space", "page", "database"]),
-          title,
+          title: title.optional(),
           parent_id: uuid.nullable().optional(),
           icon: z.string().max(20).optional(),
           template: z.string().optional(),
@@ -1364,10 +1364,11 @@ export async function buildApp(
         "Template does not match resource type",
       );
       assert(v.parent_id, 400, "Parent required");
-      return instantiateTemplate(q, a, curated, v.parent_id);
+      return instantiateTemplate(q, a, curated, v.parent_id, v.title);
     }
     const template = v.template ? templates[v.template] : undefined;
     assert(!v.template || template, 400, "Unknown template");
+    assert(v.title || template, 400, "Title required");
     assert(
       !template || template.kind === v.kind,
       400,
@@ -1375,6 +1376,7 @@ export async function buildApp(
     );
     const created = await createResource(q, a, {
       ...v,
+      title: v.title || template!.title,
       icon: v.icon || template?.icon,
       blocks: template?.blocks || [],
       tasks: template?.tasks === true,
