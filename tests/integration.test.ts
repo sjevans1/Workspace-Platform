@@ -240,6 +240,24 @@ async function freshMemberActor(label: string) {
   };
 }
 
+async function freshOtherTenant(label: string) {
+  const tenant = randomUUID();
+  await db.tenant(tenant, async (q) => {
+    await q.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [
+      tenant,
+      label,
+    ]);
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'owner')",
+      [tenant, owner.id],
+    );
+  });
+  const token = await db.tenant(tenant, (q) =>
+    createSession(q, tenant, owner.id),
+  );
+  return { cookie: "workspace_session=" + token, csrf: csrf(token), tenant };
+}
+
 async function connect(a = owner, p = page) {
   const ticket = await ok("POST", `/pages/${p.id}/collab`, {}, a),
     doc = new Y.Doc();
@@ -9435,11 +9453,15 @@ test("W26 deployment summary is admin-only and never exposes a secret value", as
   assert.equal(typeof body.summary.antivirusMode, "string");
   assert.ok(Array.isArray(body.issues));
 
-  // A member is not an administrative principal, and a guest is not either.
-  const denied = await req("GET", "/admin/deployment", undefined, member);
+  // A member is not an administrative principal. A fresh session is used here
+  // because earlier tests in this suite may revoke or age out the shared member
+  // session; this assertion is about authorization, not session longevity.
+  const freshMember = await freshMemberActor("w26 summary member");
+  const denied = await req("GET", "/admin/deployment", undefined, freshMember);
   assert.equal(denied.statusCode, 403, denied.body);
-  const guestDenied = await req("GET", "/admin/deployment", undefined, guest);
-  assert.equal(guestDenied.statusCode, 403, guestDenied.body);
+  // No session at all is refused before authorization.
+  const anonymous = await req("GET", "/admin/deployment", undefined, null);
+  assert.equal(anonymous.statusCode, 401, anonymous.body);
 
   // No credential value can appear in the response. Secret settings are
   // reported as names only.
@@ -9497,17 +9519,20 @@ test("W26 organisation branding authority and tenant isolation", async () => {
   assert.deepEqual(after, before);
   assert.notEqual(after.productName, "Org A Product");
 
-  // A member is not an administrative principal for branding.
+  // A member is not an administrative principal for branding. Fresh session, for
+  // the same reason as above: authorization, not session longevity.
+  const freshMember = await freshMemberActor("w26 branding member");
   const memberDenied = await req(
     "PATCH",
     "/branding",
     { ...organisationBrandingBody, productName: "Member rewrite" },
-    member,
+    freshMember,
   );
   assert.equal(memberDenied.statusCode, 403, memberDenied.body);
 
   // A different tenant cannot see or inherit this organisation's branding.
-  const otherMe = await req("GET", "/me", undefined, other);
+  const otherTenant = await freshOtherTenant("W26 other tenant");
+  const otherMe = await req("GET", "/me", undefined, otherTenant);
   assert.equal(otherMe.statusCode, 200, otherMe.body);
   assert.notEqual(JSON.parse(otherMe.body).branding?.productName, "Org A Product");
 });

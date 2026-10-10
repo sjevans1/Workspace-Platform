@@ -2,14 +2,6 @@
 // Source: packages/contracts/openapi.ts
 
 export type IntegrationRoutes = {
-  "GET /admin/deployment": {
-    method: "GET";
-    path: "/api/v1/admin/deployment";
-    params: {  };
-    query: {  };
-    body: null;
-    response: { "valid": boolean; "summary": {  } & Record<string, unknown>; "issues": Array<{ "setting": string; "problem": string; }>; };
-  };
   "POST /webhooks/:id/secret-rotation": {
     method: "POST";
     path: "/api/v1/webhooks/:id/secret-rotation";
