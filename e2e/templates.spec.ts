@@ -76,12 +76,17 @@ test("W25-T browser: browse, filter, instantiate and verify template classes", a
     page.locator(".template-card").filter({ hasText: "HR Workspace" }),
   ).toBeVisible();
 
-  // Multi-resource instantiation: Project Management.
+  // Multi-resource instantiation: Project Management (cards open a create dialog).
   await categoryFilter.selectOption("Projects & Delivery");
   await page
     .locator(".template-card")
     .filter({ hasText: "Project Management" })
     .click();
+  const dialog = page.getByRole("dialog", { name: "Create something new" });
+  await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue(
+    "Project Management",
+  );
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(
     "Project Management",
     { timeout: 30000 },
@@ -94,15 +99,36 @@ test("W25-T browser: browse, filter, instantiate and verify template classes", a
     .locator(".template-card")
     .filter({ hasText: "Sales pipeline" })
     .click();
+  await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue(
+    "Sales pipeline",
+  );
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("table")).toBeVisible({ timeout: 30000 });
-  await expect(page.getByText("Example: Acme renewal")).toBeVisible();
+  // Record values render in editable cells, so assert the starter data through
+  // the deployed API rather than cell text.
+  const pipelineId = new URL(page.url()).searchParams.get("page");
+  expect(pipelineId, "created database must be open").toBeTruthy();
+  const pipelineRows = await (
+    await page.request.get(`/api/v1/databases/${pipelineId}/records`)
+  ).json();
+  expect(pipelineRows.map((row: any) => row.values.name)).toContain(
+    "Example: Acme renewal",
+  );
   // The template's own board view exists and is usable.
   await page.getByRole("button", { name: "Board", exact: true }).click();
   await expect(page.getByRole("table")).toHaveCount(0);
 
   // Remapped cross-resource relation, proven on the deployed stack.
   const roots = await (await page.request.get("/api/v1/resources")).json();
-  const space = roots.find((r: any) => r.title === "Project Management");
+  const workspaceRoot = roots[0];
+  const rootChildren = await (
+    await page.request.get(
+      `/api/v1/resources?parent_id=${workspaceRoot.id}&limit=200`,
+    )
+  ).json();
+  const space = rootChildren.find(
+    (r: any) => r.title === "Project Management",
+  );
   expect(space, "multi-resource template space must exist").toBeTruthy();
   const children = await (
     await page.request.get(`/api/v1/resources?parent_id=${space.id}&limit=200`)
@@ -120,8 +146,10 @@ test("W25-T browser: browse, filter, instantiate and verify template classes", a
     "starter task must reference the generated starter project record",
   ).toEqual([projectRows[0].id]);
 
-  // Navigation into a created resource.
+  // Navigation into a created resource, with its starter data present.
   await page.goto("/?page=" + tasks.id);
   await expect(page.getByRole("table")).toBeVisible({ timeout: 30000 });
-  await expect(page.getByText("Example: draft brief")).toBeVisible();
+  expect(taskRows.map((row: any) => row.values.name)).toContain(
+    "Example: draft brief",
+  );
 });
