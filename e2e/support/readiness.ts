@@ -61,15 +61,24 @@ export async function recoverOnce(
 }
 
 /**
- * The authenticated workspace shell is available: the sign-in/setup screens are
- * gone and the known navigation shell is present. Used as the readiness state
- * by suites whose first action assumes an authenticated application.
+ * The authenticated workspace shell is available.
+ *
+ * The signed-in home heading is required at every width. The navigation panel
+ * contents are required only at desktop width: at phone width the panel is
+ * off-canvas and never reports visible, so requiring it there would fail a
+ * correct application (observed as READINESS_FAILED on a11y-shell-chromium-phone).
  */
 export async function assertWorkspaceShell(page: Page): Promise<void> {
   await expect(
-    page.getByRole("button", { name: "Search anything" }),
+    page.getByRole("heading", { name: "Welcome back, Shane." }),
   ).toBeVisible({ timeout: 20000 });
-  await expect(page.getByText("YOUR SPACES", { exact: true })).toBeVisible({
-    timeout: 20000,
-  });
+  const width = page.viewportSize()?.width ?? 0;
+  if (width >= 800) {
+    await expect(
+      page.getByRole("button", { name: "Search anything" }),
+    ).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText("YOUR SPACES", { exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+  }
 }
