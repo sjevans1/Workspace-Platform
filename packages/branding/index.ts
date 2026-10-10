@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { accentContrastIssues } from "./contrast.ts";
 const link = z
   .string()
   .max(2048)
@@ -17,7 +18,14 @@ export const brandingSchema = z
     privacyUrl: link,
     termsUrl: link,
   })
-  .strict();
+  .strict()
+  // Wave X / X3 (W26): an accent that cannot carry the required UI states is
+  // rejected here, so both the deployment environment and the organisation
+  // branding PATCH are held to the same deterministic requirement.
+  .superRefine((value, ctx) => {
+    for (const problem of accentContrastIssues(value.primaryAccent))
+      ctx.addIssue({ code: "custom", path: ["primaryAccent"], message: problem });
+  });
 export function defaultBranding(env: NodeJS.ProcessEnv = process.env) {
   return brandingSchema.parse({
     productName: env.PRODUCT_NAME || "OpenJM Workspace",
