@@ -5,8 +5,17 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      suite:
+        description: "CI-3L tier to run on the selected Git ref"
+        required: true
+        type: choice
+        default: fast
+        options:
+          - fast
+          - standard
+          - full
       update_visual_baselines:
-        description: "Regenerate visual baselines and upload them as an artifact (never auto-committed)"
+        description: "Regenerate visual baselines and upload them as an artifact; requires suite=full"
         type: boolean
         default: false
 concurrency:
@@ -15,7 +24,29 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  # CI-3L FAST: automatic PR feedback and cheap post-merge smoke.
+  # No database/storage services or release deployment qualification here.
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Verify CI event orchestrator
+        run: npm run test:ci-orchestrator
+      - run: npm run build
+
+  # CI-3L STANDARD: full native/backend work-package qualification.
+  # Runs on main after merge and when explicitly dispatched as standard/full.
   backend:
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -111,7 +142,10 @@ jobs:
           S3_ACCEPT_WRITE_CONFIRMATION=I_UNDERSTAND_THIS_WRITES_TEST_OBJECTS \
           npm run accept:s3
       - run: npm run build
+  # CI-3L FULL: expensive frozen-candidate release/deployment acceptance.
+  # Never runs automatically for ordinary pull-request iterations or main pushes.
   deployment:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.suite == 'full' }}
     runs-on: ubuntu-latest
     # The deployed acceptance job now hosts the whole-stack W24 qualification in
     # addition to deployment, the browser workflow, the Wave R harness, the
