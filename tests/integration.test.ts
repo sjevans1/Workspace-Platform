@@ -10431,3 +10431,113 @@ test("W02 tenant callback works with deployment OIDC absent, and unbound stays n
     else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
   }
 });
+
+test("W03 back-channel logout is issuer-scoped, fails closed, and ignores inactive providers", async () => {
+  // Wave X / X4b-2 (W03). Deterministic negative and selection coverage: the
+  // claimed issuer only SELECTS candidates, and validation fails closed when no
+  // configured provider owns the issuer or when the candidate cannot verify the
+  // token. The real-provider lane covers genuine signed logout events.
+  const savedOrigins = process.env.OIDC_TENANT_ISSUER_ORIGINS;
+  process.env.OIDC_TENANT_ISSUER_ORIGINS =
+    "https://idp-a.example.test,https://idp-b.example.test";
+  try {
+    const app = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
+    const post = (token: unknown) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/auth/oidc/backchannel-logout",
+        headers: { "content-type": "application/json" },
+        payload: { logout_token: token },
+      });
+    const unsignedFor = (iss: string) =>
+      "eyJhbGciOiJub25lIn0." +
+      Buffer.from(JSON.stringify({ iss })).toString("base64url") +
+      ".sig";
+    const adminCall = (method: string, path: string, payload?: any) =>
+      app.inject({
+        method: method as any,
+        url: `/api/v1${path}`,
+        headers: {
+          cookie: other.cookie,
+          "x-csrf-token": other.csrf,
+          ...(payload ? { "content-type": "application/json" } : {}),
+        },
+        ...(payload ? { payload } : {}),
+      });
+
+    // 1. No configured provider owns the claimed issuer.
+    const unknown = await post(unsignedFor("https://unknown.example.test"));
+    assert.equal(unknown.statusCode, 400, unknown.body);
+    assert.match(unknown.body, /issuer is not configured/);
+
+    // 2. Malformed tokens are refused without reaching a provider.
+    for (const bad of ["not-a-jwt", "a.b", "eyJhbGciOiJub25lIn0.@@@.sig"])
+      assert.equal((await post(bad)).statusCode, 400, String(bad));
+
+    // 3. When a candidate owns the issuer but cannot verify the token, the
+    // endpoint fails closed. The harness provider returns a canned success and
+    // never verifies, so this uses a provider that genuinely rejects, which is the
+    // only way to exercise the fail-closed path deterministically.
+    const rejectingOidc = {
+      ...(fakeOidc as any),
+      async validateBackchannelLogout() {
+        throw new Error("invalid logout token signature");
+      },
+    };
+    const strictApp = await buildApp(
+      db,
+      undefined,
+      false,
+      rejectingOidc as any,
+      fakeAntivirus,
+    );
+    const strictPost = (token: unknown) =>
+      strictApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/oidc/backchannel-logout",
+        headers: { "content-type": "application/json" },
+        payload: { logout_token: token },
+      });
+    const deploymentAttempt = await strictPost(
+      unsignedFor(String((fakeOidc as any).issuer)),
+    );
+    assert.equal(deploymentAttempt.statusCode, 400, deploymentAttempt.body);
+
+    // 4. A disabled tenant provider is never a candidate, even though its issuer
+    // is registered.
+    const reg: any = await (
+      await adminCall("POST", "/identity/providers", {
+        label: "W03 IdP",
+        issuer: "https://idp-a.example.test",
+        client_id: "client-a",
+        client_secret: "secret-a-123456",
+        token_auth_method: "client_secret_basic",
+      })
+    ).json();
+    const beforeActivation = await post(unsignedFor("https://idp-a.example.test"));
+    assert.equal(beforeActivation.statusCode, 400, beforeActivation.body);
+    assert.match(beforeActivation.body, /issuer is not configured/);
+
+    // 5. Activated, it becomes a candidate but still fails closed on a token it
+    // cannot verify (no fallback to another provider).
+    await adminCall("PATCH", `/identity/providers/${reg.id}`, { enabled: true });
+    const activatedAttempt = await post(unsignedFor("https://idp-a.example.test"));
+    assert.equal(activatedAttempt.statusCode, 400, activatedAttempt.body);
+    assert.doesNotMatch(activatedAttempt.body, /issuer is not configured/);
+
+    // 6. Disabling removes the candidate again.
+    await adminCall("PATCH", `/identity/providers/${reg.id}`, { enabled: false });
+    const afterDisable = await post(unsignedFor("https://idp-a.example.test"));
+    assert.equal(afterDisable.statusCode, 400, afterDisable.body);
+    assert.match(afterDisable.body, /issuer is not configured/);
+
+    // 7. Revocation likewise removes it.
+    await adminCall("DELETE", `/identity/providers/${reg.id}`);
+    const afterRevoke = await post(unsignedFor("https://idp-a.example.test"));
+    assert.equal(afterRevoke.statusCode, 400, afterRevoke.body);
+    assert.match(afterRevoke.body, /issuer is not configured/);
+  } finally {
+    if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
+    else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
+  }
+});

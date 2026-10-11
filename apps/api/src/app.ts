@@ -785,6 +785,74 @@ export async function buildApp(
     local: localAuth,
     oidc: oidc ? { enabled: true, label: oidc.label } : { enabled: false },
   }));
+  // Wave X / X4b-2 (W03): issuer-driven back-channel logout validation.
+  //
+  // The token's claimed issuer only SELECTS candidate providers; each candidate
+  // then verifies the token with its own configuration, so an untrusted issuer can
+  // never authorize a revocation by itself. Tenant providers are resolved through a
+  // definer lookup because this endpoint is unauthenticated and runs without a
+  // tenant context, and only activated, unrevoked providers are ever candidates.
+  const normalizedIssuer = (value: string): string | undefined => {
+    try {
+      return new URL(value).href;
+    } catch {
+      return undefined;
+    }
+  };
+  const claimedLogoutIssuer = (token: string): string | undefined => {
+    const parts = token.split(".");
+    if (parts.length < 2) return undefined;
+    try {
+      const payload = JSON.parse(
+        Buffer.from(parts[1], "base64url").toString("utf8"),
+      );
+      return normalizedIssuer(payload?.iss);
+    } catch {
+      return undefined;
+    }
+  };
+  const validateBackchannelLogoutToken = async (token: string) => {
+    const claimed = claimedLogoutIssuer(token);
+    assert(claimed, 400, "Invalid OIDC logout token");
+    const candidates: OidcProvider[] = [];
+    const rows = await db.system((q) =>
+      q.query("SELECT * FROM oidc_tenant_providers_by_issuer($1)", [claimed]),
+    );
+    for (const row of rows.rows) {
+      const secret = row.client_secret_encrypted
+        ? openTenantOidcSecret(
+            row.client_secret_encrypted,
+            row.tenant_id,
+            row.id,
+          )
+        : undefined;
+      candidates.push(
+        tenantOidc({
+          issuer: row.issuer,
+          clientId: row.client_id,
+          clientSecret: secret,
+          label: row.label,
+          scopes: row.scopes,
+          requireVerifiedEmail: row.require_verified_email,
+          tokenEndpointAuthMethod: row.token_auth_method,
+        }),
+      );
+    }
+    // The deployment provider remains first-class and unchanged when it owns the
+    // issuer. Neither path silently falls back to the other.
+    if (oidc && normalizedIssuer(oidc.issuer) === claimed) candidates.push(oidc);
+    assert(candidates.length, 400, "OIDC logout token issuer is not configured");
+    let failure: unknown;
+    for (const candidate of candidates)
+      try {
+        return await candidate.validateBackchannelLogout(token);
+      } catch (error) {
+        failure = error;
+      }
+    throw failure instanceof HttpError
+      ? failure
+      : new HttpError(400, "Invalid OIDC logout token");
+  };
   app.post(
     "/api/v1/auth/oidc/backchannel-logout",
     {
@@ -792,14 +860,18 @@ export async function buildApp(
       logLevel: "warn",
     },
     async (r, reply) => {
-      assert(oidc, 404, "OIDC sign-in is not configured");
       const v = body(
           z
             .object({ logout_token: z.string().min(20).max(16384) })
             .passthrough(),
           r,
         ),
-        logout = await oidc.validateBackchannelLogout(v.logout_token),
+        // Wave X / X4b-2 (W03): the token's claimed issuer selects which provider
+        // validates it. Tenant IdPs are active now, so a logout event from an
+        // activated tenant provider must be validated with that provider's own
+        // configuration. The claimed issuer is NEVER trusted for authorization:
+        // it only chooses candidates, each of which verifies the token itself.
+        logout = await validateBackchannelLogoutToken(v.logout_token),
         result = await db.systemTransaction(async (q) => {
           await q.query(
             "DELETE FROM oidc_logout_events WHERE expires_at<=now()",
