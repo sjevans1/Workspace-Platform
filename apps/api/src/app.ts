@@ -785,6 +785,94 @@ export async function buildApp(
     local: localAuth,
     oidc: oidc ? { enabled: true, label: oidc.label } : { enabled: false },
   }));
+  // Wave X / X4b-2 (W03): issuer-driven back-channel logout validation.
+  //
+  // The token's claimed issuer only SELECTS candidate providers; each candidate
+  // then verifies the token with its own configuration, so an untrusted issuer can
+  // never authorize a revocation by itself. Tenant providers are resolved through a
+  // definer lookup because this endpoint is unauthenticated and runs without a
+  // tenant context, and only activated, unrevoked providers are ever candidates.
+  const normalizedIssuer = (value: string): string | undefined => {
+    try {
+      return new URL(value).href;
+    } catch {
+      return undefined;
+    }
+  };
+  const claimedLogoutIssuer = (token: string): string | undefined => {
+    const parts = token.split(".");
+    if (parts.length < 2) return undefined;
+    try {
+      const payload = JSON.parse(
+        Buffer.from(parts[1], "base64url").toString("utf8"),
+      );
+      return normalizedIssuer(payload?.iss);
+    } catch {
+      return undefined;
+    }
+  };
+  // The validated logout carries the provider scope that verified it, so
+  // revocation can be constrained to that exact provider rather than to the issuer
+  // alone. `providerId: null` is the explicit deployment-provider scope.
+  type LogoutScope = { providerId: string | null; label: string };
+  const validateBackchannelLogoutToken = async (token: string) => {
+    const claimed = claimedLogoutIssuer(token);
+    assert(claimed, 400, "Invalid OIDC logout token");
+    const candidates: { provider: OidcProvider; scope: LogoutScope }[] = [];
+    const rows = await db.system((q) =>
+      q.query("SELECT * FROM oidc_tenant_providers_by_issuer($1)", [claimed]),
+    );
+    for (const row of rows.rows) {
+      const secret = row.client_secret_encrypted
+        ? openTenantOidcSecret(
+            row.client_secret_encrypted,
+            row.tenant_id,
+            row.id,
+          )
+        : undefined;
+      candidates.push({
+        provider: tenantOidc({
+          issuer: row.issuer,
+          clientId: row.client_id,
+          clientSecret: secret,
+          label: row.label,
+          scopes: row.scopes,
+          requireVerifiedEmail: row.require_verified_email,
+          tokenEndpointAuthMethod: row.token_auth_method,
+        }),
+        scope: { providerId: row.id, label: row.label },
+      });
+    }
+    // The deployment provider remains first-class and unchanged when it owns the
+    // issuer. Neither path silently falls back to the other.
+    if (oidc && normalizedIssuer(oidc.issuer) === claimed)
+      candidates.push({
+        provider: oidc,
+        scope: { providerId: null, label: oidc.label },
+      });
+    assert(candidates.length, 400, "OIDC logout token issuer is not configured");
+    const validated: { logout: Awaited<ReturnType<OidcProvider["validateBackchannelLogout"]>>; scope: LogoutScope }[] = [];
+    for (const candidate of candidates)
+      try {
+        validated.push({
+          logout: await candidate.provider.validateBackchannelLogout(token),
+          scope: candidate.scope,
+        });
+      } catch {
+        // A candidate that cannot verify the token contributes nothing.
+      }
+    // Exactly one validation context is authoritative. Zero fails closed, and more
+    // than one is ambiguous: database or configuration ordering must never decide
+    // which provider is allowed to revoke sessions.
+    assert(
+      validated.length === 1,
+      400,
+      validated.length
+        ? "OIDC logout token matches more than one provider configuration"
+        : "Invalid OIDC logout token",
+    );
+    return validated[0];
+  };
   app.post(
     "/api/v1/auth/oidc/backchannel-logout",
     {
@@ -792,14 +880,20 @@ export async function buildApp(
       logLevel: "warn",
     },
     async (r, reply) => {
-      assert(oidc, 404, "OIDC sign-in is not configured");
       const v = body(
           z
             .object({ logout_token: z.string().min(20).max(16384) })
             .passthrough(),
           r,
         ),
-        logout = await oidc.validateBackchannelLogout(v.logout_token),
+        // Wave X / X4b-2 (W03): the token's claimed issuer selects which provider
+        // validates it. Tenant IdPs are active now, so a logout event from an
+        // activated tenant provider must be validated with that provider's own
+        // configuration. The claimed issuer is NEVER trusted for authorization:
+        // it only chooses candidates, each of which verifies the token itself.
+        { logout, scope } = await validateBackchannelLogoutToken(
+          v.logout_token,
+        ),
         result = await db.systemTransaction(async (q) => {
           await q.query(
             "DELETE FROM oidc_logout_events WHERE expires_at<=now()",
@@ -817,14 +911,15 @@ export async function buildApp(
                   `DELETE FROM sessions
                    WHERE oidc_issuer=$1 AND oidc_sid=$2
                      AND ($3::text IS NULL OR oidc_subject=$3)
+                     AND oidc_provider_id IS NOT DISTINCT FROM $4::uuid
                    RETURNING tenant_id,user_id`,
-                  [logout.issuer, logout.sid, logout.subject || null],
+                  [logout.issuer, logout.sid, logout.subject || null, scope.providerId],
                 )
               ).rows
             : (
                 await q.query(
-                  "DELETE FROM sessions WHERE oidc_issuer=$1 AND oidc_subject=$2 RETURNING tenant_id,user_id",
-                  [logout.issuer, logout.subject],
+                  "DELETE FROM sessions WHERE oidc_issuer=$1 AND oidc_subject=$2 AND oidc_provider_id IS NOT DISTINCT FROM $3::uuid RETURNING tenant_id,user_id",
+                  [logout.issuer, logout.subject, scope.providerId],
                 )
               ).rows;
 
@@ -1178,6 +1273,10 @@ export async function buildApp(
             issuer: profile.issuer,
             subject: profile.subject,
             sid: profile.sid,
+            // W03: a tenant-bound sign-in records the exact provider that issued
+            // it, so provider-scoped revocation can separate two providers that
+            // share an issuer but use different clients.
+            providerId: pending.provider_id ?? null,
           });
         });
 

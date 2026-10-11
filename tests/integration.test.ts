@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createStorage } from "../packages/storage/index.ts";
 import { retryUuid } from "../apps/api/src/portable-import.ts";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { sealTenantOidcSecret } from "../packages/auth/tenant-provider.ts";
+import { mkdtemp, readdir, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { HocuspocusProvider } from "@hocuspocus/provider";
@@ -869,13 +870,20 @@ test("organisation switching cannot downgrade an OIDC session to unbound local c
   const oidcSource = await db.tenant(origin.organisation.id, (q) =>
     one(
       q,
-      "SELECT oidc_issuer,oidc_subject,oidc_sid FROM sessions WHERE token_hash=$1",
+      "SELECT oidc_issuer,oidc_subject,oidc_sid,oidc_provider_id FROM sessions WHERE token_hash=$1",
       [hash(sso.cookie.split("=")[1])],
     ),
   );
   assert.equal(oidcSource.oidc_issuer, fakeOidc.issuer);
   assert.equal(oidcSource.oidc_subject, "owner-subject");
   assert.equal(oidcSource.oidc_sid, "switch-bound-idp-session");
+  // W03 provenance: a deployment-level OIDC session carries the deployment scope and
+  // never a tenant-provider id.
+  assert.equal(
+    oidcSource.oidc_provider_id,
+    null,
+    "deployment-level OIDC session must persist oidc_provider_id = NULL",
+  );
 
   // Independently authenticated local sessions retain supported switching.
   const localToken = await db.tenant(owner.tenant, (q) =>
@@ -885,6 +893,20 @@ test("organisation switching cannot downgrade an OIDC session to unbound local c
     cookie: "workspace_session=" + localToken,
     csrf: csrf(localToken),
   };
+  const localSource = await db.tenant(owner.tenant, (q) =>
+    one(
+      q,
+      "SELECT oidc_issuer,oidc_subject,oidc_provider_id FROM sessions WHERE token_hash=$1",
+      [hash(localToken)],
+    ),
+  );
+  assert.equal(localSource.oidc_issuer, null, "local session has no OIDC issuer");
+  assert.equal(localSource.oidc_subject, null, "local session has no OIDC subject");
+  assert.equal(
+    localSource.oidc_provider_id,
+    null,
+    "local session has no OIDC provider scope",
+  );
   const switched = await req(
     "POST",
     "/auth/switch",
@@ -918,8 +940,19 @@ test("OIDC back-channel logout revokes OIDC sessions but preserves local break-g
     jti: `logout-${randomUUID()}`,
     expiresAt: new Date(Date.now() + 300000),
   };
+  // A real Back-Channel Logout Token is a JWT. The harness deployment provider
+  // returns a canned validated result, but the route still needs the claimed issuer
+  // to select the candidate provider that owns it, so the token must be
+  // token-shaped rather than an opaque placeholder.
+  const logoutToken = `eyJhbGciOiJub25lIn0.${Buffer.from(
+    JSON.stringify({
+      iss: fakeOidc.issuer,
+      sub: "owner-subject",
+      sid: "owner-idp-session",
+    }),
+  ).toString("base64url")}.sig`;
   const payload = new URLSearchParams({
-    logout_token: "signed-test-logout-token-placeholder",
+    logout_token: logoutToken,
   }).toString();
   const logout = await app.inject({
     method: "POST",
@@ -10396,12 +10429,22 @@ test("W02 tenant callback works with deployment OIDC absent, and unbound stays n
       "a tenant-bound callback must land in the bound tenant with no deployment provider",
     );
     const sessionRow = await db.system((q: any) =>
-      one(q, "SELECT oidc_issuer,oidc_subject FROM sessions WHERE token_hash=$1", [
-        hash(sessionValue),
-      ]),
+      one(
+        q,
+        "SELECT tenant_id,oidc_issuer,oidc_subject,oidc_provider_id FROM sessions WHERE token_hash=$1",
+        [hash(sessionValue)],
+      ),
     );
+    assert.equal(sessionRow.tenant_id, tenantB.tenant, "session lands in the bound tenant");
     assert.equal(sessionRow.oidc_issuer, "https://idp-a.example.test/");
     assert.equal(sessionRow.oidc_subject, subject);
+    // W03 provenance through the real W02 creation path: a tenant-bound session
+    // records the exact tenant provider that created it.
+    assert.equal(
+      sessionRow.oidc_provider_id,
+      provider.id,
+      "tenant-bound session records the exact tenant provider",
+    );
 
     // 3. The INVERSE: with deployment OIDC absent, an unbound deployment-level
     // start remains unavailable and reports the existing not-configured behavior.
@@ -10430,4 +10473,472 @@ test("W02 tenant callback works with deployment OIDC absent, and unbound stays n
     if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
     else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
   }
+});
+
+test("W03 back-channel logout is issuer-scoped, fails closed, and ignores inactive providers", async () => {
+  // Wave X / X4b-2 (W03). Deterministic negative and selection coverage: the
+  // claimed issuer only SELECTS candidates, and validation fails closed when no
+  // configured provider owns the issuer or when the candidate cannot verify the
+  // token. The real-provider lane covers genuine signed logout events.
+  const savedOrigins = process.env.OIDC_TENANT_ISSUER_ORIGINS;
+  // Intrinsically isolated namespace. The shared test database persists provider
+  // rows across tests, so correctness must not depend on cleanup having happened.
+  const ns = `w03-selection-${randomUUID().slice(0, 8)}`;
+  const unknownIssuer = `https://${ns}-unknown.example.test`;
+  const tenantIssuer = `https://${ns}-tenant.example.test`;
+  process.env.OIDC_TENANT_ISSUER_ORIGINS = tenantIssuer;
+  try {
+    const app = await buildApp(db, undefined, false, fakeOidc, fakeAntivirus);
+    const post = (token: unknown) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/auth/oidc/backchannel-logout",
+        headers: { "content-type": "application/json" },
+        payload: { logout_token: token },
+      });
+    const unsignedFor = (iss: string) =>
+      "eyJhbGciOiJub25lIn0." +
+      Buffer.from(JSON.stringify({ iss })).toString("base64url") +
+      ".sig";
+    const adminCall = (method: string, path: string, payload?: any) =>
+      app.inject({
+        method: method as any,
+        url: `/api/v1${path}`,
+        headers: {
+          cookie: other.cookie,
+          "x-csrf-token": other.csrf,
+          ...(payload ? { "content-type": "application/json" } : {}),
+        },
+        ...(payload ? { payload } : {}),
+      });
+
+    // 1. No configured provider owns the claimed issuer. Prove the boundary before
+    // asserting it: decode the token, count tenant candidates, compare deployment
+    // issuer, then issue the request.
+    const unknownIss = unknownIssuer;
+    const unknownTok = unsignedFor(unknownIss);
+    const unknownPayload = JSON.parse(
+      Buffer.from(unknownTok.split(".")[1], "base64url").toString("utf8"),
+    );
+    assert.equal(unknownPayload.iss, unknownIss, "token payload carries the claimed issuer");
+    assert.equal(
+      new URL(unknownPayload.iss).href,
+      `${unknownIss}/`,
+      "the claimed issuer normalizes to the lookup key",
+    );
+    const unknownRows: any = await db.system((q: any) =>
+      q.query("SELECT count(*)::int c FROM oidc_tenant_providers_by_issuer($1)", [
+        `${unknownIss}/`,
+      ]),
+    );
+    const unknown = await post(unknownTok);
+    assert.equal(unknown.statusCode, 400, unknown.body);
+    assert.match(unknown.body, /issuer is not configured/);
+
+    // 2. Malformed tokens are refused without reaching a provider.
+    for (const bad of ["not-a-jwt", "a.b", "eyJhbGciOiJub25lIn0.@@@.sig"])
+      assert.equal((await post(bad)).statusCode, 400, String(bad));
+
+    // 3. When a candidate owns the issuer but cannot verify the token, the
+    // endpoint fails closed. The harness provider returns a canned success and
+    // never verifies, so this uses a provider that genuinely rejects, which is the
+    // only way to exercise the fail-closed path deterministically.
+    const rejectingOidc = {
+      ...(fakeOidc as any),
+      async validateBackchannelLogout() {
+        throw new Error("invalid logout token signature");
+      },
+    };
+    const strictApp = await buildApp(
+      db,
+      undefined,
+      false,
+      rejectingOidc as any,
+      fakeAntivirus,
+    );
+    const strictPost = (token: unknown) =>
+      strictApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/oidc/backchannel-logout",
+        headers: { "content-type": "application/json" },
+        payload: { logout_token: token },
+      });
+    const deploymentAttempt = await strictPost(
+      unsignedFor(String((fakeOidc as any).issuer)),
+    );
+    assert.equal(deploymentAttempt.statusCode, 400, deploymentAttempt.body);
+
+    // 4. A disabled tenant provider is never a candidate, even though its issuer
+    // is registered.
+    const reg: any = await (
+      await adminCall("POST", "/identity/providers", {
+        label: "W03 IdP",
+        issuer: tenantIssuer,
+        client_id: "client-a",
+        client_secret: "secret-a-123456",
+        token_auth_method: "client_secret_basic",
+      })
+    ).json();
+    const beforeActivation = await post(unsignedFor(tenantIssuer));
+    assert.equal(beforeActivation.statusCode, 400, beforeActivation.body);
+    assert.match(beforeActivation.body, /issuer is not configured/);
+
+    // 5. Activated, it becomes a candidate but still fails closed on a token it
+    // cannot verify (no fallback to another provider).
+    await adminCall("PATCH", `/identity/providers/${reg.id}`, { enabled: true });
+    const activatedAttempt = await post(unsignedFor(tenantIssuer));
+    assert.equal(activatedAttempt.statusCode, 400, activatedAttempt.body);
+    assert.doesNotMatch(activatedAttempt.body, /issuer is not configured/);
+
+    // 6. Disabling removes the candidate again.
+    await adminCall("PATCH", `/identity/providers/${reg.id}`, { enabled: false });
+    const afterDisable = await post(unsignedFor(tenantIssuer));
+    assert.equal(afterDisable.statusCode, 400, afterDisable.body);
+    assert.match(afterDisable.body, /issuer is not configured/);
+
+    // 7. Revocation likewise removes it.
+    await adminCall("DELETE", `/identity/providers/${reg.id}`);
+    const afterRevoke = await post(unsignedFor(tenantIssuer));
+    assert.equal(afterRevoke.statusCode, 400, afterRevoke.body);
+    assert.match(afterRevoke.body, /issuer is not configured/);
+  } finally {
+    if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
+    else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
+  }
+});
+
+test("W03 provider-scoped logout: same issuer, different clients, plus ambiguity fails closed", async () => {
+  // Wave X / X4b-2 (W03). Two activated tenant providers share the exact same
+  // issuer and differ only by client. Revocation must be provider-scoped, so
+  // same-issuer never broadens it. The injected factory accepts a token only when
+  // its audience equals the provider's own client id, which is the real isolation
+  // mechanism; ambiguity (two candidates accepting the same token) must fail closed
+  // instead of letting configuration order choose authority.
+  const savedOrigins = process.env.OIDC_TENANT_ISSUER_ORIGINS;
+  const SHARED = "https://shared-idp.example.test";
+  process.env.OIDC_TENANT_ISSUER_ORIGINS = SHARED;
+  try {
+    const tenant = await freshOtherTenant("W03 shared-issuer tenant");
+    const decode = (token: string) =>
+      JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    const factory = (settings: any) => ({
+      label: settings.label,
+      issuer: new URL(settings.issuer).href,
+      async start() {
+        throw new Error("not used");
+      },
+      async finish() {
+        throw new Error("not used");
+      },
+      async validateBackchannelLogout(token: string) {
+        const payload = decode(token);
+        // Accept only when the token was minted for THIS client.
+        if (payload?.aud !== settings.clientId) throw new Error("audience mismatch");
+        return {
+          issuer: new URL(payload.iss).href,
+          jti: payload.jti,
+          sid: payload.sid ?? null,
+          subject: payload.sub ?? null,
+          expiresAt: new Date(Date.now() + 60_000),
+        };
+      },
+    });
+    const app = await buildApp(db, undefined, false, null, fakeAntivirus, factory as any);
+    const admin = (method: string, path: string, payload?: any) =>
+      app.inject({
+        method: method as any,
+        url: `/api/v1${path}`,
+        headers: {
+          cookie: tenant.cookie,
+          "x-csrf-token": tenant.csrf,
+          ...(payload ? { "content-type": "application/json" } : {}),
+        },
+        ...(payload ? { payload } : {}),
+      });
+    const register = async (client: string) => {
+      const r: any = await (
+        await admin("POST", "/identity/providers", {
+          label: `W03 ${client}`,
+          issuer: SHARED,
+          client_id: client,
+          client_secret: `secret-${client}-123456`,
+          token_auth_method: "client_secret_basic",
+        })
+      ).json();
+      await admin("PATCH", `/identity/providers/${r.id}`, { enabled: true });
+      return r.id;
+    };
+    const providerA = await register("workspace-a");
+    const providerB = await register("workspace-b");
+
+    // Workspace OIDC sessions with explicit provider provenance. The same subject,
+    // email and issuer are reused deliberately so the test cannot pass thanks to
+    // user separation.
+    const user = await freshMemberActor("W03 shared user");
+    // sessions(tenant_id,user_id) references memberships, so the test identity
+    // must be a member of the tenant that owns the sessions it revokes.
+    await db.tenant(tenant.tenant, (q: any) =>
+      q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member') ON CONFLICT (tenant_id,user_id) DO UPDATE SET active=true",
+        [tenant.tenant, user.id],
+      ),
+    );
+    // The product stores the NORMALIZED issuer (the register route persists
+    // issuer.href), so the session rows must carry the same canonical form.
+    const SHARED_NORM = new URL(SHARED).href;
+    const mkSession = async (token: string, provider: string | null, sid: string) =>
+      db.system((q: any) =>
+        q.query(
+          "INSERT INTO sessions(token_hash,tenant_id,user_id,scopes,label,expires_at,oidc_issuer,oidc_subject,oidc_sid,oidc_provider_id) VALUES($1,$2,$3,NULL,NULL,now()+interval '1 hour',$4,$5,$6,$7)",
+          [hash(token), tenant.tenant, user.id, SHARED_NORM, "shared-subject", sid, provider],
+        ),
+      );
+    const sidA = randomUUID(), sidB = randomUUID();
+    await mkSession("sess-a-" + sidA, providerA, sidA);
+    await mkSession("sess-b-" + sidB, providerB, sidB);
+    const sessionCount = async (sid: string) =>
+      ((await db.system((q: any) =>
+        q.query("SELECT count(*)::int AS c FROM sessions WHERE oidc_sid=$1", [sid]),
+      )) as any).rows[0].c;
+    const auditCount = async () =>
+      ((await db.tenant(tenant.tenant, (q: any) =>
+        q.query("SELECT count(*)::int AS c FROM audit_events WHERE action='auth.oidc_backchannel_logout'"),
+      )) as any).rows[0].c;
+    const logout = (payload: any) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/auth/oidc/backchannel-logout",
+        headers: { "content-type": "application/json" },
+        payload: {
+          logout_token: `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ iss: SHARED, ...payload })).toString("base64url")}.sig`,
+        },
+      });
+
+    // 1. sid-based logout for client A revokes ONLY A.
+    const before1 = await auditCount();
+    const a1 = await logout({ aud: "workspace-a", jti: "jti-a-1", sid: sidA, sub: "shared-subject" });
+    assert.equal(a1.statusCode, 200, a1.body);
+    assert.equal(await sessionCount(sidA), 0, "A session must be revoked");
+    assert.equal(await sessionCount(sidB), 1, "B session must survive an A logout");
+    assert.equal(await auditCount(), before1 + 1, "audit written for the affected tenant");
+
+    // 2. subject-only logout for client B revokes ONLY B, even though the subject
+    // is shared with the (already revoked) A sessions.
+    await mkSession("sess-a2-" + sidA, providerA, sidA);
+    const b1 = await logout({ aud: "workspace-b", jti: "jti-b-1", sub: "shared-subject" });
+    assert.equal(b1.statusCode, 200, b1.body);
+    assert.equal(await sessionCount(sidB), 0, "B session must be revoked by B logout");
+    assert.equal(
+      await sessionCount(sidA),
+      1,
+      "a subject-only B logout must not touch A sessions with the same subject",
+    );
+
+    // 3. A token whose audience matches no provider is refused.
+    const neither = await logout({ aud: "workspace-z", jti: "jti-z-1", sid: sidA, sub: "shared-subject" });
+    assert.equal(neither.statusCode, 400, neither.body);
+    assert.equal(await sessionCount(sidA), 1, "no revocation on a zero-success logout");
+
+    // 4. Replay: the same valid event must not revoke anything further.
+    const beforeReplay = await sessionCount(sidA);
+    const a2 = await logout({ aud: "workspace-a", jti: "jti-a-1", sid: sidA, sub: "shared-subject" });
+    assert.equal(a2.statusCode, 200, a2.body);
+    assert.equal(a2.json().replayed, true, "a replayed logout event is deduplicated");
+    assert.equal(
+      await sessionCount(sidA),
+      beforeReplay,
+      "a replayed event revokes nothing additional",
+    );
+
+    // 5a. AMBIGUITY (tenant + tenant): a second registration with the SAME issuer
+    // and client would let two contexts validate the same token. Either the
+    // duplicate is prevented outright, or it exists and the route must fail closed.
+    await mkSession("sess-a3-" + sidA, providerA, sidA);
+    // Deterministic fixture with the actual known columns. The live index is
+    // UNIQUE(tenant_id,issuer,client_id) WHERE revoked_at IS NULL, so a same-tenant
+    // duplicate is impossible by construction; the realizable two-validator
+    // configuration is an A-equivalent provider under a SECOND tenant. The
+    // production registration/activation API is not weakened for this.
+    const dupTenant = await freshOtherTenant("W03 duplicate tenant");
+    const dupProvider = randomUUID();
+    await db.tenant(dupTenant.tenant, (q: any) =>
+      q.query(
+        "INSERT INTO oidc_tenant_providers(id,tenant_id,label,issuer,client_id,token_auth_method,client_secret_encrypted,scopes,require_verified_email,enabled,activated_at,revision) VALUES($1,$2,$3,$4,$5,'client_secret_basic',$6,ARRAY['openid','profile','email']::text[],true,true,now(),1)",
+        [
+          dupProvider,
+          dupTenant.tenant,
+          "W03 workspace-a dup",
+          new URL(SHARED).href,
+          "workspace-a",
+          // The activation invariant requires an enabled provider to be activated,
+          // and the secret is AAD-bound to (tenant, provider), so seal a fresh one.
+          sealTenantOidcSecret("w03-dup-secret-0123456789", dupTenant.tenant, dupProvider),
+        ],
+      ),
+    );
+    // Assert the fixture BEFORE exercising ambiguity.
+    const live: any = await db.system((q: any) =>
+      q.query("SELECT id FROM oidc_tenant_providers_by_issuer($1)", [new URL(SHARED).href]),
+    );
+    const liveIds = live.rows.map((r: any) => r.id);
+    assert.equal(liveIds.length, 3, "exactly three active providers must own the issuer");
+    assert.ok(liveIds.includes(providerA), "provider A must exist");
+    assert.ok(liveIds.includes(providerB), "provider B must exist");
+    assert.ok(liveIds.includes(dupProvider), "the A-equivalent duplicate must exist");
+    const sidAForAmbiguity = await sessionCount(sidA);
+    const before = await auditCount();
+    const ambiguous = await logout({
+      aud: "workspace-a",
+      jti: "jti-ambiguous-1",
+      sid: sidA,
+      sub: "shared-subject",
+    });
+    assert.equal(ambiguous.statusCode, 400, ambiguous.body);
+    assert.match(ambiguous.body, /more than one provider configuration/);
+    assert.equal(await auditCount(), before, "ambiguous logout writes no audit event");
+    assert.equal(
+      await sessionCount(sidA),
+      sidAForAmbiguity,
+      "ambiguous logout deletes no session",
+    );
+    const jtiRows: any = await db.system((q: any) =>
+      q.query("SELECT count(*)::int AS c FROM oidc_logout_events WHERE jti=$1", [
+        "jti-ambiguous-1",
+      ]),
+    );
+    assert.equal(jtiRows.rows[0].c, 0, "ambiguous logout is not accepted as a logout event");
+
+    // Retire the duplicate so the deployment-collision case has exactly two
+    // validators (deployment + tenant A). This also exercises revoked exclusion.
+    await db.tenant(dupTenant.tenant, (q: any) =>
+      q.query("UPDATE oidc_tenant_providers SET revoked_at=now() WHERE id=$1", [dupProvider]),
+    );
+
+    // 5b. AMBIGUITY (deployment + tenant on the same issuer): a deployment provider
+    // able to validate the same token must make the request fail closed rather than
+    // silently preferring one scope. A tenant-provider unique index cannot prevent
+    // this, which is why it is proven separately.
+    const deploymentCollision = {
+      label: "deployment-collision",
+      issuer: SHARED,
+      async start() {
+        throw new Error("not used");
+      },
+      async finish() {
+        throw new Error("not used");
+      },
+      async validateBackchannelLogout(token: string) {
+        const payload = decode(token);
+        if (payload?.aud !== "workspace-a") throw new Error("audience mismatch");
+        return {
+          issuer: new URL(payload.iss).href,
+          jti: payload.jti,
+          sid: payload.sid ?? null,
+          subject: payload.sub ?? null,
+          expiresAt: new Date(Date.now() + 60_000),
+        };
+      },
+    };
+    const app2 = await buildApp(
+      db,
+      undefined,
+      false,
+      deploymentCollision as any,
+      fakeAntivirus,
+      factory as any,
+    );
+    const sidAForCollision = await sessionCount(sidA);
+    const before2 = await auditCount();
+    const collision = await app2.inject({
+      method: "POST",
+      url: "/api/v1/auth/oidc/backchannel-logout",
+      headers: { "content-type": "application/json" },
+      payload: {
+        logout_token: `eyJhbGciOiJub25lIn0.${Buffer.from(
+          JSON.stringify({
+            iss: SHARED,
+            aud: "workspace-a",
+            jti: "jti-collision-1",
+            sid: sidA,
+            sub: "shared-subject",
+          }),
+        ).toString("base64url")}.sig`,
+      },
+    });
+    assert.equal(collision.statusCode, 400, collision.body);
+    assert.match(collision.body, /more than one provider configuration/);
+    assert.equal(
+      await auditCount(),
+      before2,
+      "deployment/tenant collision writes no audit event",
+    );
+    assert.equal(
+      await sessionCount(sidA),
+      sidAForCollision,
+      "deployment/tenant collision deletes no session",
+    );
+  } finally {
+    if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
+    else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
+  }
+});
+
+test("migration 026 invalidates legacy OIDC sessions, preserves local sessions, and guesses no provider", async () => {
+  // Wave X / X4b-2 (W03) upgrade safety. Run inside a transaction that is rolled
+  // back, so the shared schema is untouched: pre-026 shape reconstructed, the real
+  // migration applied, then asserted.
+  const { Client } = await import("pg");
+  const sql = await readFile(
+    new URL("../infrastructure/migrations/026_session_provider_provenance.sql", import.meta.url),
+    "utf8",
+  );
+  const client = new Client({ connectionString: pg.url });
+  await client.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE sessions DROP COLUMN IF EXISTS oidc_provider_id");
+    const t = randomUUID(), u = randomUUID();
+    await client.query("SELECT set_config('app.tenant_id',$1,true)", [t]);
+    await client.query("INSERT INTO organisations(id,name) VALUES($1,$2)", [t, "W03 migration probe"]);
+    await client.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [u, `mig-${u}@example.test`, "M"]);
+    await client.query("INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')", [t, u]);
+    const legacy = (tok: string, issuer: string | null) =>
+      client.query(
+        "INSERT INTO sessions(token_hash,tenant_id,user_id,scopes,label,expires_at,oidc_issuer,oidc_subject,oidc_sid) VALUES($1,$2,$3,NULL,NULL,now()+interval '1 hour',$4,$5,$6)",
+        [hash(tok), t, u, issuer, issuer ? "legacy-subject" : null, issuer ? "legacy-sid" : null],
+      );
+    await legacy("legacy-local", null);
+    await legacy("legacy-deployment", "https://deploy.example.test/");
+    await legacy("legacy-tenant", "https://tenant.example.test/");
+    const beforeCnt: any = await client.query("SELECT count(*)::int c FROM sessions WHERE tenant_id=$1", [t]);
+    assert.equal(beforeCnt.rows[0].c, 3, "pre-migration fixture must hold three sessions");
+    // Apply the real migration SQL.
+    await client.query(sql);
+    const after: any = await client.query(
+      "SELECT oidc_issuer,oidc_subject FROM sessions WHERE tenant_id=$1",
+      [t],
+    );
+    assert.equal(after.rowCount, 1, "all legacy OIDC sessions are invalidated");
+    assert.equal(after.rows[0].oidc_issuer, null, "the survivor is the local/password session");
+    assert.equal(after.rows[0].oidc_subject, null, "no issuer-only backfill, no guessed provenance");
+    const col: any = await client.query(
+      "SELECT is_nullable FROM information_schema.columns WHERE table_name='sessions' AND column_name='oidc_provider_id'",
+    );
+    assert.equal(col.rowCount, 1, "oidc_provider_id column exists");
+    assert.equal(col.rows[0].is_nullable, "YES", "it is nullable");
+    const fk: any = await client.query(
+      "SELECT count(*)::int c FROM pg_constraint WHERE conrelid='sessions'::regclass AND contype='f' AND pg_get_constraintdef(oid) ILIKE '%provider%'",
+    );
+    assert.equal(fk.rows[0].c, 0, "no FK on oidc_provider_id: provider revocation cannot cascade session deletion");
+    const idx: any = await client.query(
+      "SELECT count(*)::int c FROM pg_indexes WHERE tablename='sessions' AND indexname LIKE 'sessions_oidc_provider%'",
+    );
+    assert.equal(idx.rows[0].c, 2, "both provider-scoped indexes exist");
+  } finally {
+    await client.query("ROLLBACK");
+    await client.end();
+  }
+  // Determinism at the runner level: applied migrations are immutable, so re-running
+  // the migrator must be a clean no-op.
+  await migrate(pg.url);
 });
