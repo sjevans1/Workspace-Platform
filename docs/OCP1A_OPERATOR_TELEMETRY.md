@@ -78,6 +78,18 @@ OIDC-state cookies, connection strings, authorization headers, AWS-style keys,
 private keys, password and secret field patterns, URLs carrying query strings, and
 customer-looking filenames.
 
+## Deployment identity derivation
+
+The `deployment_id` is the only deployment identity that leaves the deployment, and
+it is always the bounded digest form (`ws-` plus a SHA-256 prefix). Its seed is,
+in order of precedence: the operator-supplied `OPERATOR_TELEMETRY_DEPLOYMENT_ID`,
+otherwise a locally held deployment secret (`ENCRYPTION_KEY`) which is random,
+per-deployment and stable across restarts. The seed is never a customer name, a
+tenant, user, resource or document identifier, a hostname, an email address, a
+domain, an IP address, or the customer-safe alias, and the seed itself is never
+emitted. Hashing here creates an opaque handle for a registry lookup; it is not
+used to smuggle high-cardinality customer identifiers into telemetry.
+
 ## Bounds
 
 `maxEvents 12`, `maxServices 12`, `maxStatusClasses 6`, `maxServiceValues 8`,

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createStorage } from "../packages/storage/index.ts";
 import { retryUuid } from "../apps/api/src/portable-import.ts";
+import { deploymentIdFrom } from "../packages/operations/operator-telemetry.ts";
 import { sealTenantOidcSecret } from "../packages/auth/tenant-provider.ts";
 import { mkdtemp, readdir, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10950,6 +10951,17 @@ test("OCP-1A operator telemetry is authorized, canonical and secret-free", async
   const body: any = await ok("GET", "/admin/operator-telemetry");
   assert.equal(body.schema, "openjm.workspace.operator-telemetry.v1");
   assert.match(String(body.deployment.deployment_id), /^ws-[0-9a-f]{8,}$/);
+  // The deployment identity must never be derived from a URL, hostname or domain.
+  assert.notEqual(
+    body.deployment.deployment_id,
+    deploymentIdFrom(process.env.APP_URL ?? "workspace"),
+    "deployment id must not be derived from APP_URL",
+  );
+  assert.notEqual(
+    body.deployment.deployment_id,
+    deploymentIdFrom(String(process.env.APP_URL ?? "").replace(/^https?:\/\//, "")),
+    "deployment id must not be derived from the bare hostname",
+  );
   const boundedStates = ["healthy", "degraded", "unhealthy", "unknown"];
   for (const key of [
     "overall",

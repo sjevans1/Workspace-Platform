@@ -787,7 +787,12 @@ export async function buildApp(
       application: "workspace",
       version: process.env.WORKSPACE_VERSION ?? "unknown",
       buildSha: process.env.WORKSPACE_BUILD_SHA ?? process.env.BUILD_SHA ?? null,
-      deploymentIdSeed: config.deploymentIdSeed ?? process.env.APP_URL ?? "workspace",
+      // OCP-1A deployment identity policy: an operator-supplied opaque identity, or
+      // else a digest seed taken from a locally held deployment secret. Never a
+      // customer name, tenant/user/resource/document id, hostname, email, domain, IP
+      // or the customer-safe alias. Only the bounded digest leaves the deployment.
+      deploymentIdSeed:
+        config.deploymentIdSeed ?? process.env.ENCRYPTION_KEY ?? "workspace-unidentified",
       alias: config.alias,
       releaseChannel: config.releaseChannel,
       environment: config.environment,
