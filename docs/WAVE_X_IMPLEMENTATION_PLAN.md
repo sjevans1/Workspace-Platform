@@ -201,6 +201,13 @@ The rule this classification enforces: an open tracker checkbox is not evidence 
 
 ## 6. Proposed X0 to X5 execution sequence
 
+The high-level sequence, fixed by the X4b closure decision, is:
+
+`X4b closed -> CI-3L Workspace workflow adoption (#200) -> X5 closeout -> OCP-1/OCP-2 (#198) -> final production handover`
+
+#198 is deliberately NOT part of X5. X5 reconciles it into the remaining release roadmap and records it as the next
+release-operations tranche, but it does not implement it.
+
 The sequence below was ordered to minimise branch conflicts with the W09d and contextual-examples work; those have since merged (#173, #174), so the Wave X tranche starts from a Wave O-closed main.
 
 ### X0 acceptance harness and deterministic fixtures
@@ -274,6 +281,97 @@ Split deliberately, because identity must stay separately reviewable:
 - Scope: full exact-head CI, the ledger update on issue #62, `ACCEPTANCE.md` and `BUILD_CHECKPOINT.md` updates, and post-merge main verification.
 - Excluded: any new feature work, any checkbox marked complete without evidence.
 - Gates: the full existing gate set on the exact final head SHA, with the W25 additions included.
+
+- Reconciliation: X5 reconciles #198 (Release Operations, OpenJM Fleet Control Plane) into the remaining release
+  roadmap and records it as the next release-operations tranche. It does not implement #198 and does not reopen any
+  closed Wave X package.
+- Human-only evidence: remaining manual items, such as the accessible-name review where applicable, are accounted for
+  explicitly and remain human-only.
+- Handover gating: final production handover remains gated on the selected #198 deliverables landing after X5 closeout.
+- CI-3L sequencing: finish the Workspace CI-3L workflow adoption (PR #200) before running the X5 exact-head release
+  acceptance, because that PR changes the acceptance workflow itself. X5 then uses the resulting contract:
+  FAST -> STANDARD -> freeze exact candidate -> FULL acceptance. The workflow change is validated deliberately before
+  merge: automatic FAST behaviour, explicit STANDARD behaviour, explicit FULL behaviour, and confirmation that FULL
+  still contains every existing release and deployment gate with none weakened and none lost. Development Framework
+  and OpenJM Enterprise AI CI-3L work stay in their own repositories and must not contaminate Workspace X5.
+
+### Post-X5 tranche: Release Operations, OpenJM Fleet Control Plane (#198)
+
+- Placement: after X5 closeout and before final production handover. Not inside Wave X, not inside X5.
+- Purpose: establish OpenJM's optional vendor/operator observability and fleet-management capability before final
+  production handover, without making Workspace depend on OpenJM infrastructure.
+
+#### OCP-1: deployment telemetry and operator contract
+
+Define and implement the Workspace-side contract first:
+
+- deployment identity, version, build and channel;
+- heartbeat and availability;
+- `/health` and `/ready` summaries;
+- sanitized service and component health;
+- resource and capacity summaries;
+- queue and backlog status;
+- backup and restore status;
+- migration and schema state;
+- certificate and security posture summaries;
+- supported upgrade and preflight information;
+- structured sanitized diagnostic and error summaries;
+- local buffering and retry where appropriate;
+- authenticated outbound transport;
+- replay protection.
+
+Hard boundary:
+
+- outbound, opt-in and least-data;
+- Workspace fully functional when telemetry is disabled;
+- Workspace fully functional when OpenJM fleet infrastructure is unavailable;
+- Workspace fully functional when the deployment is completely disconnected;
+- no document or page contents;
+- no attachment contents;
+- no credentials;
+- no raw access, refresh or logout tokens;
+- no cookies or session secrets;
+- no private customer data required for normal fleet operation.
+
+Raw logs remain local by default. Support diagnostics may use an explicit, customer-approved, bounded support bundle
+rather than unrestricted remote log collection.
+
+#### OCP-2: central OpenJM Fleet Control Plane
+
+Consume the OCP-1 contract to provide:
+
+- deployment registry;
+- online and offline state;
+- deployed versions, builds and channels;
+- service and component health;
+- incident and alert views;
+- health and history trends;
+- load and resource pressure;
+- database and storage pressure;
+- queue and backlog visibility;
+- backup status;
+- migration and upgrade readiness;
+- TLS and security posture;
+- sanitized diagnostic summaries;
+- support-bundle workflow;
+- OpenJM operator audit.
+
+Initial remote-action posture stays tightly bounded and read-mostly. Permitted first-stage actions may include:
+request a diagnostic, request current health, annotate an incident, and coordinate an explicitly approved upgrade.
+There is no arbitrary remote shell.
+
+#### Acceptance boundary
+
+Release acceptance for #198 must prove, as a release requirement and not merely an architectural intention:
+
+> A supported Workspace installation remains fully functional with the Fleet Control Plane absent, telemetry
+> disabled, outbound connectivity unavailable, and the deployment completely disconnected.
+
+#### Relationship to X5
+
+X5 closes Wave X, accounts for remaining human-only evidence where applicable, records #198 as the next
+release-operations tranche, and identifies that final production handover remains gated on the selected #198
+deliverables. X5 does not implement #198, and #198 does not reopen W02, W03, W04 or any other closed Wave X feature.
 
 ---
 

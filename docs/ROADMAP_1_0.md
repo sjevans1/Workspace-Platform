@@ -125,3 +125,28 @@ After every accepted merge, record the **W-ID, actual GitHub PR number, merge SH
 - **X08** Native mobile apps, additional enterprise-scale indexing, richer views/blocks as prioritized after 1.0 feedback.
 
 The 1.0 release must not expand indefinitely to include X-items without an explicit scope change.
+
+## 9. Wave X closeout and release operations sequence
+
+Added by the X4b closure decision. Wave X identity work is complete: W02, W03 and W04 are closed and X4b is fully
+closed (PR #199 merged, exact-head CI green, post-merge main verification green).
+
+Sequence:
+
+`X4b closed -> CI-3L Workspace workflow adoption (#200) -> X5 closeout -> OCP-1/OCP-2 (#198) -> final production handover`
+
+- X5 remains exact-head Wave X release acceptance, package reconciliation, residual and limitation accounting, and
+  closeout. It reconciles #198 into this roadmap but does not implement it, and it does not reopen any closed Wave X
+  package.
+- Finish the Workspace CI-3L workflow adoption (PR #200) before X5 qualification, because it changes the acceptance
+  workflow itself. X5 then uses FAST -> STANDARD -> freeze exact candidate -> FULL acceptance, with FULL still
+  containing every existing release and deployment gate.
+- #198 (Release Operations: OpenJM Fleet Control Plane) lands after X5 closeout and before final production handover.
+  OCP-1 defines the Workspace-side telemetry and operator contract; OCP-2 provides the central fleet control plane
+  that consumes it.
+- Release requirement for #198: a supported Workspace installation must remain fully functional with the Fleet Control
+  Plane absent, telemetry disabled, outbound connectivity unavailable, and the deployment completely disconnected.
+- The fleet plane is optional by design and must never become a runtime dependency of Workspace. No document or page
+  contents, attachment contents, credentials, raw tokens, cookies or session secrets, and no private customer data are
+  required for normal fleet operation.
+- Final production handover remains gated on the selected #198 deliverables.
