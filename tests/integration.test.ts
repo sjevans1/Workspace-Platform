@@ -10269,3 +10269,165 @@ test("W02 tenant IdP activation and exact callback binding", async () => {
     else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
   }
 });
+
+test("W02 tenant callback works with deployment OIDC absent, and unbound stays not-configured", async () => {
+  // Regression for the defect the real-IdP lane exposed: the callback carried an
+  // unconditional deployment-level guard, so a tenant-bound callback failed with
+  // 404 whenever OIDC_ISSUER was unset. The native matrix could not see it because
+  // it injects a non-null deployment provider, so this test builds the app with
+  // deployment oidc = null and proves both directions.
+  const savedOrigins = process.env.OIDC_TENANT_ISSUER_ORIGINS;
+  process.env.OIDC_TENANT_ISSUER_ORIGINS = "https://idp-a.example.test";
+  try {
+    const email = `w02-nodep-${randomUUID()}@example.test`;
+    const subject = `sub-${randomUUID()}`;
+    const tenantOidc = (settings: any) => ({
+      label: settings.label,
+      issuer: new URL(settings.issuer).href,
+      async start() {
+        const state = `state-${randomUUID()}`;
+        return {
+          url: `https://idp.tenant.test/authorize?state=${state}`,
+          state,
+          codeVerifier: `verifier-${randomUUID()}`,
+          nonce: `nonce-${randomUUID()}`,
+        };
+      },
+      async finish() {
+        return {
+          issuer: new URL(settings.issuer).href,
+          subject,
+          email,
+          name: "No Deployment Provider",
+          sid: `sid-${subject}`,
+        };
+      },
+    });
+    // Deployment provider is ABSENT.
+    const app = await buildApp(db, undefined, false, null, fakeAntivirus, tenantOidc as any);
+    const call = (
+      method: "GET" | "POST" | "PATCH" | "DELETE",
+      path: string,
+      data?: any,
+      actor: any = owner,
+    ) =>
+      app.inject({
+        method,
+        url: `/api/v1${path}`,
+        headers: {
+          ...(actor ? { cookie: actor.cookie, "x-csrf-token": actor.csrf } : {}),
+          ...(data !== undefined ? { "content-type": "application/json" } : {}),
+        },
+        ...(data !== undefined ? { payload: data } : {}),
+      });
+
+    const tenantB = await freshOtherTenant("W02 no-deployment tenant");
+    const reg = await call(
+      "POST",
+      "/identity/providers",
+      {
+        label: "W02 no-deployment IdP",
+        issuer: "https://idp-a.example.test",
+        client_id: "client-a",
+        client_secret: "secret-a-123456",
+        token_auth_method: "client_secret_basic",
+      },
+      tenantB,
+    );
+    assert.equal(reg.statusCode, 200, reg.body);
+    const provider = reg.json();
+    const activated = await call(
+      "PATCH",
+      `/identity/providers/${provider.id}`,
+      { enabled: true },
+      tenantB,
+    );
+    assert.equal(activated.statusCode, 200, activated.body);
+
+    // The SSO identity is a member of the bound tenant only.
+    const ssoUser = randomUUID();
+    await db.tenant(tenantB.tenant, async (q: any) => {
+      await q.query("INSERT INTO users(id,email,name) VALUES($1,$2,$3)", [
+        ssoUser,
+        email,
+        "No Deployment Provider",
+      ]);
+      await q.query(
+        "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+        [tenantB.tenant, ssoUser],
+      );
+    });
+
+    // 1. Tenant start succeeds with deployment OIDC absent.
+    const start = await call(
+      "GET",
+      `/auth/oidc/start?tenant=${tenantB.tenant}&provider=${provider.id}`,
+      undefined,
+      null,
+    );
+    assert.equal(start.statusCode, 302, start.body);
+    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+
+    // 2. Tenant callback succeeds with deployment OIDC absent, and lands in the
+    // bound tenant with correct provenance.
+    const callback = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/oidc/callback?state=${encodeURIComponent(state)}`,
+      headers: { cookie: `workspace_oidc_state=${state}` },
+    });
+    assert.equal(callback.statusCode, 302, callback.body);
+    const setCookies = callback.headers["set-cookie"];
+    const cookieList = Array.isArray(setCookies)
+      ? setCookies.map(String)
+      : [String(setCookies)];
+    const sessionValue = cookieList
+      .find((entry) => entry.startsWith("workspace_session="))!
+      .split(";")[0]
+      .split("=")[1];
+    const me = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { cookie: `workspace_session=${sessionValue}` },
+    });
+    assert.equal(me.statusCode, 200, me.body);
+    assert.equal(
+      me.json().organisation.id,
+      tenantB.tenant,
+      "a tenant-bound callback must land in the bound tenant with no deployment provider",
+    );
+    const sessionRow = await db.system((q: any) =>
+      one(q, "SELECT oidc_issuer,oidc_subject FROM sessions WHERE token_hash=$1", [
+        hash(sessionValue),
+      ]),
+    );
+    assert.equal(sessionRow.oidc_issuer, "https://idp-a.example.test/");
+    assert.equal(sessionRow.oidc_subject, subject);
+
+    // 3. The INVERSE: with deployment OIDC absent, an unbound deployment-level
+    // start remains unavailable and reports the existing not-configured behavior.
+    const deploymentStart = await call("GET", "/auth/oidc/start", undefined, null);
+    assert.equal(deploymentStart.statusCode, 404, deploymentStart.body);
+    assert.match(deploymentStart.body, /OIDC sign-in is not configured/);
+
+    // 4. And an unbound state cannot silently select a tenant provider: a callback
+    // with no binding fails closed with the same not-configured behavior rather
+    // than resolving some tenant provider.
+    const unboundState = `state-${randomUUID()}`;
+    await db.system((q: any) =>
+      q.query(
+        "INSERT INTO oidc_login_states(state_hash,code_verifier,nonce,invite_token_hash,return_to,tenant_id,provider_id,provider_revision,expected_issuer,expected_client_id) VALUES($1,$2,$3,NULL,'/',NULL,NULL,NULL,NULL,NULL)",
+        [hash(unboundState), "verifier", "nonce"],
+      ),
+    );
+    const unboundCallback = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/oidc/callback?state=${encodeURIComponent(unboundState)}`,
+      headers: { cookie: `workspace_oidc_state=${unboundState}` },
+    });
+    assert.equal(unboundCallback.statusCode, 404, unboundCallback.body);
+    assert.match(unboundCallback.body, /OIDC sign-in is not configured/);
+  } finally {
+    if (savedOrigins === undefined) delete process.env.OIDC_TENANT_ISSUER_ORIGINS;
+    else process.env.OIDC_TENANT_ISSUER_ORIGINS = savedOrigins;
+  }
+});

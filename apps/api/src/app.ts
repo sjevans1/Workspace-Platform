@@ -954,7 +954,12 @@ export async function buildApp(
       logLevel: "warn",
     },
     async (r, reply) => {
-      assert(oidc, 404, "OIDC sign-in is not configured");
+      // Wave X / X4b-1 (W02): the applicable provider is resolved AFTER the state
+      // is read, because a tenant-bound callback must work with deployment-level
+      // OIDC completely unset. The deployment guard now sits after resolution, so
+      // an unbound/deployment-level state still requires the deployment provider
+      // exactly as before, and a tenant-bound state resolves its own provider or
+      // fails closed with no fallback between the two paths.
       const state = z.string().min(20).max(500).parse(query(r).state),
         browserState = r.cookies.workspace_oidc_state || "";
       assert(
