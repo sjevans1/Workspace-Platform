@@ -940,8 +940,19 @@ test("OIDC back-channel logout revokes OIDC sessions but preserves local break-g
     jti: `logout-${randomUUID()}`,
     expiresAt: new Date(Date.now() + 300000),
   };
+  // A real Back-Channel Logout Token is a JWT. The harness deployment provider
+  // returns a canned validated result, but the route still needs the claimed issuer
+  // to select the candidate provider that owns it, so the token must be
+  // token-shaped rather than an opaque placeholder.
+  const logoutToken = `eyJhbGciOiJub25lIn0.${Buffer.from(
+    JSON.stringify({
+      iss: fakeOidc.issuer,
+      sub: "owner-subject",
+      sid: "owner-idp-session",
+    }),
+  ).toString("base64url")}.sig`;
   const payload = new URLSearchParams({
-    logout_token: "signed-test-logout-token-placeholder",
+    logout_token: logoutToken,
   }).toString();
   const logout = await app.inject({
     method: "POST",
