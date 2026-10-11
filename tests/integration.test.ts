@@ -10942,3 +10942,39 @@ test("migration 026 invalidates legacy OIDC sessions, preserves local sessions, 
   // the migrator must be a clean no-op.
   await migrate(pg.url);
 });
+
+test("OCP-1A operator telemetry is authorized, canonical and secret-free", async () => {
+  // OCP-1A: the local inspection surface returns the same canonical v1 model the
+  // future OCP-1B exporter will use. Secrets and customer content must not appear,
+  // and only an owner/admin may read it.
+  const body: any = await ok("GET", "/admin/operator-telemetry");
+  assert.equal(body.schema, "openjm.workspace.operator-telemetry.v1");
+  assert.match(String(body.deployment.deployment_id), /^ws-[0-9a-f]{8,}$/);
+  const boundedStates = ["healthy", "degraded", "unhealthy", "unknown"];
+  for (const key of [
+    "overall",
+    "api",
+    "worker",
+    "collaboration",
+    "database",
+    "redis",
+    "storage",
+    "antivirus",
+  ])
+    assert.ok(
+      boundedStates.includes(body.runtime[key]),
+      `unbounded runtime state ${key}=${body.runtime[key]}`,
+    );
+  assert.equal(body.readiness.backup_state, "unknown");
+  const raw = JSON.stringify(body);
+  for (const sentinel of ["postgres://", "Bearer ", "workspace_session=", "client_secret", "password"])
+    assert.ok(!raw.includes(sentinel), `telemetry leaked ${sentinel}`);
+  assert.ok(Buffer.byteLength(raw, "utf8") <= 16384, "telemetry payload exceeded its ceiling");
+  // A plain member of the same tenant must not be able to read the snapshot.
+  const member = await freshMemberActor("OCP-1A member");
+  const denied = await req("GET", "/admin/operator-telemetry", undefined, member);
+  assert.ok(
+    denied.statusCode === 403 || denied.statusCode === 401,
+    `member unexpectedly authorized: ${denied.statusCode} ${denied.body}`,
+  );
+});
