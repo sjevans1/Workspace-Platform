@@ -5,8 +5,8 @@
 // fleet database, no OCP-2A service and no customer Workspace stack is required, and the
 // online/stale/offline/never-seen/disabled/revoked states plus unknown fields are all
 // deterministic rather than wall-clock dependent.
-import { buildFleetConsole, fleetConsoleConfig } from "../../apps/fleet-web/src/server.ts";
-import type { FleetClient } from "../../apps/fleet-web/src/fleet-api.ts";
+import { buildFleetConsole, fleetConsoleConfig } from "../apps/fleet-web/src/server.ts";
+import type { FleetClient } from "../apps/fleet-web/src/fleet-api.ts";
 import { ALERTS, AUDIT, DEPLOYMENTS, E2E_OPERATOR_TOKEN } from "./fixtures.ts";
 
 export { E2E_OPERATOR_TOKEN };

@@ -152,6 +152,24 @@ const get = (url: string, cookies = sessionCookie) =>
 // ---------------------------------------------------------------------------
 // Plane separation
 // ---------------------------------------------------------------------------
+test("the console browser harness cannot be collected by the Workspace browser gate", () => {
+  // The Workspace Playwright config owns testDir "./e2e". The console harness therefore
+  // lives outside that tree, so the customer product's browser gate can never collect the
+  // console spec (where no console listener exists) and fail on it.
+  const workspaceConfig = readFileSync(fileURLToPath(new URL("../playwright.config.ts", import.meta.url)), "utf8");
+  const testDir = /testDir:\s*"([^"]+)"/.exec(workspaceConfig)?.[1];
+  assert.equal(testDir, "./e2e", "the Workspace gate keeps its own test directory");
+  const consoleConfig = readFileSync(fileURLToPath(new URL("../playwright.fleet-console.config.ts", import.meta.url)), "utf8");
+  const consoleTestDir = /testDir:\s*"([^"]+)"/.exec(consoleConfig)?.[1];
+  assert.equal(consoleTestDir, "./e2e-fleet-console");
+  assert.ok(!consoleTestDir!.startsWith(testDir!), "the console harness must live outside the Workspace test directory");
+  // The console spec really is in the console directory and nowhere under the Workspace one.
+  const consoleDir = fileURLToPath(new URL("../e2e-fleet-console", import.meta.url));
+  const files = readdirSync(consoleDir);
+  assert.ok(files.includes("console.spec.ts"));
+  assert.ok(!readdirSync(fileURLToPath(new URL("../e2e", import.meta.url))).includes("fleet-console"));
+});
+
 test("the console is a separate plane from the customer Workspace app", () => {
   const webAppDir = fileURLToPath(new URL("../apps/web/app", import.meta.url));
   const entries = readdirSync(webAppDir);

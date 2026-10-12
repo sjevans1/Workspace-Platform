@@ -4,7 +4,7 @@
 // Workspace deployment ids are generated through the accepted OCP-1A `deploymentIdFrom()`
 // helper rather than synthetic literals, keeping the fixtures consistent with the real
 // OCP-2A/OCP-1A contract.
-import { deploymentIdFrom } from "../../packages/operations/operator-telemetry.ts";
+import { deploymentIdFrom } from "../packages/operations/operator-telemetry.ts";
 
 export const E2E_OPERATOR_TOKEN = "e2e-fleet-operator-token-0123456789";
 

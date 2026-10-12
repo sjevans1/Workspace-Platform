@@ -11,7 +11,10 @@ export const FLEET_CONSOLE_E2E_PORT = 4319;
 export const FLEET_CONSOLE_E2E_ORIGIN = `http://127.0.0.1:${FLEET_CONSOLE_E2E_PORT}`;
 
 export default defineConfig({
-  testDir: "./e2e/fleet-console",
+  // Kept OUTSIDE ./e2e: the customer Workspace Playwright config owns testDir "./e2e"
+  // and would otherwise collect this spec into its own browser gate, where no console
+  // listener exists. A regression asserts the two harnesses stay disjoint.
+  testDir: "./e2e-fleet-console",
   testMatch: /console\.spec\.ts/,
   timeout: 60_000,
   expect: { timeout: 10_000 },
@@ -38,7 +41,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "node --import tsx e2e/fleet-console/console-server.ts",
+    command: "node --import tsx e2e-fleet-console/console-server.ts",
     url: `${FLEET_CONSOLE_E2E_ORIGIN}/login`,
     reuseExistingServer: false,
     timeout: 60_000,
