@@ -35,7 +35,9 @@
     "test:ci-orchestrator": "node --test tools/ci-orchestrator/test/*.test.mjs",
     "generate:integration-client": "node --import tsx scripts/generate-integration-client.ts",
     "check:integration-client": "node --import tsx scripts/generate-integration-client.ts --check",
-    "start:fleet": "node --import tsx apps/fleet/src/main.ts"
+    "start:fleet": "node --import tsx apps/fleet/src/main.ts",
+    "start:fleet-web": "node --import tsx apps/fleet-web/src/main.ts",
+    "test:harness:fleet-console": "playwright test --config playwright.fleet-console.config.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1142.0",
