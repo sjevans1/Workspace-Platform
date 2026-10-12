@@ -1,5 +1,8 @@
 # Workspace 1.0 — October 6 rebaseline and bundled delivery waves
 
+> **Authoritative release checkpoint — 2026-10-12:** W01–W26 and OCP-1/OCP-2 are accepted. The fixed remaining path is **W27 [#210] -> manual NVDA [#211] -> W28 [#212] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older execution sequences below are retained as historical evidence and must not be used to restart accepted waves.
+
+
 Baseline: `main` at `6b7f60f422723ec19e8a5006f3033ab082d7e8b9` after W17 PR #158.
 
 ## Accepted through this baseline
