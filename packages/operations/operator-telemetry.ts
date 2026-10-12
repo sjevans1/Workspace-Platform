@@ -400,3 +400,206 @@ export function operatorTelemetryConfig(env: Record<string, string | undefined>)
     schema: OPERATOR_TELEMETRY_SCHEMA,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Receiver-side canonical validation.
+//
+// The producer composes and serializes this shape; the receiver must enforce it at
+// runtime, because a TypeScript type does not exist at runtime and a deployment with a
+// valid credential could otherwise sign arbitrary JSON carrying the accepted schema
+// string plus extra customer/content fields, which the fleet service would persist and
+// return. This validator is the single shared definition of the accepted payload so
+// producer and receiver semantics cannot drift.
+//
+// It rejects, in this order: byte size, JSON parseability, non-object payloads, unknown
+// top-level or nested fields, unsupported schema, missing required fields, invalid
+// field values (enums, bounds, shapes) and any prohibited content.
+// ---------------------------------------------------------------------------
+
+export type TelemetryValidation = { ok: true; payload: OperatorTelemetryV1 } | { ok: false; code: string };
+
+const HEALTH_STATES: ReadonlySet<string> = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Returns the first field not in the allowlist, so an unknown or injected field is a
+// hard rejection rather than being silently ignored.
+function firstUnknownKey(value: Record<string, unknown>, allowed: readonly string[]): string | null {
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) return key;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Shared canonical predicates.
+//
+// These are defined in terms of the producer's own helpers, so the receiver enforces
+// the accepted producer contract rather than a compatible-looking superset and there is
+// no second, drifting set of sanitation rules. A value is canonical when the producer's
+// sanitizer would return it unchanged.
+// ---------------------------------------------------------------------------
+
+const healthState = (value: unknown): boolean => typeof value === "string" && HEALTH_STATES.has(value);
+
+// Canonical sanitized text: already trimmed, control-character free, not a URL with a
+// path or query, within the bound, and carrying no prohibited content.
+export const canonicalText = (value: unknown, max: number): boolean =>
+  typeof value === "string" && value.length > 0 && sanitizeText(value, max) === value;
+export const canonicalOptionalText = (value: unknown, max: number): boolean => value === null || canonicalText(value, max);
+export const canonicalServiceName = (value: unknown): boolean =>
+  typeof value === "string" && sanitizeServiceName(value) === value;
+export const canonicalCategory = (value: unknown): boolean =>
+  typeof value === "string" && sanitizeCategory(value) === value;
+// Status classes are produced as [1-5]xx only.
+export const canonicalStatusClass = (value: unknown): boolean => typeof value === "string" && /^[1-5]xx$/.test(value);
+// Counts, depths and capacities pass through boundedInt(): a non-negative integer.
+export const canonicalCount = (value: unknown): boolean =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+export const canonicalNullableCount = (value: unknown): boolean => value === null || canonicalCount(value);
+// Latency is rounded to three decimals by the producer.
+export const canonicalLatency = (value: unknown): boolean =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && Math.round(value * 1000) / 1000 === value;
+// Timestamps are emitted through Date.toISOString() (or sanitizeTimestamp, which does
+// the same), so the canonical form is exactly the round-trip of its own ISO string.
+export const canonicalTimestamp = (value: unknown): boolean =>
+  typeof value === "string" && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
+export const canonicalOptionalTimestamp = (value: unknown): boolean => value === null || canonicalTimestamp(value);
+
+// The OCP-1A opaque deployment identity contract: "ws-" plus a SHA-256 hex prefix.
+// One shared definition, used for telemetry validation, fleet registration and identity
+// binding, so the fleet registry cannot hold identifiers Workspace would never produce.
+export const DEPLOYMENT_ID_PATTERN = /^ws-[a-f0-9]{40}$/;
+export const isCanonicalDeploymentId = (value: unknown): boolean =>
+  typeof value === "string" && DEPLOYMENT_ID_PATTERN.test(value);
+
+export function validateOperatorTelemetryV1(serialized: string): TelemetryValidation {
+  const fail = (code: string): TelemetryValidation => ({ ok: false, code });
+  // Byte accounting is UTF-8, matching the producer's ceiling exactly.
+  if (Buffer.byteLength(serialized, "utf8") > OPERATOR_TELEMETRY_LIMITS.maxPayloadBytes) return fail("payload_too_large");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    return fail("payload_not_json");
+  }
+  if (!isPlainObject(parsed)) return fail("payload_not_object");
+  const p = parsed as Record<string, any>;
+  const L = OPERATOR_TELEMETRY_LIMITS;
+
+  const unknownTop = firstUnknownKey(p, [
+    "schema", "generated_at", "sequence", "source", "deployment", "runtime", "signals", "readiness", "events",
+  ]);
+  if (unknownTop) return fail(`unknown_field:${unknownTop}`);
+  if (p.schema !== OPERATOR_TELEMETRY_SCHEMA) return fail("unsupported_schema");
+  if (!canonicalTimestamp(p.generated_at)) return fail("invalid_generated_at");
+  if (!canonicalCount(p.sequence)) return fail("invalid_sequence");
+
+  if (!isPlainObject(p.source)) return fail("missing_field:source");
+  if (firstUnknownKey(p.source, ["application", "version", "build_sha"])) return fail("unknown_field:source");
+  if (!canonicalText(p.source.application, 48)) return fail("invalid_source_application");
+  if (!canonicalText(p.source.version, 32)) return fail("invalid_source_version");
+  if (!("build_sha" in p.source)) return fail("missing_field:source.build_sha");
+  if (!canonicalOptionalText(p.source.build_sha, 40)) return fail("invalid_source_build_sha");
+
+  if (!isPlainObject(p.deployment)) return fail("missing_field:deployment");
+  if (firstUnknownKey(p.deployment, ["deployment_id", "alias", "version", "build_sha", "release_channel", "environment", "region"]))
+    return fail("unknown_field:deployment");
+  if (!isCanonicalDeploymentId(p.deployment.deployment_id)) return fail("invalid_deployment_id");
+  if (!canonicalOptionalText(p.deployment.alias, L.maxAliasLength)) return fail("invalid_deployment_alias");
+  if (!canonicalText(p.deployment.version, 32)) return fail("invalid_deployment_version");
+  if (!canonicalOptionalText(p.deployment.build_sha, 40)) return fail("invalid_deployment_build_sha");
+  if (!canonicalText(p.deployment.release_channel, 24)) return fail("invalid_deployment_release_channel");
+  if (!canonicalOptionalText(p.deployment.environment, 24)) return fail("invalid_deployment_environment");
+  if (!canonicalOptionalText(p.deployment.region, 24)) return fail("invalid_deployment_region");
+
+  if (!isPlainObject(p.runtime)) return fail("missing_field:runtime");
+  const runtimeKeys = ["uptime_seconds", "overall", "api", "worker", "collaboration", "database", "redis", "storage", "antivirus"];
+  if (firstUnknownKey(p.runtime, runtimeKeys)) return fail("unknown_field:runtime");
+  for (const key of runtimeKeys) if (!(key in p.runtime)) return fail(`missing_field:runtime.${key}`);
+  if (!canonicalCount(p.runtime.uptime_seconds)) return fail("invalid_runtime_uptime");
+  for (const key of runtimeKeys.slice(1)) if (!healthState(p.runtime[key])) return fail(`invalid_runtime_${key}`);
+
+  if (!isPlainObject(p.signals)) return fail("missing_field:signals");
+  if (firstUnknownKey(p.signals, ["requests", "errors", "latency", "services", "queue", "capacity"]))
+    return fail("unknown_field:signals");
+  const { requests, errors, latency, services, queue, capacity } = p.signals;
+  for (const [name, group] of [["requests", requests], ["errors", errors]] as const) {
+    if (!isPlainObject(group)) return fail(`missing_field:signals.${name}`);
+    if (firstUnknownKey(group, ["total", "by_status_class"])) return fail(`unknown_field:signals.${name}`);
+    if (!canonicalCount(group.total)) return fail(`invalid_signals_${name}_total`);
+    if (
+      !Array.isArray(group.by_status_class) ||
+      group.by_status_class.length > L.maxStatusClasses ||
+      !group.by_status_class.every(
+        (entry: any) =>
+          isPlainObject(entry) &&
+          Object.keys(entry).length === 2 &&
+          canonicalStatusClass(entry.status_class) &&
+          canonicalCount(entry.count),
+      )
+    )
+      return fail(`invalid_signals_${name}_by_status_class`);
+  }
+  if (!isPlainObject(latency)) return fail("missing_field:signals.latency");
+  if (firstUnknownKey(latency, ["samples", "total_seconds", "max_seconds"])) return fail("unknown_field:signals.latency");
+  if (!canonicalCount(latency.samples) || !canonicalLatency(latency.total_seconds) || !canonicalLatency(latency.max_seconds))
+    return fail("invalid_signals_latency");
+  if (
+    !Array.isArray(services) ||
+    services.length > L.maxServices ||
+    !services.every(
+      (service: any) =>
+        isPlainObject(service) &&
+        firstUnknownKey(service, ["name", "state", "configured", "values"]) === null &&
+        canonicalServiceName(service.name) &&
+        healthState(service.state) &&
+        typeof service.configured === "boolean" &&
+        Array.isArray(service.values) &&
+        service.values.length <= L.maxServiceValues &&
+        service.values.every(
+          (item: any) =>
+            isPlainObject(item) &&
+            Object.keys(item).length === 2 &&
+            canonicalServiceName(item.name) &&
+            canonicalNullableCount(item.value),
+        ),
+    )
+  )
+    return fail("invalid_signals_services");
+  if (!isPlainObject(queue)) return fail("missing_field:signals.queue");
+  if (firstUnknownKey(queue, ["depth", "state"])) return fail("unknown_field:signals.queue");
+  if (!canonicalNullableCount(queue.depth)) return fail("invalid_signals_queue_depth");
+  if (!healthState(queue.state)) return fail("invalid_signals_queue_state");
+  if (!isPlainObject(capacity)) return fail("missing_field:signals.capacity");
+  if (firstUnknownKey(capacity, ["storage", "database"])) return fail("unknown_field:signals.capacity");
+  if (!canonicalNullableCount(capacity.storage)) return fail("invalid_signals_capacity_storage");
+  if (!canonicalNullableCount(capacity.database)) return fail("invalid_signals_capacity_database");
+
+  if (!isPlainObject(p.readiness)) return fail("missing_field:readiness");
+  if (firstUnknownKey(p.readiness, ["last_backup_at", "backup_state", "schema_version", "upgrade_ready", "tls", "profiles"]))
+    return fail("unknown_field:readiness");
+  if (!canonicalOptionalTimestamp(p.readiness.last_backup_at)) return fail("invalid_readiness_last_backup_at");
+  if (!healthState(p.readiness.backup_state)) return fail("invalid_readiness_backup_state");
+  if (!canonicalOptionalText(p.readiness.schema_version, 32)) return fail("invalid_readiness_schema_version");
+  if (!(p.readiness.upgrade_ready === null || typeof p.readiness.upgrade_ready === "boolean"))
+    return fail("invalid_readiness_upgrade_ready");
+  if (!healthState(p.readiness.tls)) return fail("invalid_readiness_tls");
+  if (!isPlainObject(p.readiness.profiles)) return fail("missing_field:readiness.profiles");
+  if (firstUnknownKey(p.readiness.profiles, ["identity", "storage"])) return fail("unknown_field:readiness.profiles");
+  if (!canonicalOptionalText(p.readiness.profiles.identity, 40)) return fail("invalid_readiness_profiles_identity");
+  if (!canonicalOptionalText(p.readiness.profiles.storage, 40)) return fail("invalid_readiness_profiles_storage");
+
+  if (!Array.isArray(p.events) || p.events.length > L.maxEvents) return fail("invalid_events");
+  for (const event of p.events) {
+    if (!isPlainObject(event) || Object.keys(event).length !== 2) return fail("unknown_field:events");
+    if (!canonicalCategory(event.category) || !canonicalCount(event.count)) return fail("invalid_events");
+  }
+
+  // Prohibition scan runs on the received bytes, so content the producer would never
+  // emit is still refused rather than trusted. Canonical predicates already drop
+  // prohibited text, so this is defense in depth for the serialized whole.
+  const violations = scanForProhibited(serialized);
+  if (violations.length) return fail(`prohibited:${violations[0]}`);
+
+  return { ok: true, payload: parsed as OperatorTelemetryV1 };
+}

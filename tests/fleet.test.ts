@@ -18,6 +18,7 @@ import {
   sealCredentialSecret,
   verifyIngestion,
 } from "../apps/fleet/src/fleet.ts";
+import { deploymentIdFrom } from "../packages/operations/operator-telemetry.ts";
 import {
   buildEnvelope,
   payloadDigest,
@@ -101,6 +102,11 @@ test("fleet configuration fails closed on missing security settings", () => {
   assert.throws(() => fleetConfig({ FLEET_DATABASE_URL: "postgres://x", FLEET_ENCRYPTION_KEY: KEY }), /FLEET_OPERATOR_TOKEN/);
   assert.throws(() => fleetConfig({ FLEET_DATABASE_URL: "postgres://x", FLEET_OPERATOR_TOKEN: TOKEN }), /FLEET_ENCRYPTION_KEY/);
   assert.throws(() => fleetConfig({ FLEET_OPERATOR_TOKEN: TOKEN, FLEET_ENCRYPTION_KEY: KEY }), /FLEET_DATABASE_URL/);
+  // The fleet service must not inherit the customer Workspace database configuration.
+  assert.throws(
+    () => fleetConfig({ DATABASE_URL: "postgres://workspace@db/app", FLEET_OPERATOR_TOKEN: TOKEN, FLEET_ENCRYPTION_KEY: KEY }),
+    /FLEET_DATABASE_URL/,
+  );
   const ok = fleetConfig({ FLEET_DATABASE_URL: "postgres://x", FLEET_OPERATOR_TOKEN: TOKEN, FLEET_ENCRYPTION_KEY: KEY });
   assert.deepEqual(FLEET_DEPLOYMENT_STATES, ["active", "disabled", "revoked"]);
   assert.ok(ok.skewMs > 0 && ok.staleMs > 0 && ok.offlineMs > ok.staleMs);
@@ -156,8 +162,8 @@ test("alerts are deterministic, bounded and derived only from factual state", ()
 test("ingestion rejects every hostile case fail closed", () => {
   const now = new Date("2026-10-12T12:00:00Z");
   const cfg = { skewMs: 120_000, maxEnvelopeBytes: 4_096 };
-  const credential = { id: "cred-a", deployment_id: "ws-a", internal_id: "internal-a", state: "active", secret: SECRET_A };
-  const valid = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now });
+  const credential = { id: "cred-a", deployment_id: deploymentIdFrom("ws-a"), internal_id: "internal-a", state: "active", deployment_state: "active", secret: SECRET_A };
+  const valid = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now });
   const check = (over: Partial<Parameters<typeof verifyIngestion>[0]>) =>
     verifyIngestion({ rawBody: JSON.stringify(valid), envelope: valid, credential, now, config: cfg, ...over });
 
@@ -166,16 +172,16 @@ test("ingestion rejects every hostile case fail closed", () => {
   assert.equal((check({ envelope: null }) as any).code, "malformed");
   assert.equal((check({ envelope: { ...valid, envelope: "openjm.workspace.telemetry-envelope.v9" } as any }) as any).code, "unsupported_envelope_version");
   assert.equal((check({ credential: null }) as any).code, "unknown_credential");
-  assert.equal((check({ credential: { ...credential, state: "revoked" } }) as any).code, "credential_inactive");
+  assert.equal((check({ credential: { ...credential, state: "revoked" , deployment_state: "active" } }) as any).code, "credential_inactive");
   // Credential/deployment binding: A's credential cannot speak for B.
-  assert.equal((check({ credential: { ...credential, deployment_id: "ws-b" } }) as any).code, "credential_deployment_mismatch");
-  const stale = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-a", secret: SECRET_A, payload: valid.payload, now: new Date("2026-10-12T10:00:00Z"), nonce: "n-stale" });
+  assert.equal((check({ credential: { ...credential, deployment_id: deploymentIdFrom("ws-b") , deployment_state: "active" } }) as any).code, "credential_deployment_mismatch");
+  const stale = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A, payload: valid.payload, now: new Date("2026-10-12T10:00:00Z"), nonce: "n-stale" });
   assert.equal((check({ envelope: stale }) as any).code, "timestamp_out_of_window");
-  const future = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-a", secret: SECRET_A, payload: valid.payload, now: new Date("2026-10-12T16:00:00Z"), nonce: "n-future" });
+  const future = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A, payload: valid.payload, now: new Date("2026-10-12T16:00:00Z"), nonce: "n-future" });
   assert.equal((check({ envelope: future }) as any).code, "timestamp_out_of_window");
   assert.equal((check({ envelope: { ...valid, payload: valid.payload.replace(/"sequence":0/, '"sequence":5') } as any }) as any).code, "payload_digest_mismatch");
   assert.equal((check({ envelope: { ...valid, signature: "0".repeat(64) } as any }) as any).code, "invalid_signature");
-  assert.equal((check({ credential: { ...credential, secret: SECRET_B } }) as any).code, "invalid_signature");
+  assert.equal((check({ credential: { ...credential, secret: SECRET_B , deployment_state: "active" } }) as any).code, "invalid_signature");
   // An unsupported contract is rejected with a precise code before crypto runs.
   assert.equal(
     (check({ envelope: { ...valid, contract: "openjm.workspace.operator-telemetry.v9" } as any }) as any).code,
@@ -183,13 +189,15 @@ test("ingestion rejects every hostile case fail closed", () => {
   );
   assert.equal((check({ envelope: { ...valid, payload: "not-json" } as any }) as any).code, "payload_digest_mismatch");
   // A well-formed envelope whose payload is valid JSON but not the declared contract.
-  const wrongContract = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-a", secret: SECRET_A, payload: JSON.stringify({ schema: "other" }), now, nonce: "n-wrong" });
-  assert.equal((check({ envelope: wrongContract }) as any).code, "payload_contract_mismatch");
+  // OCP-2A corrections: the payload is now strictly validated against the accepted
+  // canonical shape, not merely parsed.
+  const wrongContract = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A, payload: JSON.stringify({ schema: "other" }), now, nonce: "n-wrong" });
+  assert.equal((check({ envelope: wrongContract }) as any).code, "canonical_unsupported_schema");
 });
 
 test("end to end: ingestion, current state, isolation, replay, reads and audit", async () => {
-  const deploymentA = await registerDeployment({ workspaceId: "ws-a", credentialId: "cred-a", secret: SECRET_A });
-  const deploymentB = await registerDeployment({ workspaceId: "ws-b", credentialId: "cred-b", secret: SECRET_B });
+  const deploymentA = await registerDeployment({ workspaceId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A });
+  const deploymentB = await registerDeployment({ workspaceId: deploymentIdFrom("ws-b"), credentialId: "cred-b", secret: SECRET_B });
 
   // Unauthenticated operator access is refused, and no registry enumeration leaks.
   const anon = await app.inject({ method: "GET", url: "/deployments" });
@@ -198,17 +206,17 @@ test("end to end: ingestion, current state, isolation, replay, reads and audit",
   assert.equal(wrong.statusCode, 401);
 
   // Valid ingestion for A.
-  const envelopeA = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now: new Date() });
+  const envelopeA = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now: new Date() });
   const accepted = await ingest(JSON.stringify(envelopeA));
   assert.equal(accepted.statusCode, 202, accepted.body);
 
   // Replay of the same envelope and of a reused nonce are both refused.
   assert.equal((await ingest(JSON.stringify(envelopeA))).statusCode, 409, "replayed envelope must be refused");
-  const replayedNonce = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now: new Date(), nonce: envelopeA.nonce });
+  const replayedNonce = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now: new Date(), nonce: envelopeA.nonce });
   assert.equal((await ingest(JSON.stringify(replayedNonce))).statusCode, 409, "replayed nonce must be refused");
 
   // B's credential cannot submit for A: the binding is rejected.
-  const crossCredential = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-b", secret: SECRET_B, payload: payloadFor("ws-a"), now: new Date() });
+  const crossCredential = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-b", secret: SECRET_B, payload: payloadFor("ws-a"), now: new Date() });
   const cross = await ingest(JSON.stringify(crossCredential));
   assert.equal(cross.statusCode, 403, cross.body);
   assert.equal(JSON.parse(cross.body).error, "credential_deployment_mismatch");
@@ -256,7 +264,7 @@ test("end to end: ingestion, current state, isolation, replay, reads and audit",
 
   // Credential revocation stops ingestion for that deployment only.
   await pool.query("UPDATE deployment_credentials SET state='revoked', revoked_at=now() WHERE id='cred-a'");
-  const afterRevoke = buildEnvelope({ deploymentId: "ws-a", credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now: new Date() });
+  const afterRevoke = buildEnvelope({ deploymentId: deploymentIdFrom("ws-a"), credentialId: "cred-a", secret: SECRET_A, payload: payloadFor("ws-a"), now: new Date() });
   const rejected = await ingest(JSON.stringify(afterRevoke));
   assert.equal(rejected.statusCode, 403);
   assert.equal(JSON.parse(rejected.body).error, "credential_inactive");
