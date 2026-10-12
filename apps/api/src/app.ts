@@ -136,6 +136,10 @@ import {
   serializeOperatorTelemetry,
 } from "../../../packages/operations/operator-telemetry.ts";
 import {
+  collectOperationalSources,
+  toTelemetryInputs,
+} from "../../../packages/operations/operational-sources.ts";
+import {
   TELEMETRY_ENVELOPE_VERSION,
   readTelemetryTransportStatus,
   telemetryTransportConfig,
@@ -789,6 +793,13 @@ export async function buildApp(
     } catch {
       schemaVersion = null;
     }
+    // OCP-1 source enrichment: read-only, bounded, fail-soft adapters feeding the
+    // existing contract. databaseCapacity is deliberately left unknown.
+    const sources = await collectOperationalSources({
+      q: { query: (sql: string, params?: any[]) => db.system((inner) => inner.query(sql, params)) },
+      env: process.env,
+      backupDirectory: process.env.OPERATOR_TELEMETRY_BACKUP_DIR ?? null,
+    });
     const payload = composeOperatorTelemetry({
       application: "workspace",
       version: process.env.WORKSPACE_VERSION ?? "unknown",
@@ -809,11 +820,7 @@ export async function buildApp(
       services: snapshot.services,
       http: snapshot.http,
       antivirus: snapshot.antivirus,
-      queueDepth: null,
-      storageCapacity: null,
-      databaseCapacity: null,
-      lastBackupAt: null,
-      backupVerified: null,
+      ...toTelemetryInputs(sources),
       schemaVersion,
       upgradeReady: deployment.ok,
       tlsHealthy:
