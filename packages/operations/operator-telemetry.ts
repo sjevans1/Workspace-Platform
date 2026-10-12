@@ -114,6 +114,9 @@ export type OperatorTelemetrySources = {
   http?: { method: string; statusClass: string; count: number; durationSeconds: number }[];
   antivirus?: { clean: number; infected: number; error: number } | null;
   queueDepth?: number | null;
+  // OCP-1 source enrichment: an explicitly supplied factual queue state. Internal
+  // input only; the serialized wire shape is unchanged.
+  queueState?: HealthState;
   storageCapacity?: number | null;
   databaseCapacity?: number | null;
   lastBackupAt?: string | null;
@@ -298,7 +301,10 @@ export function composeOperatorTelemetry(sources: OperatorTelemetrySources): Ope
         max_seconds: Math.round(latencyMax * 1000) / 1000,
       },
       services,
-      queue: { depth: boundedInt(sources.queueDepth), state: sourcedState(sources.queueDepth, "unknown") },
+      queue: {
+        depth: boundedInt(sources.queueDepth),
+        state: sources.queueState ?? sourcedState(sources.queueDepth, "unknown"),
+      },
       capacity: {
         storage: boundedInt(sources.storageCapacity),
         database: boundedInt(sources.databaseCapacity),

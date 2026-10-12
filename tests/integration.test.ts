@@ -10978,6 +10978,17 @@ test("OCP-1A operator telemetry is authorized, canonical and secret-free", async
       `unbounded runtime state ${key}=${body.runtime[key]}`,
     );
   assert.equal(body.readiness.backup_state, "unknown");
+  // OCP-1 source enrichment: the API inspection path carries the enriched operational
+  // values, proving it consumes the shared adapter rather than its own logic.
+  assert.ok(
+    ["healthy", "degraded", "unhealthy", "unknown"].includes(body.signals.queue.state),
+    `queue state must stay in the bounded vocabulary: ${body.signals.queue.state}`,
+  );
+  assert.equal(body.signals.capacity.database, null, "database capacity stays unknown by design");
+  assert.ok(
+    body.signals.capacity.storage === null || typeof body.signals.capacity.storage === "number",
+    "storage capacity is either a bounded percentage or unknown",
+  );
   const raw = JSON.stringify(body);
   for (const sentinel of ["postgres://", "Bearer ", "workspace_session=", "client_secret", "password"])
     assert.ok(!raw.includes(sentinel), `telemetry leaked ${sentinel}`);

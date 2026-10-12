@@ -12,6 +12,10 @@ import {
   operatorTelemetryConfig,
   serializeOperatorTelemetry,
 } from "../../../packages/operations/operator-telemetry.ts";
+import {
+  collectOperationalSources,
+  toTelemetryInputs,
+} from "../../../packages/operations/operational-sources.ts";
 
 // Wave X / X3 (W26): fail closed on invalid deployment configuration before the
 // service starts. Service scope, so only settings this service receives.
@@ -40,6 +44,13 @@ const db = new Database(),
       payloadProvider: async () => {
         // Consume the canonical OCP-1A serialization; never reconstruct telemetry
         // and never bypass the OCP-1A prohibition scan.
+        // OCP-1 source enrichment: read-only, bounded, fail-soft adapters feeding the
+        // existing contract. databaseCapacity is deliberately left unknown.
+        const sources = await collectOperationalSources({
+        q: { query: (sql: string, params?: any[]) => db.system((inner) => inner.query(sql, params)) },
+        env: process.env,
+        backupDirectory: process.env.OPERATOR_TELEMETRY_BACKUP_DIR ?? null,
+        });
         const dependencies: Record<string, boolean> = {};
         try {
           await db.system((q) => q.query("SELECT 1"));
@@ -61,11 +72,7 @@ const db = new Database(),
             services: {},
             http: [],
             antivirus: null,
-            queueDepth: null,
-            storageCapacity: null,
-            databaseCapacity: null,
-            lastBackupAt: null,
-            backupVerified: null,
+            ...toTelemetryInputs(sources),
             schemaVersion: null,
             upgradeReady: null,
             tlsHealthy: null,
