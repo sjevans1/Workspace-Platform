@@ -11,6 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -36,6 +37,12 @@ const REACHABILITY_BINARY: Record<string, string> = {
 };
 
 const LOCAL_IMAGE_ID = "sha256:" + "b".repeat(64);
+
+// A deliberately realistic local image id for the registry-backed images. GitHub's runner stores a
+// platform image whose local id is NOT the registry manifest or index digest (FULL 38305744176
+// failed on a gate that wrongly required them to be equal), so the fixture reproduces that
+// condition: a valid, distinct local id plus the correct immutable reference in RepoDigests.
+const registryLocalId = (name: string) => "sha256:" + createHash("sha256").update(`w27-local-image-id:${name}`).digest("hex");
 
 function writeJson(file: string, value: unknown) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -72,7 +79,7 @@ function buildEvidence(evidence: string, identity: Record<string, any>, patched:
       reference: authoritative.reference,
       kind: authoritative.kind,
       provenanceClass: PROVENANCE_CLASS[name],
-      resolvedImageId: authoritative.digest ?? LOCAL_IMAGE_ID,
+      resolvedImageId: authoritative.kind === "registry-digest" ? registryLocalId(name) : LOCAL_IMAGE_ID,
       architecture: "amd64",
       os: "linux",
       repoDigests: authoritative.digest ? [authoritative.reference] : [],
@@ -157,6 +164,15 @@ async function fixture(): Promise<Fixture> {
   const vex = readJson(join(root, "docs/security/vex-gosu-postgres-17.11-bookworm.json"));
   const { identities, failures } = resolveReleaseImages(root);
   assert.deepEqual(failures, [], "the fixture must start from valid provenance");
+  for (const name of IMAGES) {
+    if (identities[name].kind !== "registry-digest") continue;
+    assert.match(identities[name].digest ?? "", /^sha256:[a-f0-9]{64}$/);
+    assert.notEqual(
+      registryLocalId(name),
+      identities[name].digest,
+      "the fixture must reproduce the runner condition where the local image id differs from the registry digest",
+    );
+  }
   const evidence = join(root, "w27-evidence");
   mkdirSync(evidence, { recursive: true });
   buildEvidence(evidence, identities, patched, vex);
@@ -207,10 +223,12 @@ fails("2. missing SBOM", "sbom.cdx.json", (created) => {
 });
 
 // --- 3-8: identity and provenance ----------------------------------------------------------
-fails("3. digest mismatch", "does not match the authoritative digest", (created) => {
+// The registry identity contract is the immutable reference plus RepoDigests. A local image id that
+// differs from the registry digest is legitimate and must NOT fail the gate (case 18 depends on it).
+fails("3. registry immutable identity missing from RepoDigests", "RepoDigests does not contain the authoritative immutable reference", (created) => {
   const file = join(created.evidence, "caddy", "identity.json");
   const identity = readJson(file);
-  identity.resolvedImageId = "sha256:" + "c".repeat(64);
+  identity.repoDigests = [String(identity.repoDigests[0]).replace(/sha256:[a-f0-9]{64}$/, `sha256:${"d".repeat(64)}`)];
   writeJson(file, identity);
 });
 

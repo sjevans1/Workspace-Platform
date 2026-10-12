@@ -85,6 +85,15 @@ only VEX disposition. Exact-digest acceptance for both patched artifacts has bee
 those frozen digests. The committed evidence is only as strong as the run it comes from, so this
 record quotes the qualification state rather than treating a committed step as verified output.
 
+FULL `38305744176` on head `ce4084d971d9e625205aefa527ef403d24892703` is also a genuine failed
+acceptance, and it failed at the W27 aggregate evaluator. FAST succeeded, backend succeeded, all six
+image evidence sets were collected, collection errors were zero, no vulnerability-policy failure
+occurred, and the PostgreSQL/gosu VEX validation remained valid. The cause was a gate implementation
+defect: the evaluator compared a local Docker image id against a registry manifest digest, which are
+allowed to differ. Every deployment step after the evaluator was skipped and is therefore not
+accepted, and no image was rebuilt or republished. Both failed FULL runs remain part of this
+record; the earlier one is not rewritten by the later one.
+
 ## 4. Privacy and retention reconciliation
 
 | Data | Retention | Boundary |

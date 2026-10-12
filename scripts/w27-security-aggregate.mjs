@@ -261,19 +261,27 @@ export class AggregateEvaluator {
     if (identity.provenanceClass !== spec.provenanceClass) {
       this.fail(`${name}: recorded provenance class ${identity.provenanceClass} is not ${spec.provenanceClass}`);
     }
+    // Docker's local image id is a local, storage-backend-dependent value. It is allowed to differ
+    // from the registry manifest or index digest, so it is required to be a valid local image
+    // identity and is deliberately NOT compared to authoritative.digest. Registry identity is
+    // proven by the immutable reference itself and by the local image's RepoDigests.
     const resolved = identity.resolvedImageId ?? "";
     if (!/^sha256:[a-f0-9]{64}$/.test(resolved)) {
-      this.fail(`${name}: recorded image id is not an immutable sha256 identity (${resolved || "absent"})`);
+      this.fail(`${name}: recorded local image id is not a valid sha256 image identity (${resolved || "absent"})`);
       return;
     }
     if (authoritative.kind === "registry-digest") {
-      if (authoritative.digest && resolved !== authoritative.digest) {
-        this.fail(`${name}: recorded digest ${resolved} does not match the authoritative digest ${authoritative.digest}`);
-        return;
+      const reference = String(identity.reference ?? "");
+      if (!/^[^\s@]+@sha256:[a-f0-9]{64}$/.test(reference)) {
+        this.fail(`${name}: recorded registry identity is not an immutable digest reference (${reference || "absent"})`);
       }
-      const digests = Array.isArray(identity.repoDigests) ? identity.repoDigests : [];
-      if (!digests.includes(authoritative.reference)) {
-        this.fail(`${name}: the local image does not resolve to the authoritative immutable reference ${authoritative.reference}`);
+      const digests = Array.isArray(identity.repoDigests) ? identity.repoDigests : null;
+      if (!digests || digests.length === 0) {
+        this.fail(`${name}: no RepoDigests were recorded, so the pulled image cannot be shown to be the authoritative immutable reference`);
+      } else if (!digests.includes(authoritative.reference)) {
+        this.fail(
+          `${name}: RepoDigests does not contain the authoritative immutable reference ${authoritative.reference} (recorded ${digests.join(", ")})`,
+        );
       }
     }
     if (identity.architecture !== "amd64") this.fail(`${name}: recorded architecture ${identity.architecture} is not amd64`);

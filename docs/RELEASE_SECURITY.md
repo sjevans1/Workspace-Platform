@@ -103,6 +103,13 @@ PostgreSQL's fixable HIGH/CRITICAL set is attributable in full to the bundled `g
 
 ### Recorded findings from this work, stated honestly
 
+- **FULL `38305744176` on head `ce4084d971d9e625205aefa527ef403d24892703` genuinely failed at the
+  W27 aggregate evaluator.** FAST succeeded and backend succeeded. All six image evidence sets were
+  collected, collection errors were zero, no vulnerability-policy failure occurred, and the
+  PostgreSQL/gosu VEX validation remained valid. The cause was the evaluator comparing a local
+  Docker image id against a registry manifest digest, which are allowed to differ. Every deployment
+  step after the evaluator was skipped and is therefore not accepted, no image was rebuilt or
+  republished, and the registry identity contract is now the immutable reference plus RepoDigests.
 - **FULL `38250970609` genuinely failed.** The expanded gate surfaced real reachable release blockers: Caddy's `usr/bin/caddy` carried 21 fixable HIGH findings with 4 reachable, and SeaweedFS's `usr/bin/weed` carried 5 fixable HIGH findings with 3 reachable.
 - **The blockers were repaired by patched upstream rebuilds, not by adjudication.** Publication run `38267553760` built and published both patched images; the immutable digests are frozen in `ci/w27-patched-images.json`, the consumers use them, and the reachability analysis of the rebuilt binaries reports zero reachable HIGH/CRITICAL. See `docs/security/W27_PATCHED_REBUILD.md`.
 - **Valkey is immutable by digest but is not CI-H1 mirror-provenanced.** It is consumed from its own upstream GHCR namespace and is pinned in `compose.yaml` to the immutable index digest `sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507`, resolved from the registry, so the image scanned is cryptographically the image the supported release consumes. Bringing Valkey into the mirror inventory as a reviewed follow-up would remove the last provenance asymmetry; the immutability requirement itself is met and no upgrade was made to clear a scan.

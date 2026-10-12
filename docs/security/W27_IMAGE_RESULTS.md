@@ -44,6 +44,15 @@ accepted policy and not a claim that they are harmless.
    `compose.yaml` for Caddy, the CI SeaweedFS acceptance service for SeaweedFS.
 6. **The six-image gate now collects before it decides**, and the results above are the outcome of
    that gate against those frozen identities.
+7. **FULL `38305744176` on head `ce4084d971d9e625205aefa527ef403d24892703` genuinely failed, and it
+   failed at the W27 aggregate evaluator.** FAST succeeded and backend succeeded. All six image
+   evidence sets were collected, collection errors were zero, no vulnerability-policy failure
+   occurred, and the PostgreSQL/gosu VEX validation remained valid. The failure was caused by the
+   evaluator comparing a local Docker image id against a registry manifest digest: those are
+   allowed to differ, and on the GitHub runner they do. Every deployment step after the evaluator
+   was skipped and is therefore not accepted. No image was rebuilt or republished. This is a gate
+   implementation defect, corrected in part 3 of the follow-up below; the earlier failure below is
+   not rewritten by it.
 
 ## Reachability adjudication (binary mode, pinned govulncheck v1.9.0)
 

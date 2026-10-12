@@ -110,6 +110,11 @@ jobs:
           echo "CI-H1: only digest-pinned GHCR mirrors are consumed; no Docker Hub credentials in normal CI"
       - name: Verify CI event orchestrator
         run: npm run test:ci-orchestrator
+      # W27: prove the acceptance service really is the frozen patched SeaweedFS artifact before the
+      # service-level S3 acceptance below relies on it. Every expected identity comes from the
+      # authoritative provenance record, so the workflow duplicates no digest.
+      - name: Verify the exact-digest SeaweedFS acceptance service identity
+        run: bash scripts/ci/w27-runtime-identity.sh seaweedfs "$PWD"
       - name: Verify production S3 acceptance harness
         run: |
           node --input-type=module <<'NODE'
@@ -337,6 +342,11 @@ jobs:
           docker compose ps
           docker compose logs
           exit 1
+      # W27: prove the deployed edge really is the frozen patched Caddy artifact before any
+      # deployed-stack acceptance relies on it. Every expected identity comes from the authoritative
+      # provenance record, so the workflow duplicates no digest.
+      - name: Verify the exact-digest Caddy runtime identity
+        run: bash scripts/ci/w27-runtime-identity.sh caddy "$PWD"
       - name: Verify the frontend actually serves before browser acceptance
         run: |
           # CI-H2: the service-healthy condition above (and the API's /ready
