@@ -173,7 +173,7 @@ services:
     depends_on:
       api: { condition: service_healthy }
   caddy:
-    image: ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    image: ghcr.io/sjevans1/workspace-runtime-caddy@sha256:05754b18a137780b49fa3280d864c7e8cb4a88270785fcce77108a471e0983cb
     environment:
       CADDY_ADDRESS: ${CADDY_ADDRESS:-:80}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}

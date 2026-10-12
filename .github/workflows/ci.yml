@@ -54,7 +54,7 @@ jobs:
       # pinned by immutable digest, so normal CI never performs anonymous Docker
       # Hub pulls. Provenance: ci/ghcr-mirror-manifest.json.
       seaweedfs:
-        image: ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
+        image: ghcr.io/sjevans1/workspace-acceptance-seaweedfs@sha256:0f7b74e17d3d85c88419bfeba3af9fb56976b8df7fccf40802df2cf7fddda5ef
         env:
           AWS_ACCESS_KEY_ID: workspace-ci
           AWS_SECRET_ACCESS_KEY: workspace-ci-secret
