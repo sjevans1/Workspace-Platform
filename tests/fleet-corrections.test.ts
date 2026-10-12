@@ -18,6 +18,8 @@ import { buildEnvelope } from "../packages/operations/telemetry-transport.ts";
 import {
   OPERATOR_TELEMETRY_LIMITS,
   composeOperatorTelemetry,
+  deploymentIdFrom,
+  isCanonicalDeploymentId,
   serializeOperatorTelemetry,
   validateOperatorTelemetryV1,
 } from "../packages/operations/operator-telemetry.ts";
@@ -35,17 +37,25 @@ const config = fleetConfig({
   FLEET_STALE_MS: "60000",
   FLEET_OFFLINE_MS: "120000",
 });
-const hooks: { beforeStatePersist?: () => void } = {};
+const hooks: { beforeStatePersist?: () => void; beforeReplayInsert?: () => void; beforeLifecycleAudit?: () => void } = {};
 const app = buildFleetService(pool, config, hooks);
 
-const WS_A = "ws-corrections-a";
-const WS_B = "ws-corrections-b";
+// Real OCP-1A opaque deployment identities, produced by the shared helper rather than
+// invented literals.
+const SEED_A = "corrections-a";
+const SEED_B = "corrections-b";
+const SEED_L = "lifecycle-001";
+const WS_L = deploymentIdFrom(SEED_L);
+const SEED_F = "first-seen-1";
+const WS_F = deploymentIdFrom(SEED_F);
+const WS_A = deploymentIdFrom(SEED_A);
+const WS_B = deploymentIdFrom(SEED_B);
 const CRED_A = "cred-corr-a";
 const CRED_B = "cred-corr-b";
 let deploymentA = "";
 let deploymentB = "";
 
-const validPayload = (seed = WS_A, overrides: Record<string, unknown> = {}) => {
+const validPayload = (seed = SEED_A, overrides: Record<string, unknown> = {}) => {
   const payload: any = JSON.parse(
     serializeOperatorTelemetry(
       composeOperatorTelemetry({
@@ -54,7 +64,7 @@ const validPayload = (seed = WS_A, overrides: Record<string, unknown> = {}) => {
         deploymentIdSeed: seed,
         sequence: 1,
         dependencies: { database: true, redis: true },
-        services: { worker: { configured: true, healthy: true } },
+        services: { worker: { healthy: true, values: { requests: 12, errors: 0 } } },
         antivirus: { clean: 1, infected: 0, error: 0 },
         queueDepth: 2,
         queueState: "degraded",
@@ -188,7 +198,7 @@ test("an oversized canonical payload is rejected independently of the envelope c
 // 2. Atomic accepted-ingestion persistence
 // ---------------------------------------------------------------------------
 test("a failure after replay insertion rolls back and the same envelope is then accepted", async () => {
-  const body = envelopeFor(validPayload(WS_A));
+  const body = envelopeFor(validPayload(SEED_A));
   const sequencesBefore = await pool.query("SELECT COUNT(*)::int AS n FROM deployment_state_history WHERE deployment_id=$1", [deploymentA]);
 
   hooks.beforeStatePersist = () => {
@@ -224,30 +234,30 @@ test("a failure after replay insertion rolls back and the same envelope is then 
 // 3. Deployment disabled and revoked enforcement
 // ---------------------------------------------------------------------------
 test("a disabled or revoked deployment cannot ingest even with an active credential", async () => {
-  assert.equal((await ingest(envelopeFor(validPayload(WS_B), SECRET_B, CRED_B, WS_B))).statusCode, 202, "active deployment and active credential are accepted");
+  assert.equal((await ingest(envelopeFor(validPayload(SEED_B), SECRET_B, CRED_B, WS_B))).statusCode, 202, "active deployment and active credential are accepted");
 
   const disable = await operator("POST", `/deployments/${deploymentB}/lifecycle`, { state: "disabled" });
   assert.equal(disable.statusCode, 200);
-  const disabled = await ingest(envelopeFor(validPayload(WS_B), SECRET_B, CRED_B, WS_B));
+  const disabled = await ingest(envelopeFor(validPayload(SEED_B), SECRET_B, CRED_B, WS_B));
   assert.equal(disabled.statusCode, 403);
   assert.equal(JSON.parse(disabled.body).error, "deployment_disabled", "disabled is distinct from revoked and precisely coded");
 
   const enable = await operator("POST", `/deployments/${deploymentB}/lifecycle`, { state: "enabled" });
   assert.equal(enable.statusCode, 200);
-  assert.equal((await ingest(envelopeFor(validPayload(WS_B), SECRET_B, CRED_B, WS_B))).statusCode, 202, "re-enabling restores ingestion");
+  assert.equal((await ingest(envelopeFor(validPayload(SEED_B), SECRET_B, CRED_B, WS_B))).statusCode, 202, "re-enabling restores ingestion");
 
   const revoke = await operator("POST", `/deployments/${deploymentB}/lifecycle`, { state: "revoked" });
   assert.equal(revoke.statusCode, 200);
-  const revoked = await ingest(envelopeFor(validPayload(WS_B), SECRET_B, CRED_B, WS_B));
+  const revoked = await ingest(envelopeFor(validPayload(SEED_B), SECRET_B, CRED_B, WS_B));
   assert.equal(revoked.statusCode, 403);
   assert.equal(JSON.parse(revoked.body).error, "deployment_revoked");
   // Revocation is terminal.
   assert.equal((await operator("POST", `/deployments/${deploymentB}/lifecycle`, { state: "enabled" })).statusCode, 409);
 
   // Disabling or revoking one deployment never affects another.
-  assert.equal((await ingest(envelopeFor(validPayload(WS_A)))).statusCode, 202, "deployment A is unaffected");
+  assert.equal((await ingest(envelopeFor(validPayload(SEED_A)))).statusCode, 202, "deployment A is unaffected");
   await operator("POST", `/deployments/${deploymentB}/lifecycle`, { state: "disabled" });
-  assert.equal((await ingest(envelopeFor(validPayload(WS_A)))).statusCode, 202, "deployment A remains accepted");
+  assert.equal((await ingest(envelopeFor(validPayload(SEED_A)))).statusCode, 202, "deployment A remains accepted");
   await operator("POST", `/deployments/${deploymentB}/lifecycle`, { state: "revoked" });
 });
 
@@ -255,11 +265,11 @@ test("a disabled or revoked deployment cannot ingest even with an active credent
 // 4. Operator-plane lifecycle API
 // ---------------------------------------------------------------------------
 test("registration, credential issuance, rotation and revocation are real audited capabilities", async () => {
-  const registration = await operator("POST", "/deployments", { workspace_deployment_id: "ws-lifecycle-001", alias: "fleet-a" });
+  const registration = await operator("POST", "/deployments", { workspace_deployment_id: WS_L, alias: "fleet-a" });
   assert.equal(registration.statusCode, 201);
   const registered = registration.json();
   assert.equal(registered.state, "active");
-  assert.equal((await operator("POST", "/deployments", { workspace_deployment_id: "ws-lifecycle-001" })).statusCode, 409, "duplicate registration is refused");
+  assert.equal((await operator("POST", "/deployments", { workspace_deployment_id: WS_L })).statusCode, 409, "duplicate registration is refused");
   assert.equal((await operator("POST", "/deployments", { workspace_deployment_id: "bad id!" })).statusCode, 400, "an invalid deployment id is refused");
 
   const issued = await operator("POST", `/deployments/${registered.id}/credentials`);
@@ -278,7 +288,7 @@ test("registration, credential issuance, rotation and revocation are real audite
   assert.equal(detail.json().credentials[0].state, "active");
 
   // The issued credential works for ingestion.
-  const usable = await ingest(envelopeFor(validPayload("ws-lifecycle-001"), secret, credentialId, "ws-lifecycle-001"));
+  const usable = await ingest(envelopeFor(validPayload(SEED_L), secret, credentialId, WS_L));
   assert.equal(usable.statusCode, 202, usable.body);
 
   // Rotation replaces the secret; the previous secret stops working immediately.
@@ -286,14 +296,14 @@ test("registration, credential issuance, rotation and revocation are real audite
   assert.equal(rotated.statusCode, 200);
   const newSecret = rotated.json().secret;
   assert.notEqual(newSecret, secret, "rotation must produce a new secret");
-  assert.equal((await ingest(envelopeFor(validPayload("ws-lifecycle-001"), secret, credentialId, "ws-lifecycle-001"))).statusCode, 401, "the previous secret is rejected");
-  assert.equal((await ingest(envelopeFor(validPayload("ws-lifecycle-001"), newSecret, credentialId, "ws-lifecycle-001"))).statusCode, 202, "the rotated secret is accepted");
+  assert.equal((await ingest(envelopeFor(validPayload(SEED_L), secret, credentialId, WS_L))).statusCode, 401, "the previous secret is rejected");
+  assert.equal((await ingest(envelopeFor(validPayload(SEED_L), newSecret, credentialId, WS_L))).statusCode, 202, "the rotated secret is accepted");
   const rotatedRow = await pool.query("SELECT rotated_at FROM deployment_credentials WHERE id=$1", [credentialId]);
   assert.ok(rotatedRow.rows[0].rotated_at !== null);
 
   // Revocation stops ingestion immediately.
   assert.equal((await operator("POST", `/deployments/${registered.id}/credentials/${credentialId}/revoke`)).statusCode, 200);
-  const afterRevoke = await ingest(envelopeFor(validPayload("ws-lifecycle-001"), newSecret, credentialId, "ws-lifecycle-001"));
+  const afterRevoke = await ingest(envelopeFor(validPayload(SEED_L), newSecret, credentialId, WS_L));
   assert.equal(afterRevoke.statusCode, 403);
   assert.equal(JSON.parse(afterRevoke.body).error, "credential_inactive");
   assert.equal((await operator("POST", `/deployments/${registered.id}/credentials/${credentialId}/revoke`)).statusCode, 404, "revoking twice is refused");
@@ -358,18 +368,18 @@ test("fleet migrations are versioned, idempotent, additive and separate from Wor
 // ---------------------------------------------------------------------------
 test("first_seen is recorded once and never overwritten", async () => {
   const id = randomUUID();
-  await pool.query("INSERT INTO deployments(id,workspace_deployment_id,state) VALUES($1,$2,'active')", [id, "ws-first-seen"]);
+  await pool.query("INSERT INTO deployments(id,workspace_deployment_id,state) VALUES($1,$2,'active')", [id, WS_F]);
   const credentialId = "cred-first-seen";
   await pool.query("INSERT INTO deployment_credentials(id,deployment_id,secret_encrypted,state) VALUES($1,$2,$3,'active')", [
     credentialId, id, sealCredentialSecret(SECRET_A, credentialId, config.encryptionKey),
   ]);
-  const first = envelopeFor(validPayload("ws-first-seen"), SECRET_A, credentialId, "ws-first-seen");
+  const first = envelopeFor(validPayload(SEED_F), SECRET_A, credentialId, WS_F);
   assert.equal((await ingest(first)).statusCode, 202);
   const after1 = await pool.query("SELECT first_seen, last_seen FROM deployments WHERE id=$1", [id]);
   assert.ok(after1.rows[0].first_seen !== null, "first_seen is set on the first accepted telemetry");
   const seen = after1.rows[0].first_seen;
   await new Promise((resolve) => setTimeout(resolve, 15));
-  const second = envelopeFor(validPayload("ws-first-seen", { sequence: 2 }), SECRET_A, credentialId, "ws-first-seen");
+  const second = envelopeFor(validPayload(SEED_F, { sequence: 2 }), SECRET_A, credentialId, WS_F);
   assert.equal((await ingest(second)).statusCode, 202);
   const after2 = await pool.query("SELECT first_seen, last_seen FROM deployments WHERE id=$1", [id]);
   assert.equal(new Date(after2.rows[0].first_seen).toISOString(), new Date(seen).toISOString(), "first_seen is never overwritten");
@@ -395,4 +405,153 @@ test("the stale/offline threshold progression is normalized so it can never inve
   });
   assert.equal(normal.offlineMsNormalized, false);
   assert.ok(normal.staleMs < normal.offlineMs);
+});
+
+// ---------------------------------------------------------------------------
+// Review pass 2 findings
+// ---------------------------------------------------------------------------
+test("the receiver enforces the accepted producer contract, not a superset", async () => {
+  // A rich, producer-generated payload must validate unchanged.
+  assert.equal(validateOperatorTelemetryV1(JSON.stringify(validPayload(SEED_A))).ok, true, "producer output validates unchanged");
+
+  const bad = (mutate: (p: any) => void) => {
+    const p = validPayload(SEED_A);
+    mutate(p);
+    return validateOperatorTelemetryV1(JSON.stringify(p));
+  };
+  // Service and value names pass through sanitizeServiceName(): lowercase [a-z0-9._-].
+  assert.deepEqual(bad((p) => { p.signals.services[0].name = "Worker"; }), { ok: false, code: "invalid_signals_services" });
+  // Underscore IS permitted by the producer's service-name shape, so it is not a
+  // negative; a space or a leading digit is.
+  assert.deepEqual(bad((p) => { p.signals.services[0].name = "my worker"; }), { ok: false, code: "invalid_signals_services" });
+  assert.deepEqual(bad((p) => { p.signals.services[0].name = "1worker"; }), { ok: false, code: "invalid_signals_services" });
+  assert.equal(validateOperatorTelemetryV1(JSON.stringify((() => { const q = validPayload(SEED_A); q.signals.services[0].name = "my_worker"; return q; })())).ok, true, "an underscore service name the producer accepts stays valid");
+  assert.deepEqual(bad((p) => { p.signals.services[0].values[0].name = "Requests"; }), { ok: false, code: "invalid_signals_services" });
+  // Status classes are producer constrained to [1-5]xx.
+  assert.equal((bad((p) => { p.signals.requests.by_status_class = [{ status_class: "2XX", count: 1 }]; }) as any).ok, false);
+  assert.equal((bad((p) => { p.signals.requests.by_status_class = [{ status_class: "20x", count: 1 }]; }) as any).ok, false);
+  // Counts pass through boundedInt(): non-negative integers only.
+  assert.deepEqual(bad((p) => { p.signals.queue.depth = 1.5; }), { ok: false, code: "invalid_signals_queue_depth" });
+  assert.deepEqual(bad((p) => { p.signals.capacity.storage = 12.5; }), { ok: false, code: "invalid_signals_capacity_storage" });
+  assert.equal((bad((p) => { p.signals.services[0].values[0].value = 2.25; }) as any).ok, false);
+  // Event categories pass through sanitizeCategory(): lowercase allowlisted shape.
+  assert.equal((bad((p) => { p.events = [{ category: "Backup.Verified", count: 1 }]; }) as any).ok, false);
+  assert.equal((bad((p) => { p.events = [{ category: "backup verified", count: 1 }]; }) as any).ok, false);
+  // Timestamps must be the canonical form the producer emits.
+  assert.deepEqual(bad((p) => { p.generated_at = "2026-10-12T06:00:00Z"; }), { ok: false, code: "invalid_generated_at" });
+  assert.equal((bad((p) => { p.readiness.last_backup_at = "2026-10-12 06:00:00"; }) as any).ok, false);
+  // Text bounds are the producer's, not looser ones.
+  assert.deepEqual(bad((p) => { p.source.application = "a".repeat(49); }), { ok: false, code: "invalid_source_application" });
+  assert.deepEqual(bad((p) => { p.source.version = "v".repeat(33); }), { ok: false, code: "invalid_source_version" });
+  assert.deepEqual(bad((p) => { p.deployment.version = "v".repeat(33); }), { ok: false, code: "invalid_deployment_version" });
+  assert.deepEqual(bad((p) => { p.deployment.build_sha = "b".repeat(41); }), { ok: false, code: "invalid_deployment_build_sha" });
+  assert.deepEqual(bad((p) => { p.readiness.schema_version = "s".repeat(33); }), { ok: false, code: "invalid_readiness_schema_version" });
+  assert.deepEqual(bad((p) => { p.readiness.profiles.identity = "i".repeat(41); }), { ok: false, code: "invalid_readiness_profiles_identity" });
+  assert.deepEqual(bad((p) => { p.deployment.release_channel = "r".repeat(25); }), { ok: false, code: "invalid_deployment_release_channel" });
+  // A URL with a path or query is reduced by sanitizeText, so it is not canonical text.
+  assert.deepEqual(bad((p) => { p.deployment.alias = "https://example.com/path?x=1"; }), { ok: false, code: "invalid_deployment_alias" });
+  // Nulls the wire contract permits are still preserved.
+  const nullable = validPayload(SEED_A);
+  nullable.signals.capacity = { storage: null, database: null };
+  nullable.readiness.last_backup_at = null;
+  nullable.deployment.alias = null;
+  assert.equal(validateOperatorTelemetryV1(JSON.stringify(nullable)).ok, true, "permitted nulls are preserved");
+});
+
+test("the validated payload identity is bound to the signed envelope", async () => {
+  // Credential A, envelope A, correctly signed and digested, but the inner telemetry
+  // claims deployment B.
+  const impostor = validPayload(SEED_B);
+  const before = await pool.query("SELECT COUNT(*)::int AS n FROM deployment_state_history WHERE deployment_id=$1", [deploymentA]);
+  const response = await ingest(envelopeFor(impostor, SECRET_A, CRED_A, WS_A));
+  assert.equal(response.statusCode, 403);
+  assert.equal(JSON.parse(response.body).error, "deployment_identity_mismatch");
+  const replay = await pool.query("SELECT COUNT(*)::int AS n FROM fleet_replay");
+  const after = await pool.query("SELECT COUNT(*)::int AS n FROM deployment_state_history WHERE deployment_id=$1", [deploymentA]);
+  assert.equal(after.rows[0].n, before.rows[0].n, "no history is persisted for a mismatched identity");
+  // The replay table may hold rows from earlier tests; the mismatch must add none.
+  const replayAfterMismatch = await pool.query("SELECT COUNT(*)::int AS n FROM fleet_replay");
+  assert.equal(replayAfterMismatch.rows[0].n, replay.rows[0].n, "a mismatched identity consumes no replay state");
+  // The matching identity still works.
+  assert.equal((await ingest(envelopeFor(validPayload(SEED_A)))).statusCode, 202);
+});
+
+test("a non-uniqueness failure during the replay insert is retryable, not a replay", async () => {
+  const body = envelopeFor(validPayload(SEED_A));
+  const before = await pool.query("SELECT COUNT(*)::int AS n FROM fleet_replay");
+  // Simulate an infrastructure error with a non-unique SQLSTATE.
+  hooks.beforeReplayInsert = () => {
+    throw Object.assign(new Error("simulated infrastructure failure"), { code: "57P01" });
+  };
+  const failed = await ingest(body);
+  hooks.beforeReplayInsert = undefined;
+  assert.equal(failed.statusCode, 503, "an infrastructure failure must not masquerade as a replay");
+  assert.equal(JSON.parse(failed.body).error, "persistence_failed");
+  const afterFailure = await pool.query("SELECT COUNT(*)::int AS n FROM fleet_replay");
+  assert.equal(afterFailure.rows[0].n, before.rows[0].n, "no replay row survives the failed attempt");
+  // The very same envelope can subsequently be accepted.
+  const retried = await ingest(body);
+  assert.equal(retried.statusCode, 202, `the same envelope must be acceptable later: ${retried.body}`);
+  // A true duplicate is still a replay.
+  assert.equal((await ingest(body)).statusCode, 409, "a genuine duplicate nonce/signature is still a replay");
+});
+
+test("security-sensitive lifecycle mutations are audit-required and roll back together", async () => {
+  const seed = "audit-required-1";
+  const workspaceId = deploymentIdFrom(seed);
+  const registration = await operator("POST", "/deployments", { workspace_deployment_id: workspaceId });
+  assert.equal(registration.statusCode, 201);
+  const deployment = registration.json().id;
+  const issued = await operator("POST", `/deployments/${deployment}/credentials`);
+  assert.equal(issued.statusCode, 201);
+  const credentialId = issued.json().credential_id;
+  const secret = issued.json().secret;
+  assert.equal((await ingest(envelopeFor(validPayload(seed), secret, credentialId, workspaceId))).statusCode, 202);
+
+  hooks.beforeLifecycleAudit = () => {
+    throw new Error("simulated audit write failure");
+  };
+
+  // Revocation must not happen without its audit record.
+  const revoke = await operator("POST", `/deployments/${deployment}/credentials/${credentialId}/revoke`);
+  assert.equal(revoke.statusCode, 503);
+  const stillActive = await pool.query("SELECT state FROM deployment_credentials WHERE id=$1", [credentialId]);
+  assert.equal(stillActive.rows[0].state, "active", "the credential is not revoked when the audit cannot commit");
+  assert.equal(
+    (await pool.query("SELECT COUNT(*)::int AS n FROM fleet_audit WHERE deployment_id=$1 AND action='credential.revoked'", [deployment])).rows[0].n,
+    0,
+    "no revoke audit row survives the rollback",
+  );
+  // Ingestion still works, proving nothing was half-applied.
+  assert.equal((await ingest(envelopeFor(validPayload(seed), secret, credentialId, workspaceId))).statusCode, 202);
+
+  // A deployment lifecycle transition must not occur unaudited.
+  const disable = await operator("POST", `/deployments/${deployment}/lifecycle`, { state: "disabled" });
+  assert.equal(disable.statusCode, 503);
+  const state = await pool.query("SELECT state FROM deployments WHERE id=$1", [deployment]);
+  assert.equal(state.rows[0].state, "active", "the deployment state is unchanged when the audit cannot commit");
+
+  // Rotation must not change the secret without its audit record.
+  const rotate = await operator("POST", `/deployments/${deployment}/credentials/${credentialId}/rotate`);
+  assert.equal(rotate.statusCode, 503);
+  const afterRotate = await pool.query("SELECT rotated_at FROM deployment_credentials WHERE id=$1", [credentialId]);
+  assert.equal(afterRotate.rows[0].rotated_at, null, "the secret is not rotated when the audit cannot commit");
+  assert.equal((await ingest(envelopeFor(validPayload(seed), secret, credentialId, workspaceId))).statusCode, 202, "the original secret still works");
+
+  hooks.beforeLifecycleAudit = undefined;
+
+  // With auditing available again, the same operations succeed.
+  assert.equal((await operator("POST", `/deployments/${deployment}/credentials/${credentialId}/revoke`)).statusCode, 200);
+  const revokedNow = await pool.query("SELECT state FROM deployment_credentials WHERE id=$1", [credentialId]);
+  assert.equal(revokedNow.rows[0].state, "revoked");
+  const audited = await pool.query("SELECT COUNT(*)::int AS n FROM fleet_audit WHERE deployment_id=$1 AND action='credential.revoked'", [deployment]);
+  assert.equal(audited.rows[0].n, 1, "the successful revocation is audited exactly once");
+});
+
+test("fleet registration refuses identifiers Workspace would never produce", async () => {
+  assert.equal(isCanonicalDeploymentId(WS_A), true);
+  for (const bad of ["ws-abc", "ws-" + "A".repeat(40), "ws-" + "z".repeat(40), deploymentIdFrom("x").slice(0, 20), "corrections-a"]) {
+    assert.equal(isCanonicalDeploymentId(bad), false, `${bad} is not a canonical deployment id`);
+    assert.equal((await operator("POST", "/deployments", { workspace_deployment_id: bad })).statusCode, 400, `${bad} must be refused at registration`);
+  }
 });

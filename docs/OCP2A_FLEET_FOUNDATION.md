@@ -25,7 +25,13 @@ plane, and the customer tenant admin surfaces are not mixed.
 Fail-closed on security-sensitive misconfiguration, verified by test:
 `FLEET_DATABASE_URL`, `FLEET_OPERATOR_TOKEN` (minimum 24 characters, stored only as a
 SHA-256 hash and compared in constant time) and `FLEET_ENCRYPTION_KEY` (minimum 32
-characters) are all required. Operational thresholds are explicit and configurable:
+characters) are all required.
+
+The fleet persistence boundary is explicit: `FLEET_DATABASE_URL` is required and the
+service never consults `DATABASE_URL`, so it cannot silently inherit the customer
+Workspace database configuration. Production should point this at an appropriately
+scoped fleet database and role. Workspace remains independent of, and unaware of, the
+fleet database. Operational thresholds are explicit and configurable:
 `FLEET_SKEW_MS` (default 120 s), `FLEET_STALE_MS` (default 15 min),
 `FLEET_OFFLINE_MS` (default 60 min), `FLEET_HISTORY_LIMIT` (default 50),
 `FLEET_MAX_ENVELOPE_BYTES` (default 128 KiB) and `FLEET_REPLAY_RETENTION_MS` (default
@@ -52,7 +58,11 @@ by any read API, never logged, and never included in an audit event.
 code: envelope byte size, envelope version, credential existence, credential active
 state, deployment lifecycle state, **deployment binding** (a credential may only speak
 for its own deployment), timestamp window, payload digest, contract version support,
-HMAC signature, then **strict canonical payload validation**. On acceptance it upserts
+HMAC signature, then **strict canonical payload validation**, then **identity binding**
+(the validated payload's `deployment.deployment_id` must equal the envelope's
+`deployment_id`, closing the chain credential -> envelope deployment -> telemetry
+deployment so a valid credential cannot submit an envelope for one deployment whose
+inner telemetry claims another). On acceptance it upserts
 current state, updates last-seen, records `first_seen` once and appends one bounded
 history row. It never persists authorization headers, credential secrets, raw request
 bodies or customer content.
@@ -65,7 +75,26 @@ carrying the accepted schema name plus extra customer or content fields, which t
 fleet service would persist and return. `validateOperatorTelemetryV1` in
 `packages/operations/operator-telemetry.ts` is therefore the single shared definition
 of the accepted payload, used by both producer and receiver so semantics cannot drift,
-and enforced at runtime rather than by TypeScript typing. It rejects, in order: the
+and enforced at runtime rather than by TypeScript typing.
+
+It enforces the **producer's own contract**, not a compatible-looking superset, and it
+does so through shared canonical predicates defined in terms of the producer's
+helpers, so there is no second and drifting set of sanitation rules: canonical text is
+exactly `sanitizeText(value, bound) === value` including the producer's bounds (48 for
+`source.application`, 32 for versions, 40 for build SHAs, 24 for release channel,
+environment and region, 64 for the alias, 32 for `schema_version`, 40 for profile
+names), a canonical service name is `sanitizeServiceName(value) === value`, a canonical
+event category is `sanitizeCategory(value) === value`, status classes are `[1-5]xx`
+only, counts, depths and capacities are the non-negative integers `boundedInt()`
+produces rather than arbitrary fractional values, latency keeps the producer's
+three-decimal rounding, and timestamps must be the canonical `toISOString()` form.
+Values the producer would sanitize, truncate or drop cannot be introduced directly by a
+credential holder and accepted. Where the wire contract permits null it is preserved.
+
+The deployment identity is the OCP-1A **opaque** contract from `deploymentIdFrom()`
+(`ws-` plus a SHA-256 hex prefix). One shared predicate defines it, and the same
+predicate gates telemetry validation, fleet registration and identity binding, so the
+registry cannot be populated with identifiers Workspace itself would never produce. It rejects, in order: the
 `16384`-byte OCP-1A payload ceiling (UTF-8 bytes), non-JSON, non-object payloads,
 unknown top-level or nested fields, unsupported schema, missing required fields,
 invalid values (enums outside the accepted set, non-integer or negative counts,
@@ -81,6 +110,14 @@ Bounded state in `fleet_replay`, unique on (credential_id, nonce) and on signatu
 a replayed nonce and a replayed envelope are both rejected with 409. Rows are pruned
 deterministically to a retention window on every accept, so the table cannot grow
 without bound.
+
+A `409` is emitted **only** for a genuine PostgreSQL uniqueness violation on
+`fleet_replay` (SQLSTATE `23505` naming that table's constraint). Any other database
+error during the replay insert, a transient failure, connection loss, permission or
+disk problem, or a different constraint, is **not** reported as a replay: it rolls
+back and returns a retryable `503`. This matters because OCP-1B treats `409` as
+permanent, so an infrastructure error must never be allowed to masquerade as a replay
+attack and permanently drop telemetry that was never accepted.
 
 Accepted ingestion is persisted **atomically**: replay insertion and pruning, the
 current-state upsert, the deployment last-seen and version update, and the history
@@ -160,6 +197,26 @@ issuance or rotation so Workspace can be provisioned; no read API ever returns a
 secret, and rotation makes the previous secret fail immediately. Each action writes a
 bounded audit event carrying no secret material. These mutation endpoints are
 deliberately not exposed through OCP-2B, which stays read-only.
+
+## Audit-required control-plane mutations
+
+Security-sensitive lifecycle mutations are audited transactionally: the state change
+and its required audit record commit together or roll back together, so a deployment
+can never be registered, a credential issued, rotated or revoked, or a deployment
+enabled, disabled or revoked **unaudited**. Correspondingly, a rotation cannot change
+the secret when its audit record cannot be committed, a revocation cannot apply
+silently, and an issued credential is not left behind when its issuance audit fails;
+the caller receives a bounded `503` and nothing is half-applied. Fail-soft auditing
+remains in place for observational paths such as rejected ingestion, where audit
+failure must not take down ingestion.
+
+## Deferred to W27 hardening (not part of OCP-2A)
+
+Recorded, not implemented here: individual operator identity rather than a single
+bootstrap bearer token; lifecycle-managed audit retention; migration-runner
+concurrency and advisory locking for multi-replica fleet startup; encryption-key
+rotation operational guidance; a final security review of the inherited OCP-1B HMAC
+comparison and timing behaviour; and fleet rate limiting and abuse protection.
 
 ## Versioned fleet migrations
 

@@ -24,7 +24,7 @@ import {
   verifyEnvelopeSignature,
   type TelemetryEnvelope,
 } from "../../../packages/operations/telemetry-transport.ts";
-import { OPERATOR_TELEMETRY_SUPPORTED_SCHEMAS, validateOperatorTelemetryV1 } from "../../../packages/operations/operator-telemetry.ts";
+import { OPERATOR_TELEMETRY_SUPPORTED_SCHEMAS, isCanonicalDeploymentId, validateOperatorTelemetryV1 } from "../../../packages/operations/operator-telemetry.ts";
 
 export { runFleetMigrations, fleetSchemaVersion, FLEET_MIGRATIONS } from "./migrations.ts";
 import { runFleetMigrations } from "./migrations.ts";
@@ -50,8 +50,12 @@ export function fleetConfig(env: Record<string, string | undefined>): FleetConfi
   const key = env.FLEET_ENCRYPTION_KEY ?? "";
   if (token.length < 24) throw new Error("FLEET_OPERATOR_TOKEN must be at least 24 characters");
   if (key.length < 32) throw new Error("FLEET_ENCRYPTION_KEY must be at least 32 characters");
-  const url = env.FLEET_DATABASE_URL ?? env.DATABASE_URL ?? "";
-  if (!url) throw new Error("FLEET_DATABASE_URL is required");
+  // The fleet persistence boundary is explicit. The fleet service must never silently
+  // inherit the customer Workspace database configuration, so DATABASE_URL is not
+  // consulted at all; the operator configures the fleet database explicitly, and
+  // production should use a dedicated, appropriately scoped database and role.
+  const url = env.FLEET_DATABASE_URL ?? "";
+  if (!url) throw new Error("FLEET_DATABASE_URL is required (the fleet service does not inherit DATABASE_URL)");
   const staleMs = bounded(env.FLEET_STALE_MS, 900_000, 60_000, 86_400_000);
   const requestedOfflineMs = bounded(env.FLEET_OFFLINE_MS, 3_600_000, 60_000, 604_800_000);
   const offlineMsNormalized = requestedOfflineMs <= staleMs;
@@ -233,13 +237,20 @@ export function verifyIngestion(input: {
     const oversized = validation.code === "payload_too_large";
     return { ok: false, status: oversized ? 413 : 400, code: `canonical_${validation.code}` };
   }
+  // Full identity chain: credential -> envelope deployment -> telemetry deployment. A
+  // valid credential must not submit an envelope for one deployment whose inner
+  // telemetry claims another.
+  if (validation.payload.deployment.deployment_id !== envelope.deployment_id)
+    return { ok: false, status: 403, code: "deployment_identity_mismatch" };
   return { ok: true, deploymentId: envelope.deployment_id, internalId: credential.internal_id, credentialId: credential.id, envelope };
 }
 
 export type FleetHooks = {
-  // Test-only seam: forces a failure between replay insertion and state persistence so
-  // the atomic rollback can be proven deterministically. Production never sets it.
+  // Test-only seams: force a failure at a precise point so rollback and error
+  // classification can be proven deterministically. Production never sets them.
   beforeStatePersist?: () => void;
+  beforeReplayInsert?: () => void;
+  beforeLifecycleAudit?: () => void;
 };
 
 function validation_payload(payload: string): any {
@@ -311,12 +322,18 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
     try {
       await client.query("BEGIN");
       try {
+        hooks?.beforeReplayInsert?.();
         await client.query(
           "INSERT INTO fleet_replay(credential_id,nonce,signature,seen_at) VALUES($1,$2,$3,now())",
           [verdict.credentialId, verdict.envelope.nonce, verdict.envelope.signature],
         );
-      } catch (error) {
-        replayConflict = true;
+      } catch (error: any) {
+        // Only a genuine uniqueness violation on fleet_replay means "this nonce or
+        // signature was already seen". Any other database error (transient failure,
+        // connection loss, permission or disk problem, or a different constraint) must
+        // not masquerade as a replay, because OCP-1B treats 409 as permanent and would
+        // permanently drop telemetry that was never accepted.
+        replayConflict = error?.code === "23505" && String(error?.constraint ?? "").includes("fleet_replay");
         throw error;
       }
       await client.query("DELETE FROM fleet_replay WHERE seen_at < now() - ($1||' milliseconds')::interval", [
@@ -474,12 +491,45 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
     return { audit: rows.rows };
   });
 
+  // Security-sensitive control-plane mutations are audit-required: the state change and
+  // its audit record commit together or roll back together, so a lifecycle transition
+  // can never happen unaudited. Fail-soft auditing (fleetAudit) remains in place for
+  // observational paths such as rejected ingestion, where audit failure must not take
+  // down ingestion.
+  const LIFECYCLE_AUDIT_ACTION = /^(deployment\.[a-z_]+|credential\.[a-z_]+)$/;
+  async function auditedLifecycleMutation<T>(
+    action: string,
+    deploymentId: string | null | ((result: T) => string | null),
+    detail: string | null,
+    mutate: (client: pg.PoolClient) => Promise<T>,
+  ): Promise<T> {
+    if (!LIFECYCLE_AUDIT_ACTION.test(action)) throw new Error(`Unbounded lifecycle audit action: ${action}`);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await mutate(client);
+      hooks?.beforeLifecycleAudit?.();
+      const target = typeof deploymentId === "function" ? deploymentId(result) : deploymentId;
+      await client.query("INSERT INTO fleet_audit(id,action,deployment_id,detail) VALUES(gen_random_uuid(),$1,$2,$3)", [
+        action,
+        target,
+        detail ? String(detail).slice(0, 64).replace(/[\u0000-\u001f\u007f]/g, "") : null,
+      ]);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   // ---- operator-plane lifecycle ----
   // Real service capabilities rather than tests seeding tables. Operator-authorized,
   // audited, and with no dependency on customer Workspace admin surfaces or remote
   // Workspace command execution. No secret is ever returned except once, at issuance
   // or rotation, so Workspace can be provisioned.
-  const WORKSPACE_ID_SHAPE = /^[A-Za-z0-9_-]{8,64}$/;
   const lifecycleStateFor = (requested: unknown): "active" | "disabled" | "revoked" | null => {
     if (requested === "enabled") return "active";
     if (requested === "disabled" || requested === "active" || requested === "revoked") return requested;
@@ -491,23 +541,33 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
     if (!(await operator(r, reply))) return;
     const body = (r.body ?? {}) as any;
     const workspaceId = typeof body.workspace_deployment_id === "string" ? body.workspace_deployment_id.trim() : "";
-    if (!WORKSPACE_ID_SHAPE.test(workspaceId)) {
+    if (!isCanonicalDeploymentId(workspaceId)) {
       reply.code(400).send({ error: "invalid_workspace_deployment_id" });
       return { error: "invalid_workspace_deployment_id" };
     }
     const alias = typeof body.alias === "string" ? body.alias.slice(0, 64).replace(/[\u0000-\u001f\u007f]/g, "") : null;
     try {
-      const rows = await pool.query(
-        "INSERT INTO deployments(workspace_deployment_id,alias,state) VALUES($1,$2,'active') RETURNING id,workspace_deployment_id,alias,state",
-        [workspaceId, alias],
+      // Registration is not applied if its required audit record cannot commit.
+      const row = await auditedLifecycleMutation(
+        "deployment.registered",
+        (created: any) => created.id,
+        null,
+        async (client) =>
+          (
+            await client.query(
+              "INSERT INTO deployments(workspace_deployment_id,alias,state) VALUES($1,$2,'active') RETURNING id,workspace_deployment_id,alias,state",
+              [workspaceId, alias],
+            )
+          ).rows[0],
       );
-      await fleetAudit(pool, "deployment.registered", rows.rows[0].id, null);
-      reply.code(201).send(rows.rows[0]);
-      return rows.rows[0];
+      reply.code(201).send(row);
+      return row;
     } catch (error: any) {
+      // A duplicate is a client error; anything else is a bounded server failure, and
+      // nothing (including the audit record) survives the rollback.
       const exists = error?.code === "23505";
-      reply.code(exists ? 409 : 500).send({ error: exists ? "deployment_exists" : "registration_failed" });
-      return { error: "registration_failed" };
+      reply.code(exists ? 409 : 503).send({ error: exists ? "deployment_exists" : "lifecycle_failed" });
+      return { error: exists ? "deployment_exists" : "lifecycle_failed" };
     }
   });
 
@@ -520,11 +580,18 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
     }
     const credentialId = randomUUID();
     const secret = newSecret();
-    await pool.query(
-      "INSERT INTO deployment_credentials(id,deployment_id,secret_encrypted,state) VALUES($1,$2,$3,'active')",
-      [credentialId, id, sealCredentialSecret(secret, credentialId, config.encryptionKey)],
-    );
-    await fleetAudit(pool, "credential.issued", id, credentialId);
+    try {
+      // A credential is never left issued when its required issuance audit fails.
+      await auditedLifecycleMutation("credential.issued", id, credentialId, async (client) => {
+        await client.query(
+          "INSERT INTO deployment_credentials(id,deployment_id,secret_encrypted,state) VALUES($1,$2,$3,'active')",
+          [credentialId, id, sealCredentialSecret(secret, credentialId, config.encryptionKey)],
+        );
+      });
+    } catch {
+      reply.code(503).send({ error: "lifecycle_failed" });
+      return { error: "lifecycle_failed" };
+    }
     // The only point at which a secret leaves the service, and only for provisioning.
     reply.code(201).send({ credential_id: credentialId, deployment_id: id, secret });
     return { credential_id: credentialId };
@@ -539,11 +606,18 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
       return { error: "credential_not_found" };
     }
     const secret = newSecret();
-    await pool.query("UPDATE deployment_credentials SET secret_encrypted=$2, rotated_at=now() WHERE id=$1", [
-      credentialId,
-      sealCredentialSecret(secret, credentialId, config.encryptionKey),
-    ]);
-    await fleetAudit(pool, "credential.rotated", id, credentialId);
+    try {
+      // The secret is not changed when the required rotation audit cannot commit.
+      await auditedLifecycleMutation("credential.rotated", id, credentialId, async (client) => {
+        await client.query("UPDATE deployment_credentials SET secret_encrypted=$2, rotated_at=now() WHERE id=$1", [
+          credentialId,
+          sealCredentialSecret(secret, credentialId, config.encryptionKey),
+        ]);
+      });
+    } catch {
+      reply.code(503).send({ error: "lifecycle_failed" });
+      return { error: "lifecycle_failed" };
+    }
     reply.code(200).send({ credential_id: credentialId, deployment_id: id, secret });
     return { credential_id: credentialId };
   });
@@ -551,17 +625,24 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   app.post("/deployments/:id/credentials/:credentialId/revoke", async (r, reply) => {
     if (!(await operator(r, reply))) return;
     const { id, credentialId } = r.params as any;
-    const rows = await pool.query(
-      "UPDATE deployment_credentials SET state='revoked', revoked_at=now() WHERE id=$1 AND deployment_id=$2 AND state='active' RETURNING id",
-      [credentialId, id],
-    );
-    if (!rows.rowCount) {
-      reply.code(404).send({ error: "credential_not_active" });
-      return { error: "credential_not_active" };
+    try {
+      // A credential is never revoked silently: revocation and its audit commit
+      // together or neither is applied.
+      const revoked = await auditedLifecycleMutation("credential.revoked", id, credentialId, async (client) => {
+        const rows = await client.query(
+          "UPDATE deployment_credentials SET state='revoked', revoked_at=now() WHERE id=$1 AND deployment_id=$2 AND state='active' RETURNING id",
+          [credentialId, id],
+        );
+        if (!rows.rowCount) throw Object.assign(new Error("credential_not_active"), { clientError: true });
+        return rows.rows[0];
+      });
+      reply.code(200).send({ credential_id: revoked.id, state: "revoked" });
+      return { credential_id: revoked.id, state: "revoked" };
+    } catch (error: any) {
+      const notActive = error?.clientError === true;
+      reply.code(notActive ? 404 : 503).send({ error: notActive ? "credential_not_active" : "lifecycle_failed" });
+      return { error: notActive ? "credential_not_active" : "lifecycle_failed" };
     }
-    await fleetAudit(pool, "credential.revoked", id, credentialId);
-    reply.code(200).send({ credential_id: credentialId, state: "revoked" });
-    return { credential_id: credentialId, state: "revoked" };
   });
 
   app.post("/deployments/:id/lifecycle", async (r, reply) => {
@@ -578,14 +659,23 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
       return { error: "deployment_not_found" };
     }
     // Revocation is terminal and explicitly documented as such: a revoked deployment
-    // cannot be moved back to active. Disable and re-enable are reversible.
+    // cannot be moved back to active. Disable and re-enable are reversible. Rejected
+    // transitions are recorded fail-soft, like rejected ingestion.
     if (found.rows[0].state === "revoked" && target !== "revoked") {
       await fleetAudit(pool, "deployment.lifecycle_rejected", id, "revocation_terminal");
       reply.code(409).send({ error: "deployment_revocation_terminal" });
       return { error: "deployment_revocation_terminal" };
     }
-    if (found.rows[0].state !== target) await pool.query("UPDATE deployments SET state=$2 WHERE id=$1", [id, target]);
-    await fleetAudit(pool, target === "active" ? "deployment.enabled" : target === "disabled" ? "deployment.disabled" : "deployment.revoked", id, null);
+    const action = target === "active" ? "deployment.enabled" : target === "disabled" ? "deployment.disabled" : "deployment.revoked";
+    try {
+      // The transition is never applied unaudited.
+      await auditedLifecycleMutation(action, id, null, async (client) => {
+        if (found.rows[0].state !== target) await client.query("UPDATE deployments SET state=$2 WHERE id=$1", [id, target]);
+      });
+    } catch {
+      reply.code(503).send({ error: "lifecycle_failed" });
+      return { error: "lifecycle_failed" };
+    }
     reply.code(200).send({ id, state: target });
     return { id, state: target };
   });

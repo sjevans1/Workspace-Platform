@@ -14,13 +14,14 @@ import pg from "pg";
 import { buildFleetService, ensureFleetSchema, fleetConfig, sealCredentialSecret } from "../apps/fleet/src/fleet.ts";
 import { fleetSchemaVersion } from "../apps/fleet/src/migrations.ts";
 import { BoundedSpool, startTelemetryExporter, telemetryTransportConfig } from "../packages/operations/telemetry-transport.ts";
-import { composeOperatorTelemetry, serializeOperatorTelemetry } from "../packages/operations/operator-telemetry.ts";
+import { composeOperatorTelemetry, deploymentIdFrom, serializeOperatorTelemetry } from "../packages/operations/operator-telemetry.ts";
 
 const TOKEN = "fleet-operator-token-0123456789";
 const KEY = "fleet-encryption-key-0123456789abcdef";
 const SECRET = "z".repeat(48);
 const CREDENTIAL_ID = "cred-outage";
-const WORKSPACE_ID = "ws-outage-001";
+const WORKSPACE_SEED = "outage-001";
+const WORKSPACE_ID = deploymentIdFrom(WORKSPACE_SEED);
 
 const pool = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL, max: 4 });
 const config = fleetConfig({
@@ -46,7 +47,7 @@ const payloadProvider = async () =>
     composeOperatorTelemetry({
       application: "workspace",
       version: "1.0.0",
-      deploymentIdSeed: WORKSPACE_ID,
+      deploymentIdSeed: WORKSPACE_SEED,
       sequence,
       dependencies: { database: true, redis: true, storage: true },
       services: { worker: { configured: true, healthy: true } },
