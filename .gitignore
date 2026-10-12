@@ -19,3 +19,4 @@ e2e/.auth/
 .w27-evidence/
 build/w27/images/*/*.bin
 build/w27/caddy/
+build/w27/seaweedfs/
