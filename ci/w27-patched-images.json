@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "1.0.0",
+  "document": "W27 patched-upstream image provenance",
+  "generatedBy": "Hermes (Workspace W27 PR #214)",
+  "qualificationDate": "2026-10-12",
+  "publicationRun": "38267553760",
+  "note": "Patched-upstream rebuilds. These are NOT mirrors and must never be treated as mirror provenance; ci/ghcr-mirror-manifest.json remains the record of byte-for-byte upstream mirrors.",
+  "images": [
+    {
+      "logicalName": "caddy",
+      "classification": "patched-upstream",
+      "intendedUse": "shipped-runtime",
+      "upstreamRepository": "caddyserver/caddy",
+      "upstreamTag": "v2.11.7",
+      "upstreamCommit": "72dd0fb067f6d7826c7f79907670ba4a713bfe37",
+      "sourceVerification": "depth-1 clone of the signed annotated tag; build asserts git rev-parse HEAD equals the pinned commit and aborts with SOURCE DRIFT otherwise",
+      "runtimeBaseReference": "ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b",
+      "builderDigest": "golang@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c",
+      "goVersion": "go1.26.9",
+      "govulncheckVersion": "v1.9.0",
+      "trivyVersion": "recorded in trivy-version.txt from run 38267553760",
+      "originalModuleGraph": "golang.org/x/net v0.59.0, golang.org/x/text v0.42.0",
+      "approvedModuleDelta": {
+        "golang.org/x/net": [
+          "v0.59.0",
+          "v0.60.0"
+        ]
+      },
+      "moduleGraphAssertion": "complete go list -m all before/after comparison; any other added, removed or version-changed line fails the build (exit 46)",
+      "buildTags": "nobadger,nomysql,nopgx",
+      "binaryPath": "/usr/bin/caddy",
+      "binarySha256": "90e5f85f9a206ea63bdc146d75c54e0ec5c8ca4d245605f0c1570706ed4a38e5",
+      "ghcrPackage": "ghcr.io/sjevans1/workspace-runtime-caddy",
+      "finalImageDigest": "sha256:05754b18a137780b49fa3280d864c7e8cb4a88270785fcce77108a471e0983cb",
+      "buildRecipe": "build/w27/build-caddy-patched.sh plus build/w27/images/caddy/Dockerfile.patched",
+      "reachability": "zero reachable HIGH/CRITICAL; GO-2026-5932 visible non-VEXed residual",
+      "vex": null,
+      "mirrorProvenance": false
+    },
+    {
+      "logicalName": "seaweedfs",
+      "classification": "patched-upstream",
+      "intendedUse": "acceptance-only",
+      "upstreamRepository": "seaweedfs/seaweedfs",
+      "upstreamTag": "4.48",
+      "upstreamCommit": "530be3e37337488ecc34d58441e0bc476e121c93",
+      "sourceVerification": "depth-1 clone of the exact tag; build asserts the commit and aborts on drift",
+      "runtimeBaseReference": "docker.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d",
+      "runtimeBaseDigest": "sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d",
+      "builderDigest": "golang@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c",
+      "goVersion": "go1.26.9",
+      "govulncheckVersion": "v1.9.0",
+      "trivyVersion": "recorded in trivy-version.txt from run 38267553760",
+      "originalModuleGraph": "golang.org/x/net v0.58.0, golang.org/x/text v0.42.0",
+      "approvedModuleDelta": {
+        "golang.org/x/net": [
+          "v0.58.0",
+          "v0.60.0"
+        ]
+      },
+      "moduleGraphAssertion": "complete go list -m all before/after comparison; any other change fails the build (exit 46)",
+      "buildTags": "upstream default",
+      "binaryPath": "/usr/bin/weed",
+      "binarySha256": "ff8d09e4a8c921f35a7a65b988c541d74f0b01725197ddb7fdf5728f2be37cb2",
+      "inheritedRuntimeArtifacts": {
+        "weedVolume": {
+          "path": "/usr/bin/weed-volume",
+          "sha256": "8b271bc326f593c1b3b7f5d90091b0ef789c89023c34dec908c919f8614384d1",
+          "bytes": 39475480,
+          "kind": "real ELF, inherited unchanged"
+        },
+        "weedWorker": {
+          "path": "/usr/bin/weed-worker",
+          "sha256": "9f10828f88b4ca4e1b770af68bbe5c9a38ca06623b187cfe6fd08238e9677fca",
+          "bytes": 252739408,
+          "kind": "real ELF, inherited unchanged"
+        }
+      },
+      "ghcrPackage": "ghcr.io/sjevans1/workspace-acceptance-seaweedfs",
+      "finalImageDigest": "sha256:0f7b74e17d3d85c88419bfeba3af9fb56976b8df7fccf40802df2cf7fddda5ef",
+      "buildRecipe": "build/w27/build-seaweedfs-patched.sh plus build/w27/images/seaweedfs/Dockerfile.patched",
+      "reachability": "GO-2026-6617, GO-2026-6613 and GO-2026-6612 absent; visible non-blocking items GO-2022-0646 (MODERATE, unfixed) and GO-2022-0635 (LOW, unfixed)",
+      "vex": null,
+      "mirrorProvenance": false
+    }
+  ]
+}
