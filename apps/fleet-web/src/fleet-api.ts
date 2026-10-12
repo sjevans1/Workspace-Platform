@@ -1,0 +1,129 @@
+// OCP-2B: server-side access to the accepted OCP-2A read APIs.
+//
+// The fleet operator credential lives ONLY here, in server-side configuration. It is
+// never sent to the browser, never placed in a client bundle (this console ships no
+// client-side JavaScript at all), and never included in an error surfaced to a user.
+
+export type FleetConsoleConfig = {
+  baseUrl: string;
+  operatorToken: string;
+  sessionSecret: string;
+  port: number;
+  sessionTtlMs: number;
+  requestTimeoutMs: number;
+  secureCookie: boolean;
+};
+
+const bounded = (raw: string | undefined, fallback: number, min: number, max: number): number => {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.floor(value), min), max);
+};
+
+// Fail closed: the console is useless and unsafe without an API base, the operator
+// credential and a session signing secret.
+export function fleetConsoleConfig(env: Record<string, string | undefined>): FleetConsoleConfig {
+  const baseUrl = (env.FLEET_API_BASE_URL ?? "").trim();
+  const operatorToken = env.FLEET_OPERATOR_TOKEN ?? "";
+  const sessionSecret = env.FLEET_CONSOLE_SESSION_SECRET ?? "";
+  if (!baseUrl) throw new Error("FLEET_API_BASE_URL is required (the OCP-2A fleet API base URL)");
+  if (!/^https?:\/\//.test(baseUrl)) throw new Error("FLEET_API_BASE_URL must be an absolute http(s) URL");
+  if (operatorToken.length < 24) throw new Error("FLEET_OPERATOR_TOKEN is required (server-side only)");
+  if (sessionSecret.length < 32) throw new Error("FLEET_CONSOLE_SESSION_SECRET must be at least 32 characters");
+  return {
+    baseUrl: baseUrl.replace(/\/+$/, ""),
+    operatorToken,
+    sessionSecret,
+    port: bounded(env.FLEET_CONSOLE_PORT, 4200, 1, 65_535),
+    // Bounded session lifetime: 15 minutes minimum, 24 hours maximum, 8 hours default.
+    sessionTtlMs: bounded(env.FLEET_CONSOLE_SESSION_TTL_MS, 8 * 3_600_000, 900_000, 86_400_000),
+    // Bounded request timeout so a slow or hanging fleet API cannot pin the console.
+    requestTimeoutMs: bounded(env.FLEET_CONSOLE_REQUEST_TIMEOUT_MS, 5_000, 500, 15_000),
+    secureCookie: String(env.FLEET_CONSOLE_SECURE_COOKIE ?? "").toLowerCase() === "true" || env.NODE_ENV === "production",
+  };
+}
+
+export type FleetApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: "unreachable" | "timeout" | "unauthorized" | "server_error"; status?: number };
+
+export type FleetDeployment = {
+  id: string;
+  workspace_deployment_id: string;
+  alias: string | null;
+  state: string;
+  online_state: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  app_version: string | null;
+  build_sha: string | null;
+  schema_version: string | null;
+  contract_version: string | null;
+  queue: { depth: number | null; state: string } | null;
+  storage: number | null;
+  database_capacity: number | null;
+  backup: { last_backup_at: string | null; state: string } | null;
+  runtime: Record<string, string> | null;
+};
+
+export type FleetAlert = { deployment_id: string; category: string; severity: "info" | "warning" };
+export type FleetAuditEntry = { action: string; deployment_id: string | null; detail: string | null; created_at: string };
+export type FleetDeploymentDetail = {
+  deployment: FleetDeployment & { notes: string | null };
+  credentials: { id: string; state: string; created_at: string; rotated_at: string | null; revoked_at: string | null }[];
+  telemetry: any;
+  history: { observed_at: string; queue_state: string | null; backup_state: string | null; online_state: string | null }[];
+  alerts: FleetAlert[];
+};
+
+export type FleetClient = {
+  listDeployments(): Promise<FleetApiResult<{ deployments: FleetDeployment[] }>>;
+  deployment(id: string): Promise<FleetApiResult<FleetDeploymentDetail>>;
+  alerts(): Promise<FleetApiResult<{ alerts: FleetAlert[] }>>;
+  audit(): Promise<FleetApiResult<{ audit: FleetAuditEntry[] }>>;
+  health(): Promise<FleetApiResult<{ status: string }>>;
+};
+
+// Only these read paths are ever called. The console has no code path to an OCP-2A
+// mutation endpoint.
+export const FLEET_READ_PATHS = ["/deployments", "/alerts", "/audit", "/health"] as const;
+
+export function createFleetClient(options: {
+  baseUrl: string;
+  operatorToken: string;
+  timeoutMs: number;
+  fetchImpl?: typeof fetch;
+}): FleetClient {
+  const doFetch = options.fetchImpl ?? fetch;
+
+  const get = async <T>(path: string): Promise<FleetApiResult<T>> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+    try {
+      const response = await doFetch(`${options.baseUrl}${path}`, {
+        method: "GET",
+        headers: { authorization: `Bearer ${options.operatorToken}`, accept: "application/json" },
+        redirect: "error",
+        signal: controller.signal,
+      });
+      if (response.status === 401 || response.status === 403) return { ok: false, error: "unauthorized", status: response.status };
+      if (!response.ok) return { ok: false, error: "server_error", status: response.status };
+      // Bounded parse: a malformed body is a service error, never a crash and never a
+      // raw body echoed to a user.
+      const data = (await response.json()) as T;
+      return { ok: true, data };
+    } catch (error: any) {
+      return { ok: false, error: error?.name === "AbortError" ? "timeout" : "unreachable" };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  return {
+    listDeployments: () => get<{ deployments: FleetDeployment[] }>("/deployments"),
+    deployment: (id: string) => get<FleetDeploymentDetail>(`/deployments/${encodeURIComponent(id)}`),
+    alerts: () => get<{ alerts: FleetAlert[] }>("/alerts"),
+    audit: () => get<{ audit: FleetAuditEntry[] }>("/audit"),
+    health: () => get<{ status: string }>("/health"),
+  };
+}
