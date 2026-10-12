@@ -37,7 +37,12 @@ const config = fleetConfig({
   FLEET_STALE_MS: "60000",
   FLEET_OFFLINE_MS: "120000",
 });
-const hooks: { beforeStatePersist?: () => void; beforeReplayInsert?: () => void; beforeLifecycleAudit?: () => void } = {};
+const hooks: {
+  beforeStatePersist?: () => void;
+  beforeReplayInsert?: () => void;
+  beforeLifecycleAudit?: () => void;
+  duringLifecycleTransaction?: (context: { action: string; deploymentId: string | null }) => Promise<void>;
+} = {};
 const app = buildFleetService(pool, config, hooks);
 
 // Real OCP-1A opaque deployment identities, produced by the shared helper rather than
@@ -554,4 +559,101 @@ test("fleet registration refuses identifiers Workspace would never produce", asy
     assert.equal(isCanonicalDeploymentId(bad), false, `${bad} is not a canonical deployment id`);
     assert.equal((await operator("POST", "/deployments", { workspace_deployment_id: bad })).statusCode, 400, `${bad} must be refused at registration`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Review pass 3 findings
+// ---------------------------------------------------------------------------
+test("terminal revocation cannot be raced by a concurrent enable", async () => {
+  const ws = deploymentIdFrom("race-1");
+  const registration = await operator("POST", "/deployments", { workspace_deployment_id: ws });
+  assert.equal(registration.statusCode, 201);
+  const deployment = registration.json().id;
+  assert.equal((await operator("POST", `/deployments/${deployment}/lifecycle`, { state: "disabled" })).statusCode, 200);
+
+  // Hold the revocation transaction open while its row lock is held, start a concurrent
+  // enable, then let the revocation commit.
+  let releaseRevocation!: () => void;
+  const held = new Promise<void>((resolve) => { releaseRevocation = resolve; });
+  let lockHeld!: () => void;
+  const acquired = new Promise<void>((resolve) => { lockHeld = resolve; });
+  let armed = true;
+  hooks.duringLifecycleTransaction = async () => {
+    if (!armed) return;
+    armed = false;
+    lockHeld();
+    await held;
+  };
+
+  const revocation = operator("POST", `/deployments/${deployment}/lifecycle`, { state: "revoked" });
+  await acquired; // the revocation is inside its transaction, holding the row lock
+  const enable = operator("POST", `/deployments/${deployment}/lifecycle`, { state: "enabled" }); // blocks on FOR UPDATE
+  releaseRevocation();
+  const [revoked, enabled] = await Promise.all([revocation, enable]);
+  hooks.duringLifecycleTransaction = undefined;
+
+  assert.equal(revoked.statusCode, 200, `revocation should succeed: ${revoked.body}`);
+  assert.equal(enabled.statusCode, 409, `enable must observe the committed revocation: ${enabled.body}`);
+  assert.equal(JSON.parse(enabled.body).error, "deployment_revocation_terminal");
+  const finalState = await pool.query("SELECT state FROM deployments WHERE id=$1", [deployment]);
+  assert.equal(finalState.rows[0].state, "revoked", "terminal revocation survives the race");
+  const enabledAudits = await pool.query(
+    "SELECT COUNT(*)::int AS n FROM fleet_audit WHERE deployment_id=$1 AND action='deployment.enabled'",
+    [deployment],
+  );
+  assert.equal(enabledAudits.rows[0].n, 0, "no successful enabled audit is emitted after revocation");
+  const revokedAudits = await pool.query(
+    "SELECT COUNT(*)::int AS n FROM fleet_audit WHERE deployment_id=$1 AND action='deployment.revoked'",
+    [deployment],
+  );
+  assert.equal(revokedAudits.rows[0].n, 1, "the applied revocation is audited exactly once");
+  // The bounded statuses survive: not-found is 404, terminal conflict is 409, not 503.
+  assert.equal((await operator("POST", `/deployments/${randomUUID()}/lifecycle`, { state: "enabled" })).statusCode, 404);
+  assert.equal((await operator("POST", `/deployments/${deployment}/lifecycle`, { state: "enabled" })).statusCode, 409);
+});
+
+test("revoked credentials and revoked deployments keep coherent terminal semantics", async () => {
+  const seed = "coherence-1";
+  const ws = deploymentIdFrom(seed);
+  const registration = await operator("POST", "/deployments", { workspace_deployment_id: ws });
+  assert.equal(registration.statusCode, 201);
+  const deployment = registration.json().id;
+
+  // Issuance while active is permitted.
+  const active = await operator("POST", `/deployments/${deployment}/credentials`);
+  assert.equal(active.statusCode, 201);
+  const credentialId = active.json().credential_id;
+  const secret = active.json().secret;
+
+  // Issuance while disabled is deliberately permitted, for provisioning.
+  assert.equal((await operator("POST", `/deployments/${deployment}/lifecycle`, { state: "disabled" })).statusCode, 200);
+  const whileDisabled = await operator("POST", `/deployments/${deployment}/credentials`);
+  assert.equal(whileDisabled.statusCode, 201, "issuance while disabled stays permitted for provisioning");
+  assert.ok(whileDisabled.json().secret.length >= 43);
+  assert.equal((await operator("POST", `/deployments/${deployment}/lifecycle`, { state: "enabled" })).statusCode, 200, "disable/re-enable stays reversible");
+
+  // A revoked credential cannot be rotated, and no fresh secret material is created.
+  assert.equal((await operator("POST", `/deployments/${deployment}/credentials/${credentialId}/revoke`)).statusCode, 200);
+  const encryptedBefore = await pool.query("SELECT secret_encrypted, rotated_at FROM deployment_credentials WHERE id=$1", [credentialId]);
+  const rotateRevoked = await operator("POST", `/deployments/${deployment}/credentials/${credentialId}/rotate`);
+  assert.equal(rotateRevoked.statusCode, 409);
+  assert.equal(JSON.parse(rotateRevoked.body).error, "credential_not_active");
+  assert.ok(!rotateRevoked.body.includes("secret"), "a refused rotation returns no secret material");
+  const encryptedAfter = await pool.query("SELECT secret_encrypted, rotated_at FROM deployment_credentials WHERE id=$1", [credentialId]);
+  assert.equal(encryptedAfter.rows[0].secret_encrypted, encryptedBefore.rows[0].secret_encrypted, "the stored secret is unchanged");
+  assert.equal(encryptedAfter.rows[0].rotated_at, null, "a refused rotation does not stamp rotated_at");
+  assert.equal((await ingest(envelopeFor(validPayload(seed), secret, credentialId, ws))).statusCode, 403, "the revoked credential stays unusable");
+  // An unknown credential still returns the bounded not-found status.
+  assert.equal((await operator("POST", `/deployments/${deployment}/credentials/${randomUUID()}/rotate`)).statusCode, 404);
+
+  // Issuance for a terminally revoked deployment is refused.
+  assert.equal((await operator("POST", `/deployments/${deployment}/lifecycle`, { state: "revoked" })).statusCode, 200);
+  const afterRevoke = await operator("POST", `/deployments/${deployment}/credentials`);
+  assert.equal(afterRevoke.statusCode, 409);
+  assert.equal(JSON.parse(afterRevoke.body).error, "deployment_revoked");
+  const audit = await pool.query(
+    "SELECT COUNT(*)::int AS n FROM fleet_audit WHERE deployment_id=$1 AND action='credential.issued'",
+    [deployment],
+  );
+  assert.equal(audit.rows[0].n, 2, "no third issuance is audited for the refused request");
 });

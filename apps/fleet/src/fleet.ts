@@ -251,7 +251,16 @@ export type FleetHooks = {
   beforeStatePersist?: () => void;
   beforeReplayInsert?: () => void;
   beforeLifecycleAudit?: () => void;
+  // Awaited inside the audited lifecycle transaction, after the row lock is held, so a
+  // concurrent transition can be raced deterministically in tests.
+  duringLifecycleTransaction?: (context: { action: string; deploymentId: string | null }) => Promise<void>;
 };
+
+// Bounded client-facing lifecycle failures, so not-found and terminal-conflict results
+// keep their intended status codes instead of becoming generic 503s.
+function lifecycleError(status: number, code: string): Error {
+  return Object.assign(new Error(code), { status, code, lifecycle: true });
+}
 
 function validation_payload(payload: string): any {
   try {
@@ -508,8 +517,9 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
     try {
       await client.query("BEGIN");
       const result = await mutate(client);
-      hooks?.beforeLifecycleAudit?.();
       const target = typeof deploymentId === "function" ? deploymentId(result) : deploymentId;
+      await hooks?.duringLifecycleTransaction?.({ action, deploymentId: target });
+      hooks?.beforeLifecycleAudit?.();
       await client.query("INSERT INTO fleet_audit(id,action,deployment_id,detail) VALUES(gen_random_uuid(),$1,$2,$3)", [
         action,
         target,
@@ -574,23 +584,27 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   app.post("/deployments/:id/credentials", async (r, reply) => {
     if (!(await operator(r, reply))) return;
     const id = String((r.params as any).id);
-    if (!(await pool.query("SELECT 1 FROM deployments WHERE id=$1", [id])).rowCount) {
-      reply.code(404).send({ error: "deployment_not_found" });
-      return { error: "deployment_not_found" };
-    }
     const credentialId = randomUUID();
-    const secret = newSecret();
+    let secret = "";
     try {
-      // A credential is never left issued when its required issuance audit fails.
+      // The deployment-state check, the credential insert and the required issuance
+      // audit are one transaction, under the deployment row lock. Issuance for a
+      // terminally revoked deployment is refused; issuance while disabled stays
+      // permitted so a deployment can be provisioned before it is enabled.
       await auditedLifecycleMutation("credential.issued", id, credentialId, async (client) => {
+        const locked = await client.query("SELECT state FROM deployments WHERE id=$1 FOR UPDATE", [id]);
+        if (!locked.rowCount) throw lifecycleError(404, "deployment_not_found");
+        if (locked.rows[0].state === "revoked") throw lifecycleError(409, "deployment_revoked");
+        secret = newSecret();
         await client.query(
           "INSERT INTO deployment_credentials(id,deployment_id,secret_encrypted,state) VALUES($1,$2,$3,'active')",
           [credentialId, id, sealCredentialSecret(secret, credentialId, config.encryptionKey)],
         );
       });
-    } catch {
-      reply.code(503).send({ error: "lifecycle_failed" });
-      return { error: "lifecycle_failed" };
+    } catch (error: any) {
+      const status = error?.lifecycle === true ? error.status : 503;
+      reply.code(status).send({ error: status === 503 ? "lifecycle_failed" : error.code });
+      return { error: status === 503 ? "lifecycle_failed" : error.code };
     }
     // The only point at which a secret leaves the service, and only for provisioning.
     reply.code(201).send({ credential_id: credentialId, deployment_id: id, secret });
@@ -600,23 +614,29 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   app.post("/deployments/:id/credentials/:credentialId/rotate", async (r, reply) => {
     if (!(await operator(r, reply))) return;
     const { id, credentialId } = r.params as any;
-    const found = await pool.query("SELECT id FROM deployment_credentials WHERE id=$1 AND deployment_id=$2", [credentialId, id]);
-    if (!found.rowCount) {
-      reply.code(404).send({ error: "credential_not_found" });
-      return { error: "credential_not_found" };
-    }
-    const secret = newSecret();
+    let secret = "";
     try {
-      // The secret is not changed when the required rotation audit cannot commit.
+      // The active check, the secret replacement and the required audit are one
+      // transaction. A revoked credential stays revoked and is never handed fresh but
+      // unusable secret material, and the secret is not changed when the audit cannot
+      // commit.
       await auditedLifecycleMutation("credential.rotated", id, credentialId, async (client) => {
+        const locked = await client.query(
+          "SELECT state FROM deployment_credentials WHERE id=$1 AND deployment_id=$2 FOR UPDATE",
+          [credentialId, id],
+        );
+        if (!locked.rowCount) throw lifecycleError(404, "credential_not_found");
+        if (locked.rows[0].state !== "active") throw lifecycleError(409, "credential_not_active");
+        secret = newSecret();
         await client.query("UPDATE deployment_credentials SET secret_encrypted=$2, rotated_at=now() WHERE id=$1", [
           credentialId,
           sealCredentialSecret(secret, credentialId, config.encryptionKey),
         ]);
       });
-    } catch {
-      reply.code(503).send({ error: "lifecycle_failed" });
-      return { error: "lifecycle_failed" };
+    } catch (error: any) {
+      const status = error?.lifecycle === true ? error.status : 503;
+      reply.code(status).send({ error: status === 503 ? "lifecycle_failed" : error.code });
+      return { error: status === 503 ? "lifecycle_failed" : error.code };
     }
     reply.code(200).send({ credential_id: credentialId, deployment_id: id, secret });
     return { credential_id: credentialId };
@@ -653,28 +673,29 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
       reply.code(400).send({ error: "invalid_state" });
       return { error: "invalid_state" };
     }
-    const found = await pool.query("SELECT state FROM deployments WHERE id=$1", [id]);
-    if (!found.rowCount) {
-      reply.code(404).send({ error: "deployment_not_found" });
-      return { error: "deployment_not_found" };
-    }
-    // Revocation is terminal and explicitly documented as such: a revoked deployment
-    // cannot be moved back to active. Disable and re-enable are reversible. Rejected
-    // transitions are recorded fail-soft, like rejected ingestion.
-    if (found.rows[0].state === "revoked" && target !== "revoked") {
-      await fleetAudit(pool, "deployment.lifecycle_rejected", id, "revocation_terminal");
-      reply.code(409).send({ error: "deployment_revocation_terminal" });
-      return { error: "deployment_revocation_terminal" };
-    }
     const action = target === "active" ? "deployment.enabled" : target === "disabled" ? "deployment.disabled" : "deployment.revoked";
     try {
-      // The transition is never applied unaudited.
+      // State inspection, the terminal-revocation decision, the mutation and the
+      // required audit are ONE serialized transaction, and the row is locked with
+      // SELECT ... FOR UPDATE before the decision. A stale pre-transaction read is never
+      // used to authorize a transition, so a concurrent enable cannot overtake a
+      // revocation and silently undo it.
       await auditedLifecycleMutation(action, id, null, async (client) => {
-        if (found.rows[0].state !== target) await client.query("UPDATE deployments SET state=$2 WHERE id=$1", [id, target]);
+        const locked = await client.query("SELECT state FROM deployments WHERE id=$1 FOR UPDATE", [id]);
+        if (!locked.rowCount) throw lifecycleError(404, "deployment_not_found");
+        const current = locked.rows[0].state as string;
+        // Revocation is terminal: a revoked deployment cannot be moved back to active.
+        // Disable and re-enable remain reversible.
+        if (current === "revoked" && target !== "revoked") throw lifecycleError(409, "deployment_revocation_terminal");
+        if (current !== target) await client.query("UPDATE deployments SET state=$2 WHERE id=$1", [id, target]);
       });
-    } catch {
-      reply.code(503).send({ error: "lifecycle_failed" });
-      return { error: "lifecycle_failed" };
+    } catch (error: any) {
+      const status = error?.lifecycle === true ? error.status : 503;
+      // Rejected transitions are recorded fail-soft, like rejected ingestion; the
+      // transactional audit above already covers every applied transition.
+      if (status === 409) await fleetAudit(pool, "deployment.lifecycle_rejected", id, "revocation_terminal");
+      reply.code(status).send({ error: status === 503 ? "lifecycle_failed" : error.code });
+      return { error: status === 503 ? "lifecycle_failed" : error.code };
     }
     reply.code(200).send({ id, state: target });
     return { id, state: target };

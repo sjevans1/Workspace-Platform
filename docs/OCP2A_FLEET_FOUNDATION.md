@@ -39,10 +39,12 @@ fleet database. Operational thresholds are explicit and configurable:
 
 ## Schema
 
-Applied idempotently at boot from `apps/fleet/src/schema.sql`, independent of the
-Workspace schema: `deployments`, `deployment_credentials`,
-`deployment_current_state`, `deployment_state_history`, `fleet_replay`,
-`fleet_audit`. Credential secrets are sealed with AES-256-GCM whose AAD is bound to
+Applied at boot through the versioned runner in `apps/fleet/src/migrations.ts`, which
+keeps a ledger table `fleet_schema_migrations` and applies pending migrations in
+ascending order, each in its own transaction. The initial schema is
+`apps/fleet/src/migrations/001_initial.sql`, and it is independent of the Workspace
+schema: `deployments`, `deployment_credentials`, `deployment_current_state`,
+`deployment_state_history`, `fleet_replay`, `fleet_audit`. Credential secrets are sealed with AES-256-GCM whose AAD is bound to
 the credential id, so a ciphertext cannot be moved between credentials; there is no
 fleet-wide shared secret.
 
@@ -194,7 +196,16 @@ customer Workspace admin surfaces and no remote Workspace command execution:
 
 Issued secrets are 256 bits of entropy, sealed at rest, and returned exactly once at
 issuance or rotation so Workspace can be provisioned; no read API ever returns a
-secret, and rotation makes the previous secret fail immediately. Each action writes a
+secret, and rotation makes the previous secret fail immediately.
+
+Lifecycle coherence: rotation requires the credential to be active, so a revoked
+credential stays revoked and is never handed fresh but unusable secret material;
+issuance is refused for a terminally revoked deployment; and issuance while a
+deployment is disabled is **deliberately permitted**, so a deployment can be
+provisioned before it is enabled. The deployment-state check and the transition
+decision are taken under a `SELECT ... FOR UPDATE` row lock inside the same
+transaction as the mutation and its required audit, so a concurrent enable cannot
+overtake a terminal revocation and undo it. Each action writes a
 bounded audit event carrying no secret material. These mutation endpoints are
 deliberately not exposed through OCP-2B, which stays read-only.
 
