@@ -117,16 +117,25 @@ else
   fail "installed $BINARY_PATH SHA-256 is ${BINARY_SHA_SEEN:-<none>}, expected $BINARY_SHA"
 fi
 
-VERSION_OUT="$(docker exec "$CONTAINER" "$BINARY_PATH" version 2>&1 | head -1)"
+# Read the FULL version output. The earlier form piped through `head -1`, which closes the pipe
+# after the first line and can turn a transient short read into what looks like a wrong version.
+# The assertion itself is unchanged: the reported version MUST still contain the qualified string.
+VERSION_OUT=""
+for _ in $(seq 1 "$ATTEMPTS"); do
+  VERSION_OUT="$(docker exec "$CONTAINER" "$BINARY_PATH" version 2>&1)"
+  [ -n "$VERSION_OUT" ] && break
+  sleep "$PAUSE"
+done
+VERSION_LINE="$(printf '%s' "$VERSION_OUT" | sed -n '1p')"
 if [ "$TARGET" = "caddy" ]; then
   case "$VERSION_OUT" in
-    *"$UPSTREAM_COMMIT+modified"*) pass "version reports the qualified upstream commit and the local modification: $VERSION_OUT" ;;
-    *) fail "version output does not report $UPSTREAM_COMMIT+modified: ${VERSION_OUT:-<none>}" ;;
+    *"$UPSTREAM_COMMIT+modified"*) pass "version reports the qualified upstream commit and the local modification: $VERSION_LINE" ;;
+    *) fail "version output does not report $UPSTREAM_COMMIT+modified: ${VERSION_LINE:-<none>}" ;;
   esac
 else
   case "$VERSION_OUT" in
-    *"$UPSTREAM_TAG"*) pass "version reports the qualified upstream release $UPSTREAM_TAG: $VERSION_OUT" ;;
-    *) fail "version output does not report $UPSTREAM_TAG: ${VERSION_OUT:-<none>}" ;;
+    *"$UPSTREAM_TAG"*) pass "version reports the qualified upstream release $UPSTREAM_TAG: $VERSION_LINE" ;;
+    *) fail "version output does not report $UPSTREAM_TAG: ${VERSION_LINE:-<none>}" ;;
   esac
 fi
 
