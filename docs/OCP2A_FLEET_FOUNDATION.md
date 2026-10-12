@@ -49,12 +49,31 @@ by any read API, never logged, and never included in an audit event.
 ## Ingestion receiver
 
 `POST /ingest` verifies in a deliberate order, rejecting fail closed with a precise
-code: envelope size, envelope version, credential existence, credential active state,
-**deployment binding** (a credential may only speak for its own deployment), timestamp
-window, payload digest, contract version support, HMAC signature, then payload
-parsing against its declared contract. On acceptance it upserts current state,
-updates last-seen and appends one bounded history row. It never persists
-authorization headers, credential secrets, raw request bodies or customer content.
+code: envelope byte size, envelope version, credential existence, credential active
+state, deployment lifecycle state, **deployment binding** (a credential may only speak
+for its own deployment), timestamp window, payload digest, contract version support,
+HMAC signature, then **strict canonical payload validation**. On acceptance it upserts
+current state, updates last-seen, records `first_seen` once and appends one bounded
+history row. It never persists authorization headers, credential secrets, raw request
+bodies or customer content.
+
+### Strict canonical payload validation
+
+A signature proves who sent the bytes; it does not prove the bytes are the accepted
+shape. A deployment holding a valid credential could otherwise sign arbitrary JSON
+carrying the accepted schema name plus extra customer or content fields, which the
+fleet service would persist and return. `validateOperatorTelemetryV1` in
+`packages/operations/operator-telemetry.ts` is therefore the single shared definition
+of the accepted payload, used by both producer and receiver so semantics cannot drift,
+and enforced at runtime rather than by TypeScript typing. It rejects, in order: the
+`16384`-byte OCP-1A payload ceiling (UTF-8 bytes), non-JSON, non-object payloads,
+unknown top-level or nested fields, unsupported schema, missing required fields,
+invalid values (enums outside the accepted set, non-integer or negative counts,
+strings beyond their bounded length, mistyped scalars), a malformed deployment id, and
+any content matched by `scanForProhibited()`. Rejections carry a precise code such as
+`canonical_unknown_field:customer_content` or `canonical_prohibited:email_address`, and
+nothing is persisted and no replay state is consumed. A structurally legal but
+byte-oversized payload is refused independently of the envelope ceiling.
 
 ## Replay protection
 
@@ -62,6 +81,14 @@ Bounded state in `fleet_replay`, unique on (credential_id, nonce) and on signatu
 a replayed nonce and a replayed envelope are both rejected with 409. Rows are pruned
 deterministically to a retention window on every accept, so the table cannot grow
 without bound.
+
+Accepted ingestion is persisted **atomically**: replay insertion and pruning, the
+current-state upsert, the deployment last-seen and version update, and the history
+append and pruning all run in one transaction and commit together or not at all. A
+failure after the replay insert therefore rolls the replay state back too, so a
+legitimate retry is accepted rather than being consumed as a phantom replay, and the
+caller receives a retryable `503` instead of a `409`. Replay rejection after a
+successful commit is unchanged.
 
 ## Isolation
 
@@ -72,11 +99,28 @@ There is no per-credential read surface at all: registry reads require the opera
 token, unauthenticated access is 401, an unknown deployment id is 404 rather than an
 enumeration, and there is no cross-deployment read or write path.
 
+Deployment lifecycle is enforced independently of credential state. A credential may
+still be active while its deployment is `disabled` or `revoked`, and ingestion is
+refused in both cases with the distinct precise codes `deployment_disabled` and
+`deployment_revoked`. Disabling is reversible and never inferred from telemetry or
+network failure; revocation is terminal and a revoked deployment cannot be moved back
+to active.
+
 ## Current state and unknown preservation
 
 Current state stores the accepted telemetry verbatim, so Workspace-reported `unknown`
 stays `unknown`: a null database capacity is never coerced to a number, and a queue
 state of `unknown` is never rendered as healthy. This is asserted by test.
+
+## Deployment identity and thresholds
+
+`first_seen` is recorded on the first accepted telemetry and never overwritten;
+`last_seen` advances on every acceptance. Envelope and payload size limits are
+enforced in UTF-8 bytes rather than JavaScript character counts. The stale and offline
+thresholds are normalized so the progression `online -> stale -> offline` always
+holds: if an operator configures an offline threshold at or below the stale threshold,
+the offline threshold is raised and `offlineMsNormalized` reports that it happened,
+rather than allowing an inverted state machine.
 
 ## Stale and offline semantics
 
@@ -99,6 +143,33 @@ backup verification failure, queue degraded, and unhealthy or degraded services.
 `fleet_audit` records deployment lifecycle, credential issue/rotation/revocation and
 security rejections such as replay and binding mismatch, bounded in size and free of
 secret material. Audit writes never break ingestion or reads.
+
+## Operator-plane lifecycle
+
+Registration and credential management are real service capabilities rather than
+tests seeding tables, all operator-authorized, all audited, and with no dependency on
+customer Workspace admin surfaces and no remote Workspace command execution:
+
+`POST /deployments` (register) · `POST /deployments/:id/credentials` (issue) ·
+`POST /deployments/:id/credentials/:credentialId/rotate` ·
+`POST /deployments/:id/credentials/:credentialId/revoke` ·
+`POST /deployments/:id/lifecycle` (`enabled` / `disabled` / `revoked`).
+
+Issued secrets are 256 bits of entropy, sealed at rest, and returned exactly once at
+issuance or rotation so Workspace can be provisioned; no read API ever returns a
+secret, and rotation makes the previous secret fail immediately. Each action writes a
+bounded audit event carrying no secret material. These mutation endpoints are
+deliberately not exposed through OCP-2B, which stays read-only.
+
+## Versioned fleet migrations
+
+Schema evolution is versioned, not assumed. `apps/fleet/src/migrations.ts` keeps a
+ledger (`fleet_schema_migrations`), applies pending migrations in ascending order,
+each in its own transaction, and is idempotent; the initial schema is migration
+`001_initial.sql`. Pending migrations are applied on boot, which is the chosen
+deployment model, but there is no destructive implicit schema rewrite at startup and
+no mixing with customer Workspace tenant migrations. A failed migration rolls back
+without advancing the ledger.
 
 ## Read APIs (the OCP-2B contract)
 

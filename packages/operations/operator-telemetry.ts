@@ -400,3 +400,180 @@ export function operatorTelemetryConfig(env: Record<string, string | undefined>)
     schema: OPERATOR_TELEMETRY_SCHEMA,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Receiver-side canonical validation.
+//
+// The producer composes and serializes this shape; the receiver must enforce it at
+// runtime, because a TypeScript type does not exist at runtime and a deployment with a
+// valid credential could otherwise sign arbitrary JSON carrying the accepted schema
+// string plus extra customer/content fields, which the fleet service would persist and
+// return. This validator is the single shared definition of the accepted payload so
+// producer and receiver semantics cannot drift.
+//
+// It rejects, in this order: byte size, JSON parseability, non-object payloads, unknown
+// top-level or nested fields, unsupported schema, missing required fields, invalid
+// field values (enums, bounds, shapes) and any prohibited content.
+// ---------------------------------------------------------------------------
+
+export type TelemetryValidation = { ok: true; payload: OperatorTelemetryV1 } | { ok: false; code: string };
+
+const HEALTH_STATES: ReadonlySet<string> = new Set(["healthy", "degraded", "unhealthy", "unknown"]);
+// Opaque deployment id: bounded, single-token shape. Contents are never interpreted.
+const DEPLOYMENT_ID_SHAPE = /^[A-Za-z0-9_-]{8,64}$/;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Returns the first field not in the allowlist, so an unknown or injected field is a
+// hard rejection rather than being silently ignored.
+function firstUnknownKey(value: Record<string, unknown>, allowed: readonly string[]): string | null {
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) return key;
+  return null;
+}
+
+const boundedText = (value: unknown, max: number): boolean =>
+  typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
+const optionalBoundedText = (value: unknown, max: number): boolean => value === null || boundedText(value, max);
+const boundedCount = (value: unknown, max: number = Number.MAX_SAFE_INTEGER): boolean =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+const nullableCount = (value: unknown): boolean => value === null || boundedCount(value);
+const boundedNumber = (value: unknown): boolean =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
+const nullableBoundedNumber = (value: unknown): boolean => value === null || boundedNumber(value);
+const healthState = (value: unknown): boolean => typeof value === "string" && HEALTH_STATES.has(value);
+
+const statusClassList = (value: unknown): boolean =>
+  Array.isArray(value) &&
+  value.length <= OPERATOR_TELEMETRY_LIMITS.maxStatusClasses &&
+  value.every(
+    (entry) =>
+      isPlainObject(entry) &&
+      Object.keys(entry).length === 2 &&
+      boundedText(entry.status_class, 8) &&
+      boundedCount(entry.count),
+  );
+
+const serviceList = (value: unknown): boolean =>
+  Array.isArray(value) &&
+  value.length <= OPERATOR_TELEMETRY_LIMITS.maxServices &&
+  value.every(
+    (entry) =>
+      isPlainObject(entry) &&
+      firstUnknownKey(entry, ["name", "state", "configured", "values"]) === null &&
+      boundedText(entry.name, OPERATOR_TELEMETRY_LIMITS.maxStringLength) &&
+      healthState(entry.state) &&
+      typeof entry.configured === "boolean" &&
+      Array.isArray(entry.values) &&
+      entry.values.length <= OPERATOR_TELEMETRY_LIMITS.maxServiceValues &&
+      entry.values.every(
+        (item) =>
+          isPlainObject(item) &&
+          Object.keys(item).length === 2 &&
+          boundedText(item.name, OPERATOR_TELEMETRY_LIMITS.maxStringLength) &&
+          nullableBoundedNumber(item.value),
+      ),
+  );
+
+export function validateOperatorTelemetryV1(serialized: string): TelemetryValidation {
+  const fail = (code: string): TelemetryValidation => ({ ok: false, code });
+  // Byte accounting is UTF-8, matching the producer's ceiling exactly.
+  if (Buffer.byteLength(serialized, "utf8") > OPERATOR_TELEMETRY_LIMITS.maxPayloadBytes) return fail("payload_too_large");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    return fail("payload_not_json");
+  }
+  if (!isPlainObject(parsed)) return fail("payload_not_object");
+  const p = parsed as Record<string, any>;
+  const L = OPERATOR_TELEMETRY_LIMITS;
+
+  const unknownTop = firstUnknownKey(p, [
+    "schema", "generated_at", "sequence", "source", "deployment", "runtime", "signals", "readiness", "events",
+  ]);
+  if (unknownTop) return fail(`unknown_field:${unknownTop}`);
+  if (p.schema !== OPERATOR_TELEMETRY_SCHEMA) return fail("unsupported_schema");
+  if (!boundedText(p.generated_at, 40) || Number.isNaN(Date.parse(p.generated_at))) return fail("invalid_generated_at");
+  if (!boundedCount(p.sequence)) return fail("invalid_sequence");
+
+  if (!isPlainObject(p.source)) return fail("missing_field:source");
+  if (firstUnknownKey(p.source, ["application", "version", "build_sha"])) return fail("unknown_field:source");
+  if (!boundedText(p.source.application, 64)) return fail("invalid_source_application");
+  if (!boundedText(p.source.version, 64)) return fail("invalid_source_version");
+  if (!("build_sha" in p.source)) return fail("missing_field:source.build_sha");
+  if (!optionalBoundedText(p.source.build_sha, 64)) return fail("invalid_source_build_sha");
+
+  if (!isPlainObject(p.deployment)) return fail("missing_field:deployment");
+  if (firstUnknownKey(p.deployment, ["deployment_id", "alias", "version", "build_sha", "release_channel", "environment", "region"]))
+    return fail("unknown_field:deployment");
+  if (typeof p.deployment.deployment_id !== "string" || !DEPLOYMENT_ID_SHAPE.test(p.deployment.deployment_id))
+    return fail("invalid_deployment_id");
+  if (!optionalBoundedText(p.deployment.alias, L.maxAliasLength)) return fail("invalid_deployment_alias");
+  if (!boundedText(p.deployment.version, 64)) return fail("invalid_deployment_version");
+  if (!optionalBoundedText(p.deployment.build_sha, 64)) return fail("invalid_deployment_build_sha");
+  if (!boundedText(p.deployment.release_channel, 24)) return fail("invalid_deployment_release_channel");
+  if (!optionalBoundedText(p.deployment.environment, 24)) return fail("invalid_deployment_environment");
+  if (!optionalBoundedText(p.deployment.region, 24)) return fail("invalid_deployment_region");
+
+  if (!isPlainObject(p.runtime)) return fail("missing_field:runtime");
+  const runtimeKeys = ["uptime_seconds", "overall", "api", "worker", "collaboration", "database", "redis", "storage", "antivirus"];
+  if (firstUnknownKey(p.runtime, runtimeKeys)) return fail("unknown_field:runtime");
+  for (const key of runtimeKeys) if (!(key in p.runtime)) return fail(`missing_field:runtime.${key}`);
+  if (!boundedNumber(p.runtime.uptime_seconds)) return fail("invalid_runtime_uptime");
+  for (const key of runtimeKeys.slice(1)) if (!healthState(p.runtime[key])) return fail(`invalid_runtime_${key}`);
+
+  if (!isPlainObject(p.signals)) return fail("missing_field:signals");
+  if (firstUnknownKey(p.signals, ["requests", "errors", "latency", "services", "queue", "capacity"]))
+    return fail("unknown_field:signals");
+  const { requests, errors, latency, services, queue, capacity } = p.signals;
+  for (const [name, group] of [["requests", requests], ["errors", errors]] as const) {
+    if (!isPlainObject(group)) return fail(`missing_field:signals.${name}`);
+    if (firstUnknownKey(group, ["total", "by_status_class"])) return fail(`unknown_field:signals.${name}`);
+    if (!boundedCount(group.total)) return fail(`invalid_signals_${name}_total`);
+    if (!statusClassList(group.by_status_class)) return fail(`invalid_signals_${name}_by_status_class`);
+  }
+  if (!isPlainObject(latency)) return fail("missing_field:signals.latency");
+  if (firstUnknownKey(latency, ["samples", "total_seconds", "max_seconds"])) return fail("unknown_field:signals.latency");
+  if (!boundedCount(latency.samples) || !boundedNumber(latency.total_seconds) || !boundedNumber(latency.max_seconds))
+    return fail("invalid_signals_latency");
+  if (!serviceList(services)) return fail("invalid_signals_services");
+  if (!isPlainObject(queue)) return fail("missing_field:signals.queue");
+  if (firstUnknownKey(queue, ["depth", "state"])) return fail("unknown_field:signals.queue");
+  if (!nullableCount(queue.depth)) return fail("invalid_signals_queue_depth");
+  if (!healthState(queue.state)) return fail("invalid_signals_queue_state");
+  if (!isPlainObject(capacity)) return fail("missing_field:signals.capacity");
+  if (firstUnknownKey(capacity, ["storage", "database"])) return fail("unknown_field:signals.capacity");
+  if (!nullableBoundedNumber(capacity.storage)) return fail("invalid_signals_capacity_storage");
+  if (!nullableBoundedNumber(capacity.database)) return fail("invalid_signals_capacity_database");
+
+  if (!isPlainObject(p.readiness)) return fail("missing_field:readiness");
+  if (firstUnknownKey(p.readiness, ["last_backup_at", "backup_state", "schema_version", "upgrade_ready", "tls", "profiles"]))
+    return fail("unknown_field:readiness");
+  const lastBackupAt = p.readiness.last_backup_at;
+  if (!optionalBoundedText(lastBackupAt, 40)) return fail("invalid_readiness_last_backup_at");
+  if (typeof lastBackupAt === "string" && Number.isNaN(Date.parse(lastBackupAt)))
+    return fail("invalid_readiness_last_backup_at");
+  if (!healthState(p.readiness.backup_state)) return fail("invalid_readiness_backup_state");
+  if (!optionalBoundedText(p.readiness.schema_version, 32)) return fail("invalid_readiness_schema_version");
+  if (!(p.readiness.upgrade_ready === null || typeof p.readiness.upgrade_ready === "boolean"))
+    return fail("invalid_readiness_upgrade_ready");
+  if (!healthState(p.readiness.tls)) return fail("invalid_readiness_tls");
+  if (!isPlainObject(p.readiness.profiles)) return fail("missing_field:readiness.profiles");
+  if (firstUnknownKey(p.readiness.profiles, ["identity", "storage"])) return fail("unknown_field:readiness.profiles");
+  if (!optionalBoundedText(p.readiness.profiles.identity, 40)) return fail("invalid_readiness_profiles_identity");
+  if (!optionalBoundedText(p.readiness.profiles.storage, 40)) return fail("invalid_readiness_profiles_storage");
+
+  if (!Array.isArray(p.events) || p.events.length > L.maxEvents) return fail("invalid_events");
+  for (const event of p.events) {
+    if (!isPlainObject(event) || Object.keys(event).length !== 2) return fail("unknown_field:events");
+    if (!boundedText(event.category, L.maxStringLength) || !boundedCount(event.count)) return fail("invalid_events");
+  }
+
+  // Prohibition scan runs on the received bytes, so content the producer would never
+  // emit is still refused rather than trusted.
+  const violations = scanForProhibited(serialized);
+  if (violations.length) return fail(`prohibited:${violations[0]}`);
+
+  return { ok: true, payload: parsed as OperatorTelemetryV1 };
+}
