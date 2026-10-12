@@ -16,6 +16,11 @@ export const FLEET_MIGRATIONS: FleetMigration[] = [
     name: "initial",
     sql: readFileSync(new URL("./migrations/001_initial.sql", import.meta.url), "utf8"),
   },
+  {
+    version: 2,
+    name: "audit_retention_index",
+    sql: readFileSync(new URL("./migrations/002_audit_retention_index.sql", import.meta.url), "utf8"),
+  },
 ];
 
 export const FLEET_MIGRATION_LEDGER = "fleet_schema_migrations";
