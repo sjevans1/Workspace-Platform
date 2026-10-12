@@ -9,21 +9,20 @@ be described or recorded as mirror-provenanced (`digestVerifiedEqual=true` does 
 | Field | Value |
 | --- | --- |
 | Upstream project | `caddyserver/caddy` |
-| Upstream tag | `v2.11.7` (exact tag, not `master`) |
-| Upstream commit | `72dd0fb067f6d7826c7f79907670ba4a713bfe37` |
+| Upstream tag | `v2.11.7` (exact tag; resolved to commit `72dd0fb067f6d7826c7f79907670ba4a713bfe37`, matching the required baseline) |
 | Source fetch | `git clone --depth 1 --branch v2.11.7` |
-| Builder image | `golang:1.26.9-bookworm` (immutable digest to be pinned when promoted) |
+| Builder image | `golang@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c` (digest-pinned; `go version go1.26.9 linux/amd64`) |
 | Go compiler | 1.26.9 |
 | Original deps | `golang.org/x/net v0.59.0`, `golang.org/x/text v0.42.0` |
-| Patched deps | `golang.org/x/net v0.60.0`, `golang.org/x/text v0.43.0` (minimal floor only) |
-| Build command | `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' ./cmd/caddy` |
-| Binary | `/w/caddy-patched.bin`, 58,056,866 bytes |
+| Patched deps | `golang.org/x/net v0.60.0` only; **`golang.org/x/text` deliberately retained at v0.42.0** (no opportunistic upgrade; the earlier x/text bump was removed as instructed) |
+| Build flags | release tags `nobadger,nomysql,nopgx`, `CGO_ENABLED=0`, `-trimpath -ldflags '-s -w'` |
+| Binary | `/w/caddy-patched.bin`, 58,056,866 bytes (pre-correction build; superseded by the corrected build) |
 | Binary sha256 | `b69def3432d3072aaed1bb035b743b0df21d1bbe1bfc31c650b026492157f3b8` |
-| Reproducer | `build/w27/build-caddy-patched.sh` |
+| Reproducer | `build/w27/build-caddy-patched.sh` (corrections applied: digest-pinned builder, minimal patch, release tags, untruncated govulncheck evidence, tag/commit proof, clean clone target) |
 
-Acceptance status: **NOT met, stopped as instructed.** The rebuild removes the originally
-reachable findings from Caddy's Go dependencies, but binary reachability on the rebuilt artifact
-reports **one remaining reachable finding: GO-2026-5932**, which is
+Acceptance status after the corrected rebuild: **the previously blocking reachable
+HIGH/toolchain findings are cleared**, and binary reachability on the corrected artifact reports
+**exactly one residual reachable item: GO-2026-5932**, which is
 `golang.org/x/crypto/openpgp` reported as unmaintained and unsafe by design with **`Fixed in:
 N/A`**, i.e. an unfixed reachable finding rather than a fixable one. Because the approved blocking
 policy is `--ignore-unfixed`, that finding does not by itself fail the Trivy gate, but it is
