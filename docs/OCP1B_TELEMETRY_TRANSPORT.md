@@ -119,6 +119,25 @@ operation, `/health`, `/ready`, sign-in, page and database operations, file acce
 collaboration or worker product jobs. Telemetry failure is operationally observable
 through the status surface and never product-critical.
 
+## Product-health isolation
+
+Telemetry transport state never feeds normal worker health or product readiness. A
+revoked credential, a TLS validation failure, an unreachable receiver, a 5xx, a 429
+or a full bounded spool leaves `/health`, `/ready` and worker product-job liveness
+exactly as they were, while the telemetry transport status reports its own degraded
+or failed condition independently. Telemetry failure is therefore operationally
+observable but never product-critical.
+
+The isolation is structural, not merely tested: the exporter is started only when
+enabled, it keeps its own failure counter and backoff, it never runs inside
+`tick()`, and it deliberately does not contribute to `workerHealthState()`.
+`tests/telemetry-sovereignty.test.ts` asserts the behaviour directly, including
+that product work keeps progressing under sustained telemetry failure, that the
+exporter never throws into its caller, that retries are bounded by backoff rather
+than a busy loop, that a full spool stays bounded, that a restart with a non-empty
+spool resumes delivery and removes the delivered item, and that corruption is
+fail-soft.
+
 ## Operator status surface
 
 `GET /api/v1/admin/operator-telemetry/status`, owner/admin authorized (a plain

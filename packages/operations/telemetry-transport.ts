@@ -451,18 +451,18 @@ export function startTelemetryExporter(options: {
     };
   };
 
-  const persistStatus = () => {
-    if (!options.statusPath) return;
+  // Awaited at each call site so the persisted status is never read before it is
+  // written. Fail-soft: status reporting never affects delivery or product operation.
+  const persistStatus = async (): Promise<void> => {
     const path = options.statusPath;
-    void (async () => {
-      try {
-        await mkdir(dirname(path), { recursive: true });
-        // Bounded and secret-free by construction: this is exactly the status model.
-        await writeFile(path, JSON.stringify(status()), "utf8");
-      } catch {
-        // Fail-soft: status reporting never affects delivery or product operation.
-      }
-    })();
+    if (!path) return;
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      // Bounded and secret-free by construction: this is exactly the status model.
+      await writeFile(path, JSON.stringify(status()), "utf8");
+    } catch {
+      // Fail-soft.
+    }
   };
 
   const schedule = (delayMs: number) => {
@@ -488,7 +488,7 @@ export function startTelemetryExporter(options: {
 
   async function runOnce(): Promise<DeliveryOutcome | "skipped"> {
     if (stopped || !options.config.enabled) return "skipped";
-    persistStatus();
+    await persistStatus();
     if (now() < backoffUntil) return "skipped";
     if (!options.config.endpoint || !options.config.credentialId || !options.config.secret) {
       lastFailureCategory = "configuration";
@@ -542,12 +542,12 @@ export function startTelemetryExporter(options: {
         lastSuccessAt = new Date(now()).toISOString();
         lastFailureCategory = "none";
         options.log?.("telemetry.delivery.succeeded");
-        persistStatus();
+        await persistStatus();
         return "delivered";
       }
       const category = classifyFailure(undefined, status);
       record(category);
-      persistStatus();
+      await persistStatus();
       if (outcome === "permanent") {
         // Operator action is required: do not retry a malformed or rejected payload
         // forever. The item is dropped so bounded retention still applies.
@@ -556,7 +556,7 @@ export function startTelemetryExporter(options: {
       return outcome;
     } catch (error) {
       record(classifyFailure(error));
-      persistStatus();
+      await persistStatus();
       return "retryable";
     }
   }
