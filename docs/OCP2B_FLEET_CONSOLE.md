@@ -53,6 +53,41 @@ browser-readable cookie, page source, a query string or a client bundle, and no 
 body contains it. A regression test asserts the token is absent from every console page,
 from the only static asset, and from the session cookie, and that no page loads a script.
 
+## The two protected credential hops
+
+The bootstrap credential is used on two distinct hops, and both are protected against
+plaintext exposure in production:
+
+1. **browser → fleet-web**, when an operator submits the credential on `POST /login`.
+   This is protected by the browser-facing HTTPS contract: production requires an
+   explicit `FLEET_CONSOLE_PUBLIC_URL` that must be an `https:` origin, the session
+   cookie is always `Secure` in production, and the console process itself binds loopback
+   only, so external exposure can only happen through the approved HTTPS ingress.
+2. **fleet-web → OCP-2A API**, where the credential is presented as a bearer token on
+   every read call. This is protected by the fleet-API transport rules below.
+
+There is no switch that permits an insecure production login.
+
+### Supported production topology
+
+```
+browser --HTTPS--> TLS terminator / reverse proxy --local hop--> fleet-web (loopback, HTTP)
+```
+
+The local hop between the terminator and the console process is an internal deployment
+detail and may remain plaintext loopback. Terminating TLS inside `fleet-web` itself would
+also be valid, but this package does not build a TLS server.
+
+### One production indicator
+
+Production mode is derived once, from `NODE_ENV=production` **or**
+`FLEET_CONSOLE_PRODUCTION=true`, and that single boolean drives all three of: the
+fleet-API transport rules, `Secure` session cookies, and the browser-facing
+public-origin and bind contract. There is no second interpretation of production, so
+`FLEET_CONSOLE_PRODUCTION=true` with `NODE_ENV` unset still yields a `Secure` cookie. The
+explicit `FLEET_CONSOLE_SECURE_COOKIE` setting can only add protection outside production,
+never remove it.
+
 ## Transport security
 
 The console sends the shared operator credential as a bearer token on every outbound
@@ -85,8 +120,9 @@ build a second enterprise identity system in the meantime.
 - On success the console issues its own opaque session cookie: an HMAC-SHA256 signed
   payload containing a random session id and an expiry, and nothing else. **No fleet
   credential is stored in the cookie.**
-- The cookie is `HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` in production, and
-  expires within a bounded session lifetime (default 8 hours, maximum 24 hours).
+- The cookie is `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` whenever production
+  mode is set through either `NODE_ENV=production` or `FLEET_CONSOLE_PRODUCTION=true`,
+  expiring within a bounded session lifetime (default 8 hours, maximum 24 hours).
 - `POST /logout` clears the cookie, which destroys the session.
 - Malformed cookie input is ignored rather than fatal: invalid percent-encoding in a
   cookie is treated as an invalid cookie, so an unauthenticated request stays
@@ -190,10 +226,15 @@ realtime push; a modest periodic refresh is deliberately not implemented in 1.0.
 | `FLEET_CONSOLE_SESSION_TTL_MS` | no | Session lifetime, clamped to 15 minutes to 24 hours (default 8 hours) |
 | `FLEET_CONSOLE_REQUEST_TIMEOUT_MS` | no | Fleet API timeout, clamped to 500 ms to 15 s (default 5 s) |
 | `FLEET_CONSOLE_SECURE_COOKIE` | no | Force `Secure` cookies outside production |
-| `FLEET_CONSOLE_PRODUCTION` | no | Treat the deployment as production for transport rules when `NODE_ENV` is not set |
+| `FLEET_CONSOLE_PRODUCTION` | no | Production mode when `NODE_ENV` is not set; unifies transport, cookie and origin/bind rules |
+| `FLEET_CONSOLE_PUBLIC_URL` | in production | The `https:` origin operators reach the console on; validated and normalized, optional outside production |
+| `FLEET_CONSOLE_HOST` | no | Bind host, default `127.0.0.1`. In production only a loopback host (`127.0.0.1`, `::1`, `localhost`) is accepted |
 
 Configuration fails closed: a missing base URL, credential or session secret refuses to
-start, and the console never inherits the customer Workspace database configuration.
+start; in production a missing or non-HTTPS `FLEET_CONSOLE_PUBLIC_URL` refuses to start;
+in production a non-loopback `FLEET_CONSOLE_HOST` refuses to start, so the console cannot
+be exposed directly over plaintext. The console never inherits the customer Workspace
+database configuration.
 
 ## Browser acceptance
 

@@ -5,6 +5,7 @@
 // session cookie lifecycle, and desktop plus tablet viewports. It does not create visual
 // baselines and does not touch the customer Workspace E2E, visual or accessibility gates.
 import { test, expect, type Page } from "@playwright/test";
+import { E2E_IDS } from "./fixtures.ts";
 
 const OPERATOR_TOKEN = "e2e-fleet-operator-token-0123456789";
 
@@ -99,7 +100,7 @@ test("6. a deployment detail page opens from the inventory", async ({ page }) =>
   await signIn(page);
   await page.getByRole("link", { name: "Deployments" }).click();
   await page.getByRole("link", { name: "e2e-bravo" }).click();
-  await expect(page).toHaveURL(/\/deployments\/e2e-stale$/);
+  await expect(page).toHaveURL(new RegExp(`/deployments/${E2E_IDS.stale}$`));
   await expect(page.getByRole("heading", { level: 1, name: "e2e-bravo" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Identity and inventory" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Runtime health" })).toBeVisible();
@@ -115,7 +116,7 @@ test("6. a deployment detail page opens from the inventory", async ({ page }) =>
 
 test("7. null and unknown values visibly render as Unknown or Not reported", async ({ page }) => {
   await signIn(page);
-  await page.goto("/deployments/e2e-never");
+  await page.goto(`/deployments/${E2E_IDS.never}`);
   await expect(page.getByText("Never seen").first()).toBeVisible();
   await expect(page.getByText("Not reported").first()).toBeVisible();
   await expect(page.getByText("Unknown").first()).toBeVisible();
@@ -124,7 +125,7 @@ test("7. null and unknown values visibly render as Unknown or Not reported", asy
   await expect(lastSeenRow).toContainText("Never seen");
   await expect(lastSeenRow).not.toContainText(/\b0\b/);
 
-  await page.goto("/deployments/e2e-offline");
+  await page.goto(`/deployments/${E2E_IDS.offline}`);
   const backupRow = page.locator("tr", { hasText: "Backup" }).first();
   await expect(backupRow).toContainText("Unknown");
   const capacityRow = page.locator("tr", { hasText: "Database capacity" }).first();
@@ -173,7 +174,7 @@ test("10. signing out returns to sign-in and protected navigation is denied", as
 
 test("11. no client-side script is present on any console surface", async ({ page }) => {
   await signIn(page);
-  for (const path of ["/", "/deployments", "/deployments/e2e-online", "/alerts", "/audit"]) {
+  for (const path of ["/", "/deployments", `/deployments/${E2E_IDS.online}`, "/alerts", "/audit"]) {
     await page.goto(path);
     await expect(page.locator("script")).toHaveCount(0);
     await expect(page.locator('link[rel="stylesheet"]')).toHaveCount(1);

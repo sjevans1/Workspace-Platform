@@ -5,7 +5,8 @@ import { buildFleetConsole, fleetConsoleConfig } from "./server.ts";
 // Fail closed on missing security configuration before listening.
 const config = fleetConsoleConfig(process.env);
 const app = buildFleetConsole(config);
-await app.listen({ host: process.env.FLEET_CONSOLE_HOST || "127.0.0.1", port: config.port });
+// The bind host is validated by configuration: production fails closed unless it is loopback.
+await app.listen({ host: config.host, port: config.port });
 const stop = async () => {
   await app.close();
   process.exit(0);

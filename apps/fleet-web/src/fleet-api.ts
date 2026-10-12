@@ -9,6 +9,12 @@ export type FleetConsoleConfig = {
   operatorToken: string;
   sessionSecret: string;
   port: number;
+  host: string;
+  // One production boolean, derived once from NODE_ENV or FLEET_CONSOLE_PRODUCTION, and
+  // used for the fleet API transport rules, Secure cookies and the browser-facing
+  // public-origin and bind contract. There is no second interpretation of production.
+  production: boolean;
+  publicUrl: string | null;
   sessionTtlMs: number;
   requestTimeoutMs: number;
   secureCookie: boolean;
@@ -26,8 +32,12 @@ export function fleetConsoleConfig(env: Record<string, string | undefined>): Fle
   const rawBaseUrl = (env.FLEET_API_BASE_URL ?? "").trim();
   const operatorToken = env.FLEET_OPERATOR_TOKEN ?? "";
   const sessionSecret = env.FLEET_CONSOLE_SESSION_SECRET ?? "";
-  const production = String(env.NODE_ENV ?? "").toLowerCase() === "production" || String(env.FLEET_CONSOLE_PRODUCTION ?? "").toLowerCase() === "true";
+  const production = isProductionMode(env);
   const baseUrl = parseFleetApiBaseUrl(rawBaseUrl, production);
+  // The browser-facing origin contract: in production the console must be published over
+  // HTTPS. The local listener may still be plaintext loopback behind a TLS terminator.
+  const publicUrl = parseConsolePublicUrl(env.FLEET_CONSOLE_PUBLIC_URL, production);
+  const host = parseConsoleHost(env.FLEET_CONSOLE_HOST, production);
   if (operatorToken.length < 24) throw new Error("FLEET_OPERATOR_TOKEN is required (server-side only)");
   if (sessionSecret.length < 32) throw new Error("FLEET_CONSOLE_SESSION_SECRET must be at least 32 characters");
   return {
@@ -35,14 +45,65 @@ export function fleetConsoleConfig(env: Record<string, string | undefined>): Fle
     operatorToken,
     sessionSecret,
     port: bounded(env.FLEET_CONSOLE_PORT, 4200, 1, 65_535),
+    host,
+    production,
+    publicUrl,
     // Bounded session lifetime: 15 minutes minimum, 24 hours maximum, 8 hours default.
     sessionTtlMs: bounded(env.FLEET_CONSOLE_SESSION_TTL_MS, 8 * 3_600_000, 900_000, 86_400_000),
     // Bounded request timeout so a slow or hanging fleet API cannot pin the console.
     requestTimeoutMs: bounded(env.FLEET_CONSOLE_REQUEST_TIMEOUT_MS, 5_000, 500, 15_000),
-    secureCookie: String(env.FLEET_CONSOLE_SECURE_COOKIE ?? "").toLowerCase() === "true" || env.NODE_ENV === "production",
+    // Production mode through EITHER mechanism always yields a Secure cookie; the
+    // explicit setting can only add protection outside production, never remove it.
+    secureCookie: production || String(env.FLEET_CONSOLE_SECURE_COOKIE ?? "").toLowerCase() === "true",
   };
 }
 
+
+
+// One production indicator for the whole console.
+export function isProductionMode(env: Record<string, string | undefined>): boolean {
+  return String(env.NODE_ENV ?? "").toLowerCase() === "production" || String(env.FLEET_CONSOLE_PRODUCTION ?? "").toLowerCase() === "true";
+}
+
+// The browser reaches the console over HTTPS in production. In production this setting is
+// required and must be an https origin; embedded credentials, query strings and fragments
+// are refused. The console's own listener may stay on plaintext loopback behind a trusted
+// TLS terminator, so this is a public-origin contract, not a local-listener requirement.
+export function parseConsolePublicUrl(raw: string | undefined, production: boolean): string | null {
+  const value = (raw ?? "").trim();
+  if (!value) {
+    if (production) throw new Error("FLEET_CONSOLE_PUBLIC_URL is required in production (the https origin operators reach the console on)");
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("FLEET_CONSOLE_PUBLIC_URL must be an absolute URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("FLEET_CONSOLE_PUBLIC_URL must use http or https");
+  if (url.username || url.password) throw new Error("FLEET_CONSOLE_PUBLIC_URL must not embed credentials");
+  if (url.search) throw new Error("FLEET_CONSOLE_PUBLIC_URL must not contain a query string");
+  if (url.hash) throw new Error("FLEET_CONSOLE_PUBLIC_URL must not contain a fragment");
+  if (production && url.protocol !== "https:") throw new Error("FLEET_CONSOLE_PUBLIC_URL must use https in production");
+  return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
+}
+
+// Bind safety. The default is loopback. In production the console must not be exposed
+// directly on a broadly reachable plaintext interface: external exposure belongs to the
+// approved HTTPS ingress, not to the console process.
+export const PRODUCTION_BIND_HOSTS = ["127.0.0.1", "::1", "localhost"] as const;
+
+export function parseConsoleHost(raw: string | undefined, production: boolean): string {
+  const value = (raw ?? "").trim() || "127.0.0.1";
+  if (!production) return value;
+  if (!(PRODUCTION_BIND_HOSTS as readonly string[]).includes(value.toLowerCase())) {
+    throw new Error(
+      "FLEET_CONSOLE_HOST must be a loopback address in production (127.0.0.1, ::1 or localhost); external exposure belongs to the HTTPS ingress, not the console process",
+    );
+  }
+  return value;
+}
 
 // The console sends the shared operator credential as a bearer token on every request, so
 // the transport must not be able to leak it. Parsing is strict: malformed URLs, embedded

@@ -10,7 +10,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildFleetConsole, fleetConsoleConfig } from "../apps/fleet-web/src/server.ts";
 import { FLEET_CONSOLE_ROUTES } from "../apps/fleet-web/src/server.ts";
-import { createFleetClient, parseFleetApiBaseUrl } from "../apps/fleet-web/src/fleet-api.ts";
+import {
+  createFleetClient,
+  isProductionMode,
+  parseConsoleHost,
+  parseConsolePublicUrl,
+  parseFleetApiBaseUrl,
+} from "../apps/fleet-web/src/fleet-api.ts";
 import { FLEET_SESSION_COOKIE, issueSession, readSession } from "../apps/fleet-web/src/session.ts";
 import {
   NEVER_SEEN,
@@ -599,7 +605,12 @@ test("the fleet API transport refuses to carry the operator credential insecurel
   assert.throws(() => production(""), /FLEET_API_BASE_URL is required/);
 
   // Production configuration is enforced through fleetConsoleConfig itself.
-  const base = { FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN, FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET, NODE_ENV: "production" };
+  const base = {
+    FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN,
+    FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET,
+    NODE_ENV: "production",
+    FLEET_CONSOLE_PUBLIC_URL: "https://console.example.com",
+  };
   assert.equal(fleetConsoleConfig({ ...base, FLEET_API_BASE_URL: "https://fleet.example.com" }).baseUrl, "https://fleet.example.com");
   assert.throws(() => fleetConsoleConfig({ ...base, FLEET_API_BASE_URL: "http://fleet.example.com" }), /must use https in production/);
   assert.throws(() => fleetConsoleConfig({ ...base, FLEET_API_BASE_URL: "http://10.0.0.10:4100" }), /must use https in production/);
@@ -645,4 +656,129 @@ test("malformed cookie input cannot turn an unauthenticated request into a serve
   // And an outright hostile cookie header is still bounded.
   const hostile = await app.inject({ method: "GET", url: "/", headers: { cookie: "%E0%A4%A; ; ;=;%ZZ" } });
   assert.equal(hostile.statusCode, 303);
+});
+
+// ---------------------------------------------------------------------------
+// Review pass 3 findings
+// ---------------------------------------------------------------------------
+const PRODUCTION_SECRETS = { FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN, FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET };
+
+test("one production boolean drives transport, cookies and the browser-facing contract", () => {
+  // Either mechanism, independently, means production. There is no second interpretation.
+  assert.equal(isProductionMode({ NODE_ENV: "production" }), true);
+  assert.equal(isProductionMode({ FLEET_CONSOLE_PRODUCTION: "true" }), true);
+  assert.equal(isProductionMode({ FLEET_CONSOLE_PRODUCTION: "TRUE" }), true);
+  assert.equal(isProductionMode({ NODE_ENV: "development" }), false);
+  assert.equal(isProductionMode({}), false);
+
+  for (const env of [{ NODE_ENV: "production" }, { FLEET_CONSOLE_PRODUCTION: "true" }]) {
+    const config = fleetConsoleConfig({
+      ...PRODUCTION_SECRETS,
+      ...env,
+      FLEET_API_BASE_URL: "https://fleet.example.com",
+      FLEET_CONSOLE_PUBLIC_URL: "https://console.example.com",
+    });
+    assert.equal(config.production, true, `${JSON.stringify(env)} is production`);
+    // Secure cookie, through either mechanism.
+    assert.equal(config.secureCookie, true, `${JSON.stringify(env)} yields a Secure cookie`);
+    // Production API transport rules apply.
+    assert.throws(
+      () => fleetConsoleConfig({ ...PRODUCTION_SECRETS, ...env, FLEET_API_BASE_URL: "http://fleet.example.com", FLEET_CONSOLE_PUBLIC_URL: "https://console.example.com" }),
+      /must use https in production/,
+      `${JSON.stringify(env)} enforces https for the fleet API`,
+    );
+    // Secure public-origin requirement applies.
+    assert.throws(
+      () => fleetConsoleConfig({ ...PRODUCTION_SECRETS, ...env, FLEET_API_BASE_URL: "https://fleet.example.com" }),
+      /FLEET_CONSOLE_PUBLIC_URL is required in production/,
+      `${JSON.stringify(env)} requires the public origin`,
+    );
+    assert.throws(
+      () => fleetConsoleConfig({ ...PRODUCTION_SECRETS, ...env, FLEET_API_BASE_URL: "https://fleet.example.com", FLEET_CONSOLE_PUBLIC_URL: "http://console.example.com" }),
+      /must use https in production/,
+      `${JSON.stringify(env)} requires an https public origin`,
+    );
+  }
+  // Outside production the public origin is optional and HTTP remains usable locally.
+  const development = fleetConsoleConfig({
+    ...PRODUCTION_SECRETS,
+    NODE_ENV: "development",
+    FLEET_API_BASE_URL: "http://127.0.0.1:4100",
+  });
+  assert.equal(development.production, false);
+  assert.equal(development.secureCookie, false);
+  assert.equal(development.publicUrl, null);
+  assert.equal(development.host, "127.0.0.1", "the default bind is loopback");
+  // The explicit Secure-cookie setting can add protection outside production, never remove it.
+  assert.equal(fleetConsoleConfig({ ...PRODUCTION_SECRETS, FLEET_CONSOLE_SECURE_COOKIE: "true", FLEET_API_BASE_URL: "http://127.0.0.1:4100" }).secureCookie, true);
+});
+
+test("the browser-facing public origin must be a clean HTTPS origin in production", () => {
+  assert.equal(parseConsolePublicUrl("https://fleet-console.example.com", true), "https://fleet-console.example.com");
+  assert.equal(parseConsolePublicUrl("https://fleet-console.example.com/console/", true), "https://fleet-console.example.com/console");
+  assert.equal(parseConsolePublicUrl("https://fleet-console.example.com:8443", true), "https://fleet-console.example.com:8443");
+  // A proxy path prefix is preserved and normalized so deep links resolve beneath it.
+  assert.equal(parseConsolePublicUrl("https://host/fleet/", true), "https://host/fleet");
+  assert.throws(() => parseConsolePublicUrl("http://fleet-console.example.com", true), /must use https in production/);
+  assert.throws(() => parseConsolePublicUrl("https://user:pass@fleet-console.example.com", true), /must not embed credentials/);
+  assert.throws(() => parseConsolePublicUrl("https://fleet-console.example.com?a=b", true), /must not contain a query string/);
+  assert.throws(() => parseConsolePublicUrl("https://fleet-console.example.com#f", true), /must not contain a fragment/);
+  assert.throws(() => parseConsolePublicUrl("not a url", true), /must be an absolute URL/);
+  assert.throws(() => parseConsolePublicUrl("ftp://fleet-console.example.com", true), /must use http or https/);
+  assert.throws(() => parseConsolePublicUrl("", true), /FLEET_CONSOLE_PUBLIC_URL is required in production/);
+  // Development may remain on local HTTP, and may omit the setting entirely.
+  assert.equal(parseConsolePublicUrl("http://localhost:4200", false), "http://localhost:4200");
+  assert.equal(parseConsolePublicUrl(undefined, false), null);
+});
+
+test("the production bind stays loopback so plaintext exposure is not possible", () => {
+  assert.equal(parseConsoleHost(undefined, true), "127.0.0.1");
+  assert.equal(parseConsoleHost(undefined, false), "127.0.0.1");
+  for (const loopback of ["127.0.0.1", "::1", "localhost", "LOCALHOST"]) {
+    assert.equal(parseConsoleHost(loopback, true), loopback, `${loopback} is an acceptable production bind`);
+  }
+  for (const exposed of ["0.0.0.0", "::", "192.168.1.10", "10.0.0.10", "fleet-console.internal"]) {
+    assert.throws(() => parseConsoleHost(exposed, true), /must be a loopback address in production/, `${exposed} must be refused in production`);
+  }
+  // Non-production local and development binds remain usable.
+  assert.equal(parseConsoleHost("0.0.0.0", false), "0.0.0.0");
+  assert.equal(parseConsoleHost("127.0.0.1", false), "127.0.0.1");
+  // Production configuration enforces the same rule end to end.
+  for (const env of [{ NODE_ENV: "production" }, { FLEET_CONSOLE_PRODUCTION: "true" }]) {
+    const base = { ...PRODUCTION_SECRETS, ...env, FLEET_API_BASE_URL: "https://fleet.example.com", FLEET_CONSOLE_PUBLIC_URL: "https://console.example.com" };
+    assert.equal(fleetConsoleConfig({ ...base, FLEET_CONSOLE_HOST: "127.0.0.1" }).host, "127.0.0.1");
+    assert.throws(() => fleetConsoleConfig({ ...base, FLEET_CONSOLE_HOST: "0.0.0.0" }), /must be a loopback address in production/);
+  }
+  assert.equal(
+    fleetConsoleConfig({ ...PRODUCTION_SECRETS, NODE_ENV: "development", FLEET_API_BASE_URL: "http://127.0.0.1:4100", FLEET_CONSOLE_HOST: "0.0.0.0" }).host,
+    "0.0.0.0",
+  );
+});
+
+test("production mode through either indicator yields a Secure session cookie with no credential", async () => {
+  for (const env of [{ NODE_ENV: "production" }, { FLEET_CONSOLE_PRODUCTION: "true" }]) {
+    const productionConfig = fleetConsoleConfig({
+      ...PRODUCTION_SECRETS,
+      ...env,
+      FLEET_API_BASE_URL: "https://fleet.example.com",
+      FLEET_CONSOLE_PUBLIC_URL: "https://console.example.com",
+      FLEET_CONSOLE_HOST: "127.0.0.1",
+    });
+    const productionApp = buildFleetConsole(productionConfig, {
+      client: stubClient(),
+      verifier: async (token: string) => (token === OPERATOR_TOKEN ? { ok: true } : { ok: false, error: "unauthorized" }),
+    });
+    const response = await productionApp.inject({
+      method: "POST",
+      url: "/login",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: `token=${encodeURIComponent(OPERATOR_TOKEN)}`,
+    });
+    const setCookie = String(response.headers["set-cookie"]);
+    assert.match(setCookie, /HttpOnly/, `${JSON.stringify(env)}: HttpOnly`);
+    assert.match(setCookie, /SameSite=Lax/, `${JSON.stringify(env)}: SameSite=Lax`);
+    assert.match(setCookie, /; Secure/, `${JSON.stringify(env)}: Secure`);
+    assert.ok(!setCookie.includes(OPERATOR_TOKEN), `${JSON.stringify(env)}: no credential in the cookie`);
+    await productionApp.close();
+  }
 });
