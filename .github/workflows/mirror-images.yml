@@ -139,20 +139,16 @@ jobs:
           image: ${{ env.IMAGE }}:${{ env.TAG }}
           format: spdx-json
           output-file: caddy-w27-sbom.spdx.json
-      - name: "Install pinned Trivy CLI"
+      - name: "Install pinned Trivy CLI and record the scanner version"
         run: |
           set -euo pipefail
-          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.58.0/trivy_0.58.0_Linux-64bit.tar.gz"
+          EXPECTED_SHA="c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz"
+          echo "${EXPECTED_SHA}  /tmp/trivy.tar.gz" | sha256sum -c -
           tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
           sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
-          trivy --version
-      - name: "Install pinned Trivy CLI"
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.58.0/trivy_0.58.0_Linux-64bit.tar.gz"
-          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
-          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
-          trivy --version
+          trivy --version | tee trivy-version.txt
+
       - name: "Raw Trivy JSON (all severities, unfixed included)"
         run: trivy image --format json --scanners vuln --output caddy-w27-trivy-raw.json "$IMAGE:$TAG"
       - name: "Human-readable all-findings report"
@@ -183,6 +179,7 @@ jobs:
             caddy-w27-trivy-all-findings.txt
             caddy-w27-trivy-blocking.json
             caddy-w27-govulncheck.txt
+            trivy-version.txt
             caddy-w27-reachability-summary.txt
 
   w27_seaweedfs:
@@ -226,6 +223,16 @@ jobs:
           image: ${{ env.IMAGE }}:${{ env.TAG }}
           format: spdx-json
           output-file: seaweedfs-w27-sbom.spdx.json
+      - name: "Install pinned Trivy CLI and record the scanner version"
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz"
+          echo "${EXPECTED_SHA}  /tmp/trivy.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version | tee trivy-version.txt
+
       - name: "Raw Trivy JSON (all severities, unfixed included)"
         run: trivy image --format json --scanners vuln --output seaweedfs-w27-trivy-raw.json "$IMAGE:$TAG"
       - name: "Human-readable all-findings report"
@@ -258,3 +265,4 @@ jobs:
             seaweedfs-w27-trivy-all-findings.txt
             seaweedfs-w27-trivy-blocking.json
             seaweedfs-w27-govulncheck.txt
+            trivy-version.txt
