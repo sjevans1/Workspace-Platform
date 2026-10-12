@@ -352,7 +352,6 @@ export function buildFleetService(
     );
   // Returns false when the request was rejected, having already sent a bounded 429.
   const withinBudget = (r: any, reply: any, rule: { limit: number; windowMs: number }, prefix: string, now = Date.now()): boolean => {
-    if (!config.rateLimit.enabled) return true;
     const decision = limiter.check(`${prefix}:${clientOf(r)}`, rule, now);
     if (decision.allowed) return true;
     reply.code(429).header("retry-after", String(decision.retryAfterSeconds)).send(rateLimitedBody());
@@ -368,7 +367,7 @@ export function buildFleetService(
     if (!authorized) {
       const perClient = withinBudget(r, reply, ruleFor("operatorAuthFailure"), "operator-auth-failure");
       if (!perClient) return false;
-      if (config.rateLimit.enabled && !limiter.check("operator-auth-failure-global", ruleFor("operatorAuthFailureGlobal")).allowed) {
+      if (!limiter.check("operator-auth-failure-global", ruleFor("operatorAuthFailureGlobal")).allowed) {
         reply.code(429).header("retry-after", "60").send(rateLimitedBody());
         return false;
       }

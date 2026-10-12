@@ -20,6 +20,7 @@ import { buildEnvelope } from "../packages/operations/telemetry-transport.ts";
 import { composeOperatorTelemetry, deploymentIdFrom, serializeOperatorTelemetry } from "../packages/operations/operator-telemetry.ts";
 import { buildFleetConsole } from "../apps/fleet-web/src/server.ts";
 import { fleetConsoleConfig } from "../apps/fleet-web/src/fleet-api.ts";
+import { issueSession } from "../apps/fleet-web/src/session.ts";
 
 const TOKEN = "fleet-operator-token-0123456789";
 const KEY = "fleet-encryption-key-0123456789abcdef";
@@ -392,8 +393,6 @@ test("client attribution ignores spoofed forwarding headers unless a trusted pro
   assert.equal(clientKey({}, "2001:db8:1:2:3:4:5:6", null, false), clientKey({}, "2001:db8:1:2:9:9:9:9", null, false));
   assert.match(clientKey({}, "::ffff:10.0.0.7", null, false), /10\.0\.0\.7$/);
   // The policy is bounded and defaults to enabling protection.
-  assert.equal(rateLimitPolicy({}).enabled, true);
-  assert.equal(rateLimitPolicy({ FLEET_RATE_LIMIT_ENABLED: "false" }).enabled, false);
   assert.equal(rateLimitPolicy({ FLEET_RATE_LIMIT_MAX_KEYS: "1" }).maxKeys, 100, "the key space is clamped");
 });
 
@@ -445,7 +444,7 @@ test("the limiter admits exactly its limit per window and then recovers after it
   assert.equal(limiter.check("client", rule, now + 101).allowed, true, "the budget recovers after the window");
 });
 
-test("rate-limit configuration is bounded and cannot disable protection accidentally", () => {
+test("rate-limit configuration is bounded and cannot disable protection accidentally", async () => {
   const policy = rateLimitPolicy({ FLEET_RATE_LIMIT_READ: "0", FLEET_RATE_LIMIT_AUTH_FAILURE: "0", FLEET_RATE_LIMIT_WINDOW_MS: "1" });
   assert.ok(policy.rules.operatorRead.limit >= 1, "a zero read limit is clamped up rather than disabling reads");
   assert.equal(policy.rules.operatorRead.limit, 1, "and a deliberately small budget is honoured rather than silently raised");
@@ -455,7 +454,14 @@ test("rate-limit configuration is bounded and cannot disable protection accident
   assert.equal(normal.rules.operatorRead.limit, 600);
   assert.equal(normal.rules.operatorAuthFailure.limit, 10);
   assert.equal(normal.rules.consoleLoginFailure.limit, 5);
-  assert.equal(normal.enabled, true);
+  // Abuse protection is part of the release security boundary and has no disable switch: the
+  // legacy variable cannot turn it off, and it is not part of the policy surface at all.
+  assert.equal("enabled" in rateLimitPolicy({ FLEET_RATE_LIMIT_ENABLED: "false" }), false);
+  const legacyOff = buildFleetService(pool, fleetConfig({ FLEET_DATABASE_URL: process.env.TEST_DATABASE_URL, FLEET_OPERATOR_TOKEN: TOKEN, FLEET_ENCRYPTION_KEY: KEY, FLEET_RATE_LIMIT_ENABLED: "false", FLEET_RATE_LIMIT_READ: "1" }));
+  const stillLimited: number[] = [];
+  for (let i = 0; i < 3; i += 1) stillLimited.push((await legacyOff.inject({ method: "GET", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}` }, remoteAddress: "10.6.6.6" })).statusCode);
+  assert.ok(stillLimited.includes(429), `protection stays on even when the legacy variable is set: ${stillLimited.join(",")}`);
+  await legacyOff.close();
 });
 
 // ---------------------------------------------------------------------------
@@ -509,4 +515,72 @@ test("a fleet encryption key change requires controlled credential re-provisioni
   const fresh = reissued.json();
   assert.equal((await rotatedApp.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: envelope(fresh.credential_id, fresh.secret) })).statusCode, 202, "a credential issued under the new key works");
   await rotatedApp.close();
+});
+
+// ---------------------------------------------------------------------------
+// Review pass 2 corrections
+// ---------------------------------------------------------------------------
+test("an unconfirmed advisory-lock unlock destroys the session instead of pooling it", async () => {
+  const probe = { version: 9911, name: "w27_unlock_probe", sql: "CREATE TABLE IF NOT EXISTS w27_unlock_probe(id int PRIMARY KEY);" };
+  await pool.query("DELETE FROM fleet_schema_migrations WHERE version=9911");
+  await pool.query("DROP TABLE IF EXISTS w27_unlock_probe");
+  // The migration itself succeeds; only the unlock query is forced to fail.
+  await runFleetMigrations(pool, [{ version: 9911, name: probe.name, sql: probe.sql }], {
+    beforeAdvisoryUnlock: () => {
+      throw new Error("simulated unlock failure");
+    },
+  });
+  // If the still-locked session had been returned to the pool, acquiring the lock afterwards
+  // could fail. Destroying it means a fresh session always acquires it.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const fresh = await pool.connect();
+    try {
+      const got = await fresh.query("SELECT pg_try_advisory_lock($1::bigint) AS ok", [FLEET_MIGRATION_LOCK_KEY.toString()]);
+      assert.equal(got.rows[0].ok, true, "the advisory lock is free after an unconfirmed unlock");
+      await fresh.query("SELECT pg_advisory_unlock($1::bigint)", [FLEET_MIGRATION_LOCK_KEY.toString()]);
+    } finally {
+      fresh.release();
+    }
+  }
+  // And normal operation is unaffected by the failure.
+  assert.ok((await fleetSchemaVersion(pool)) >= 9911, "the successful migration is still recorded");
+});
+
+test("console session invalidation semantics are exactly as documented", async () => {
+  const baseEnv = {
+    FLEET_API_BASE_URL: "https://fleet.example.com",
+    FLEET_OPERATOR_TOKEN: TOKEN,
+    FLEET_CONSOLE_SESSION_SECRET: "w27-session-secret-0123456789abcdef",
+  };
+  const stub = {
+    client: {
+      listDeployments: async () => ({ ok: true, data: { deployments: [] } }),
+      deployment: async () => ({ ok: false, error: "server_error", status: 404 }),
+      alerts: async () => ({ ok: true, data: { alerts: [] } }),
+      audit: async () => ({ ok: true, data: { audit: [] } }),
+      health: async () => ({ ok: true, data: { status: "ok" } }),
+    } as any,
+  };
+  // The cookie is minted directly so this test proves cookie validation under configuration
+  // changes, independently of the sign-in path.
+  const cookie = `fleet_console_session=${encodeURIComponent(issueSession(baseEnv.FLEET_CONSOLE_SESSION_SECRET, 3_600_000).cookieValue)}`;
+  const original = buildFleetConsole(fleetConsoleConfig(baseEnv), stub);
+  assert.equal((await original.inject({ method: "GET", url: "/", headers: { cookie } })).statusCode, 200, "the session works");
+  await original.close();
+
+  // Rotating the operator credential does NOT invalidate an already-issued cookie.
+  const rotatedToken = buildFleetConsole(fleetConsoleConfig({ ...baseEnv, FLEET_OPERATOR_TOKEN: "rotated-bootstrap-credential-0123456789" }), stub);
+  assert.equal(
+    (await rotatedToken.inject({ method: "GET", url: "/", headers: { cookie } })).statusCode,
+    200,
+    "an existing cookie survives an operator-token change, because the token is only used at login",
+  );
+  await rotatedToken.close();
+
+  // Rotating the session secret invalidates every existing cookie at once.
+  const rotatedSecret = buildFleetConsole(fleetConsoleConfig({ ...baseEnv, FLEET_CONSOLE_SESSION_SECRET: "rotated-session-secret-0123456789abcd" }), stub);
+  const after = await rotatedSecret.inject({ method: "GET", url: "/", headers: { cookie } });
+  assert.equal(after.statusCode, 303, "a session-secret rotation invalidates existing cookies");
+  assert.equal(after.headers.location, "/login");
+  await rotatedSecret.close();
 });

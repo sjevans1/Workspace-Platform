@@ -16,7 +16,9 @@ export type RateLimitRule = { limit: number; windowMs: number };
 export type RateLimitDecision = { allowed: boolean; retryAfterSeconds: number };
 
 export type RateLimitPolicy = {
-  enabled: boolean;
+  // There is deliberately no production-facing switch that disables abuse protection: it is
+  // part of the release security boundary. Limits and windows remain tunable within bounds.
+  // Tests exercise the limiter and rules directly instead of turning the control off.
   // The socket peer is the default identity. A proxy header is honoured ONLY when an
   // operator explicitly names it, because X-Forwarded-For and friends are client-controlled.
   trustedClientIpHeader: string | null;
@@ -142,7 +144,6 @@ export function rateLimitPolicy(env: Record<string, string | undefined>): RateLi
     rules[name] = { limit, windowMs: windowOverride ?? FLEET_RATE_LIMIT_RULES[name].windowMs };
   }
   return {
-    enabled: String(env.FLEET_RATE_LIMIT_ENABLED ?? "true").toLowerCase() !== "false",
     trustedClientIpHeader: header || null,
     maxKeys: Number.isFinite(maxKeys) ? Math.min(Math.max(Math.floor(maxKeys), 100), 1_000_000) : 10_000,
     rules,

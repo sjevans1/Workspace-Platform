@@ -135,7 +135,6 @@ export function buildFleetConsole(
       config.rateLimit.trustedClientIpHeader !== null,
     );
   const signInBudget = (request: any, reply: any, rule: { limit: number; windowMs: number }, prefix: string): boolean => {
-    if (!config.rateLimit.enabled) return true;
     const decision = limiter.check(`${prefix}:${consoleClient(request)}`, rule);
     if (decision.allowed) return true;
     reply.code(429).header("retry-after", String(decision.retryAfterSeconds)).type("text/html; charset=utf-8");

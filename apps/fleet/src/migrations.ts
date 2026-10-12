@@ -34,7 +34,17 @@ export const FLEET_MIGRATION_LEDGER = "fleet_schema_migrations";
 export const FLEET_MIGRATION_LOCK_KEY = 0x574632374d494752n;
 
 // Applies every pending migration in ascending order and returns the versions applied.
-export async function runFleetMigrations(pool: pg.Pool, migrations: FleetMigration[] = FLEET_MIGRATIONS): Promise<number[]> {
+export type FleetMigrationHooks = {
+  // Test-only seam: forces the unlock query itself to fail so the safe cleanup contract can be
+  // proven deterministically.
+  beforeAdvisoryUnlock?: () => void;
+};
+
+export async function runFleetMigrations(
+  pool: pg.Pool,
+  migrations: FleetMigration[] = FLEET_MIGRATIONS,
+  hooks?: FleetMigrationHooks,
+): Promise<number[]> {
   const versions = migrations.map((m) => m.version);
   if (new Set(versions).size !== versions.length) throw new Error("Duplicate fleet migration version");
   await pool.query(
@@ -68,9 +78,19 @@ export async function runFleetMigrations(pool: pg.Pool, migrations: FleetMigrati
     }
     return done;
   } finally {
-    // Released in a finally so a failed migration cannot leave the fleet schema locked.
-    await lock.query("SELECT pg_advisory_unlock($1::bigint)", [FLEET_MIGRATION_LOCK_KEY.toString()]).catch(() => undefined);
-    lock.release();
+    // Released in a finally so a failed migration cannot leave the fleet schema locked. A
+    // session advisory lock lives for the lifetime of the session, so if the unlock cannot be
+    // confirmed the connection is DESTROYED rather than returned to the pool: releasing it
+    // normally could hand a still-locked session back to another caller.
+    let unlocked = false;
+    try {
+      hooks?.beforeAdvisoryUnlock?.();
+      await lock.query("SELECT pg_advisory_unlock($1::bigint)", [FLEET_MIGRATION_LOCK_KEY.toString()]);
+      unlocked = true;
+    } catch {
+      unlocked = false;
+    }
+    lock.release(!unlocked);
   }
 }
 
