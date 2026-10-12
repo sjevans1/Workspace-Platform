@@ -1,0 +1,85 @@
+{
+  "openvex": "0.2.0",
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "metadata": {
+    "author": "Workspace Platform release engineering (Hermes implementation, Sol-reviewed decision)",
+    "role": "release-security",
+    "timestamp": "2026-10-12T00:00:00Z",
+    "notes": "Narrow, single-component reachability adjudication. It does not exempt Go binaries generally, any other image, or any future finding, and it does not relax the blocking HIGH/CRITICAL policy."
+  },
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "GO-STDLIB-FINDINGS-IN-BUNDLED-GOSU"
+      },
+      "products": [
+        {
+          "component": {
+            "@id": "pkg:golang/github.com/tianon/gosu@1.19",
+            "name": "gosu",
+            "version": "1.19",
+            "hashes": {
+              "sha-256": "52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0"
+            }
+          },
+          "subcomponents": [
+            {
+              "@id": "/usr/local/bin/gosu"
+            }
+          ],
+          "parent_image_digest": "sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826",
+          "platform": "linux/amd64",
+          "trivy_finding_ids": [
+            "CVE-2025-61726",
+            "CVE-2025-61729",
+            "CVE-2025-68121",
+            "CVE-2026-25679",
+            "CVE-2026-27145",
+            "CVE-2026-32280",
+            "CVE-2026-32281",
+            "CVE-2026-32283",
+            "CVE-2026-33811",
+            "CVE-2026-33814",
+            "CVE-2026-33818",
+            "CVE-2026-39820",
+            "CVE-2026-39821",
+            "CVE-2026-39822",
+            "CVE-2026-39836",
+            "CVE-2026-42499",
+            "CVE-2026-42504",
+            "CVE-2026-56853",
+            "CVE-2026-56858",
+            "CVE-2026-56859",
+            "CVE-2026-56860",
+            "CVE-2026-56862",
+            "CVE-2026-78667",
+            "CVE-2026-78669",
+            "CVE-2026-97031"
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Anonymous reachability analysis with govulncheck in binary mode reports zero reachable vulnerabilities in this exact binary: 3 import-level and 54 module-level findings are not called. The scanner findings remain recorded and unmodified.",
+      "evidence": [
+        {
+          "type": "reachability",
+          "tool": "govulncheck",
+          "mode": "binary",
+          "result": "0 reachable vulnerabilities",
+          "artifact": "gosu-reachability.txt",
+          "command": "govulncheck -mode=binary /usr/local/bin/gosu (extracted from the qualified image)"
+        }
+      ],
+      "review": {
+        "first_issued": "2026-10-12",
+        "review_by": "2027-01-12",
+        "expiry_basis": "bounded quarterly review; also invalidated by any change of the parent image digest or the component hash"
+      },
+      "references": [
+        "https://github.com/tianon/gosu",
+        "https://avd.aquasec.com/nvd/cve-2025-68121"
+      ]
+    }
+  ]
+}
