@@ -457,3 +457,56 @@ test("rate-limit configuration is bounded and cannot disable protection accident
   assert.equal(normal.rules.consoleLoginFailure.limit, 5);
   assert.equal(normal.enabled, true);
 });
+
+// ---------------------------------------------------------------------------
+// B4 encryption-key rotation contract
+// ---------------------------------------------------------------------------
+test("a fleet encryption key change requires controlled credential re-provisioning", async () => {
+  const newKey = "rotated-fleet-encryption-key-0123456789";
+  const seed = "w27-key-rotation-" + RUN;
+  const ws = deploymentIdFrom(seed);
+  const firstApp = buildFleetService(pool, config);
+  const registration = await firstApp.inject({ method: "POST", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, payload: { workspace_deployment_id: ws } });
+  assert.equal(registration.statusCode, 201);
+  const deployment = registration.json().id;
+  const issued = await firstApp.inject({ method: "POST", url: `/deployments/${deployment}/credentials`, headers: { authorization: `Bearer ${TOKEN}` } });
+  const oldCredential = issued.json().credential_id;
+  const oldSecret = issued.json().secret;
+  const envelope = (credentialId: string, secret: string) =>
+    JSON.stringify(
+      buildEnvelope({
+        deploymentId: ws,
+        credentialId,
+        secret,
+        payload: serializeOperatorTelemetry(composeOperatorTelemetry({ application: "workspace", version: "1.0.0", deploymentIdSeed: seed, dependencies: { database: true }, now: new Date() })),
+        now: new Date(),
+      }),
+    );
+  // Under the original key the credential works.
+  assert.equal((await firstApp.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: envelope(oldCredential, oldSecret) })).statusCode, 202);
+  await firstApp.close();
+
+  // The service comes up under a NEW encryption key while the old credential is still active.
+  const rotatedKeyConfig = fleetConfig({
+    FLEET_DATABASE_URL: process.env.TEST_DATABASE_URL,
+    FLEET_OPERATOR_TOKEN: TOKEN,
+    FLEET_ENCRYPTION_KEY: newKey,
+    FLEET_STALE_MS: "60000",
+    FLEET_OFFLINE_MS: "120000",
+  });
+  const rotatedApp = buildFleetService(pool, rotatedKeyConfig);
+  // An active credential sealed under the old key must fail closed, not silently succeed and
+  // not be accepted with the wrong secret: this is why re-provisioning is required.
+  const stale = await rotatedApp.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: envelope(oldCredential, oldSecret) });
+  assert.equal(stale.statusCode, 401, `an old-key credential must fail closed: ${stale.body}`);
+  assert.equal(JSON.parse(stale.body).error, "unknown_credential");
+  // Re-provisioning under the new key works, and the old credential can be revoked first in
+  // the documented ordering.
+  const revoke = await rotatedApp.inject({ method: "POST", url: `/deployments/${deployment}/credentials/${oldCredential}/revoke`, headers: { authorization: `Bearer ${TOKEN}` } });
+  assert.equal(revoke.statusCode, 200);
+  const reissued = await rotatedApp.inject({ method: "POST", url: `/deployments/${deployment}/credentials`, headers: { authorization: `Bearer ${TOKEN}` } });
+  assert.equal(reissued.statusCode, 201);
+  const fresh = reissued.json();
+  assert.equal((await rotatedApp.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: envelope(fresh.credential_id, fresh.secret) })).statusCode, 202, "a credential issued under the new key works");
+  await rotatedApp.close();
+});
