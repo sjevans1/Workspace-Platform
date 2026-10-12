@@ -65,3 +65,45 @@ Still outstanding for this artifact: SBOM generation, the all-findings (includin
 GHCR publication to obtain the immutable image digest, and the runtime acceptance set (HTTP to
 HTTPS redirect, trusted HTTPS, Secure cookies, WSS/collaboration, reverse-proxy smoke and the
 existing TLS browser acceptance), which belongs in the deployment tier.
+
+## SeaweedFS patched acceptance rebuild (binary qualified; image and publication outstanding)
+
+| Field | Value |
+| --- | --- |
+| Upstream tag | `4.48` |
+| Upstream commit | `530be3e37337488ecc34d58441e0bc476e121c93` (asserted; the build fails with `SOURCE DRIFT` on mismatch) |
+| Builder image | `golang@sha256:d9c68c2c…` (digest-pinned), `go1.26.9 linux/amd64` |
+| Analysis tool | `govulncheck@v1.9.0`, pinned |
+| Original dependencies | `golang.org/x/net v0.58.0`, `golang.org/x/text v0.42.0` |
+| Patched dependencies | `golang.org/x/net v0.60.0` only; `golang.org/x/text` retained at `v0.42.0` |
+| Build | `go build -trimpath -ldflags '-s -w' ./weed`, upstream default tags; only `/usr/bin/weed` is to be replaced in the runtime |
+| **Frozen binary size** | **157,339,810 bytes** |
+| **Frozen binary SHA-256** | **`ff8d09e4a8c921f35a7a65b988c541d74f0b01725197ddb7fdf5728f2be37cb2`** |
+| Reproducer | `build/w27/build-seaweedfs-patched.sh` |
+
+### Reachability outcome
+
+The three previously reachable blocking findings are **eliminated**: `GO-2026-6617`,
+`GO-2026-6613` and `GO-2026-6612` no longer appear in the rebuilt binary.
+
+Three unfixed reachable items remain, none of them HIGH or CRITICAL, so none blocks under the
+approved policy:
+
+| Finding | Module | Fixed in | Severity |
+| --- | --- | --- | --- |
+| `GO-2022-0646` (CVE-2020-8911, GHSA-f5pg-7wfw-84q9) | `github.com/aws/aws-sdk-go` (S3 Crypto SDK) | N/A | MODERATE |
+| `GO-2022-0635` (CVE-2020-8912, GHSA-7f33-f4f5-xwgw) | `github.com/aws/aws-sdk-go` (S3 Crypto SDK) | N/A | LOW |
+| `GO-2026-5932` | `golang.org/x/crypto/openpgp` | N/A | unmaintained advisory, already decided for Caddy |
+
+`aws-sdk-go` was not changed by this rebuild, so these two are upstream parity rather than
+something the patch introduced. They stay visible and unadjudicated.
+
+**No SeaweedFS VEX exists and none was created.** The Caddy treatment of `GO-2026-5932` is
+explicitly not generalized here: the same advisory appearing in `weed` is recorded as its own
+visible unfixed item with no disposition attached. The PostgreSQL/gosu VEX remains the only VEX
+in W27.
+
+Outstanding for this artifact: the patched runtime image (replacing only `/usr/bin/weed` while
+preserving the Alpine runtime, entrypoint, filer configuration and the Rust `weed-volume` and
+worker binaries), SBOM, all-findings report, GHCR publication as
+`ghcr.io/sjevans1/workspace-acceptance-seaweedfs`, and the S3 acceptance set.
