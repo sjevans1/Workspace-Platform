@@ -26,19 +26,6 @@ be described or recorded as mirror-provenanced (`digestVerifiedEqual=true` does 
 
 The superseded pre-correction build produced `b69def3432d3072aaed1bb035b743b0df21d1bbe1bfc31c650b026492157f3b8` at 58,056,866 bytes, without the release build tags and with an unnecessary `x/text` bump. That value is retained only as history and must not be used for packaging.
 
-Acceptance status after the corrected rebuild: **the binary itself is qualified.** The previously
-blocking reachable HIGH/toolchain findings are cleared, and the only reachable item is the
-already-approved non-blocking residual `GO-2026-5932`. Image packaging, GHCR publication and
-runtime acceptance are the remaining steps and are not claimed here., which is
-`golang.org/x/crypto/openpgp` reported as unmaintained and unsafe by design with **`Fixed in:
-N/A`**, i.e. an unfixed reachable finding rather than a fixable one. Because the approved blocking
-policy is `--ignore-unfixed`, that finding does not by itself fail the Trivy gate, but it is
-unfixed, reachable, and therefore a release-risk decision for Sol rather than something to
-adjudicate, suppress, or VEX here. It stays visible in the all-findings report. The release rule for this decision is
-explicit: if any other reachable finding remains, stop and report it, and do not create a Caddy
-VEX merely because the binary was built in-house. No VEX record exists for Caddy and none was
-created. The rebuilt binary therefore does **not** replace the current Caddy image.
-
 Not yet done for Caddy: image packaging with the patched binary in the approved runtime stage, a
 resulting image digest, SBOM, Trivy on the rebuilt image, and the HTTPS/WSS/cookie/reverse-proxy
 acceptance set.
@@ -53,7 +40,28 @@ they must not be VEX-adjudicated. This rebuild has not been started.
 ## What this means for the release
 
 The expanded six-image gate correctly found reachable vulnerabilities in Caddy and SeaweedFS. The
-patched-rebuild route is proven feasible for Caddy's toolchain and dependency floor, but it has
-not yet produced an artifact that passes reachability, so **the release remains blocked** and the
-general HIGH/CRITICAL policy is untouched. The PostgreSQL `gosu` adjudication is unchanged and
-remains the only VEX disposition in force.
+patched-rebuild route has since produced a Caddy artifact that passes the binary and
+configuration checks (section below), while SeaweedFS has not yet been rebuilt and therefore
+remains blocking. The general fixable and reachable HIGH/CRITICAL policy was never weakened. The
+PostgreSQL `gosu` adjudication is unchanged and remains the only VEX disposition in force.
+
+## Caddy patched runtime image (built and locally qualified; not yet published)
+
+| Field | Value |
+| --- | --- |
+| Dockerfile | `build/w27/images/caddy/Dockerfile.patched` |
+| Base | approved runtime `ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b` |
+| Replaced content | `/usr/bin/caddy` only (frozen sha256 `90e5f85f9a206ea63bdc146d75c54e0ec5c8ca4d245605f0c1570706ed4a38e5`), permissions and `cap_net_bind_service` re-applied |
+| Local image id | `sha256:d3ae461ffe2ebeffda4c3ca5c0fdeecac8ba2d4e562b322715597f4f9b722227` |
+| Target package | `ghcr.io/sjevans1/workspace-runtime-caddy` (explicitly not a `workspace-ci-mirror-*` name) |
+| OCI metadata | classification `patched-upstream`, upstream tag/commit, binary sha256 and builder digest as labels, and a description stating it is a Workspace patched build rather than an upstream image |
+| `caddy version` | `v2.11.7+modified` |
+| Runtime preserved | `/etc/caddy`, `/data`, `/config` present; entrypoint unchanged; `Cmd=[caddy run --config /etc/caddy/Caddyfile --adapter caddyfile]` |
+| `caddy validate --config /etc/caddy/Caddyfile` | **Valid configuration** |
+| Trivy, blocking policy | `usr/bin/caddy` reports **0** fixable HIGH/CRITICAL (was 21 before the rebuild) |
+| Reachability | zero reachable HIGH/CRITICAL on the installed binary; only the approved residual `GO-2026-5932` remains |
+
+Still outstanding for this artifact: SBOM generation, the all-findings (including unfixed) report,
+GHCR publication to obtain the immutable image digest, and the runtime acceptance set (HTTP to
+HTTPS redirect, trusted HTTPS, Secure cookies, WSS/collaboration, reverse-proxy smoke and the
+existing TLS browser acceptance), which belongs in the deployment tier.

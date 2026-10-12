@@ -12,3 +12,10 @@ e2e/.auth/
 *.tsbuildinfo
 
 /apps/web/next-env.d.ts
+
+# W27: generated release artifacts and local scratch. The binary is produced by
+# build/w27/build-caddy-patched.sh and consumed from a temporary build context; only its
+# SHA-256 is recorded in docs/security and provenance.
+.w27-evidence/
+build/w27/images/*/*.bin
+build/w27/caddy/
