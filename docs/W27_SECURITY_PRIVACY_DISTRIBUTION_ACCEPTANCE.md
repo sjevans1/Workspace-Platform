@@ -120,7 +120,8 @@ remains a host-specific review item.
   rotation, never readable afterwards, never audited in value, and revoked independently.
 - **Operator credential and console session.** Shared bootstrap credential for 1.0, verified
   server-side only; the console issues its own signed bounded HttpOnly session that contains
-  no fleet credential.
+  no fleet credential. The credential is used only at sign-in verification, so rotating it does
+  not invalidate already-issued session cookies; see the session limitation in section 9.
 - **Backup recovery.** Restore must preserve the encryption keys in use, otherwise sealed
   credential material and tenant attachments are unrecoverable; this is an operator
   requirement, not a code path.
@@ -169,18 +170,35 @@ built. This must be revisited before the operator plane is exposed to more than 
 trusted operator group or to any party outside OpenJM.
 
 **Fleet console sessions — accepted as a 1.0 limitation.** Sessions are signed, bounded and
-`HttpOnly`, cannot be forged or extended beyond their TTL, and logout clears the cookie. They
-are stateless, so a stolen cookie cannot be revoked individually before it expires, and the
-only global invalidation lever is rotating the bootstrap credential or the session secret.
-That is accepted for the restricted 1.0 topology, with a bounded TTL as the blast-radius
-control; a session store is not built merely because it would be theoretically stronger.
+`HttpOnly`, cannot be forged or extended beyond their TTL, and logout clears the cookie. The
+invalidation semantics are exactly:
+
+- `FLEET_OPERATOR_TOKEN` is used only to verify new sign-ins;
+- rotating `FLEET_OPERATOR_TOKEN` prevents future sign-ins using the old operator credential;
+- rotating `FLEET_OPERATOR_TOKEN` does **not** invalidate already-issued fleet-console session
+  cookies;
+- existing cookies are signed only with `FLEET_CONSOLE_SESSION_SECRET`;
+- rotating `FLEET_CONSOLE_SESSION_SECRET` globally invalidates all existing cookies;
+- without session-secret rotation, logout by the holder, or TTL expiry, a stolen valid
+  stateless cookie cannot be individually revoked.
+
+That is accepted for the restricted, OpenJM-operated 1.0 topology, with a bounded TTL as the
+blast-radius control. A session store is not built merely because it would be theoretically
+stronger, and a regression pins both directions: a cookie survives an operator-token change and
+is rejected after a session-secret change.
 
 ## 10. Remaining limitations and external items
 
 - Phase A scan and SBOM evidence is produced only by the deployment tier and is therefore
   pending FULL qualification after independent approval.
-- Valkey is not yet in the CI-H1 mirror manifest, so its gate binds to the exact Compose
-  reference by tag rather than by an immutable, manifest-provenanced digest.
+- Valkey is immutable by digest. It is pinned in `compose.yaml` to
+  `ghcr.io/valkey-io/valkey@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507`,
+  and both the supported runtime and the W27 scan resolve to that same immutable reference, so
+  the image scanned is cryptographically the image the release consumes. It is **not** CI-H1
+  mirror-provenanced, because it is consumed from its own upstream GHCR namespace rather than
+  the mirror set; that is a provenance asymmetry, not an immutability gap, and no tag-only W27
+  qualification remains. Bringing Valkey into the mirror inventory as a reviewed follow-up
+  would remove the asymmetry.
 - No cryptographic image signing, attestation, or admission policy is in place.
 - No external penetration test has been performed; repository-owned adversarial testing is
   not equivalent to one.
