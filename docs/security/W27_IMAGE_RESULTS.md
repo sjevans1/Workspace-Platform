@@ -19,3 +19,28 @@ Policy: `--severity HIGH,CRITICAL --ignore-unfixed --vuln-type os,library`, iden
 
 Raw Trivy JSON and tables for every image are retained as CI evidence under the run artefacts; they are not duplicated into the repository because CI regenerates them per run.
 
+## Reachability adjudication (binary mode, govulncheck)
+
+Adjudication was attempted separately for each component; none of the gosu evidence was reused.
+
+| Component | Binary sha256 (prefix) | Reachable findings | Outcome |
+| --- | --- | --- | --- |
+| `gosu` 1.19 (PostgreSQL) | `52c8749d0142edd2` | **0** (3 import-level, 54 module-level, none called) | adjudicated `not_affected` by the bounded VEX record |
+| `usr/bin/caddy` v2.11.4 (Caddy) | `b7105518e3ed1c07` | **4** reachable (GO-2026-6629, GO-2026-6617, GO-2026-6613, GO-2026-6612) | **REMAINS BLOCKING** |
+| `usr/bin/weed` (SeaweedFS) | `dc7f0bd80235fa27` | **3** reachable (GO-2026-6617, GO-2026-6613, GO-2026-6612) | **REMAINS BLOCKING** |
+
+The distinction is exactly the one the release policy is meant to draw: `gosu` is an anonymous
+setuid helper whose affected code is never executed on any path reachable from it, while Caddy is
+the running TLS terminator and SeaweedFS is the running object-storage service, and both have
+vulnerable code that reachability analysis proves is actually executed.
+
+Consequences, stated plainly:
+
+- The PostgreSQL gosu disposition stands on its own evidence and does not extend to Caddy or
+  SeaweedFS. No VEX rule was broadened.
+- The expanded W27 gate has surfaced a genuine release blocker for the Caddy image (21 fixable
+  HIGH, 4 of them reachable) and for the SeaweedFS image (5 fixable HIGH, 3 reachable).
+- Clearing either requires refreshed upstream images whose embedded Go component carries the
+  fixes, promoted through the existing reviewed CI-H1 manifest process. That is an image-refresh
+  decision, not a code or VEX decision, and it is not mine to take unilaterally.
+- Until then the aggregate blocking policy must fail the release, which is the correct behaviour.
