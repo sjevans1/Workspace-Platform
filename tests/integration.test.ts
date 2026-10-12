@@ -11023,3 +11023,55 @@ test("OCP-1B telemetry transport status is authorized and secret-free", async ()
     `member unexpectedly authorized: ${denied.statusCode} ${denied.body}`,
   );
 });
+
+test("OCP-1C support evidence requires explicit bounded authorization", async () => {
+  // No standing authorization exists by default.
+  const initial = await ok("GET", "/admin/support/authorization");
+  assert.equal(initial.state, "none");
+  // Generation fails closed without an active window.
+  const denied = await req("POST", "/admin/support/bundle", undefined, owner);
+  assert.equal(denied.statusCode, 403, denied.body);
+  // A plain member cannot read, grant or generate.
+  const member = await freshMemberActor("OCP-1C member");
+  for (const call of [
+    () => req("GET", "/admin/support/authorization", undefined, member),
+    () => req("POST", "/admin/support/authorization", { ttl_minutes: 5 }, member),
+    () => req("POST", "/admin/support/bundle", undefined, member),
+  ]) {
+    const res = await call();
+    assert.ok(res.statusCode === 401 || res.statusCode === 403, `member must be denied: ${res.statusCode}`);
+  }
+  // Grant a bounded window and confirm it is active and bounded.
+  const granted = await ok("POST", "/admin/support/authorization", { ttl_minutes: 5, purpose: "incident-123" });
+  assert.equal(granted.ttl_minutes, 5);
+  assert.equal((await ok("GET", "/admin/support/authorization")).state, "active");
+  // Generate the bundle and assert contract, bounds, privacy and retention shape.
+  const generated = await ok("POST", "/admin/support/bundle");
+  assert.equal(generated.bundle.bundle, "openjm.workspace.support-bundle.v1");
+  assert.ok(Buffer.byteLength(JSON.stringify(generated.bundle), "utf8") <= 32768, "bundle must stay within its ceiling");
+  assert.ok(Array.isArray(generated.bundle.events));
+  const serialized = JSON.stringify(generated.bundle);
+  for (const sentinel of ["postgres://", "Bearer ", "workspace_session=", "client_secret="])
+    assert.ok(!serialized.includes(sentinel), `bundle leaked ${sentinel}`);
+  // Metadata only: no content is persisted.
+  const packages = await ok("GET", "/admin/support/packages");
+  assert.ok(Array.isArray(packages.packages));
+  assert.ok(packages.packages.length <= packages.retained_limit);
+  for (const p of packages.packages)
+    assert.ok(!("bundle" in p) && !("payload" in p) && !("telemetry" in p), "only metadata may be retained");
+  // Revoke and prove the window closes immediately.
+  await ok("DELETE", "/admin/support/authorization");
+  assert.equal((await ok("GET", "/admin/support/authorization")).state, "revoked");
+  assert.equal((await req("POST", "/admin/support/bundle", undefined, owner)).statusCode, 403);
+  // Audit trail exists for the granted, generated and revoked actions.
+  const audit = await db.tenant(owner.tenant, (q) =>
+    q.query("SELECT action FROM audit_events WHERE action LIKE 'support.%'"),
+  );
+  const actions = audit.rows.map((r: any) => r.action);
+  for (const expected of [
+    "support.authorization_granted",
+    "support.bundle_generated",
+    "support.authorization_revoked",
+  ])
+    assert.ok(actions.includes(expected), `missing audit event ${expected}`);
+});

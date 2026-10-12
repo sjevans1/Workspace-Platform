@@ -140,6 +140,13 @@ import {
   toTelemetryInputs,
 } from "../../../packages/operations/operational-sources.ts";
 import {
+  SUPPORT_BUNDLE_LIMITS,
+  authorizationState,
+  clampTtlMinutes,
+  composeSupportBundle,
+  serializeSupportBundle,
+} from "../../../packages/operations/support-bundle.ts";
+import {
   TELEMETRY_ENVELOPE_VERSION,
   readTelemetryTransportStatus,
   telemetryTransportConfig,
@@ -2538,6 +2545,153 @@ export async function buildApp(
         resources: 1 + (t.children?.length || 0),
       })),
     ],
+    "workspace.read",
+  );
+  // OCP-1C: customer-authorized support evidence. Owner/admin only, explicitly
+  // time-bounded and revocable, bounded and allowlisted, entirely local, with no
+  // dependency on any OpenJM control plane and no automatic upload.
+  const supportRead = async (q: any) => {
+    const row: any = await one(
+      q,
+      "SELECT id,state,purpose,issued_at,expires_at,revoked_at FROM support_authorizations ORDER BY issued_at DESC LIMIT 1",
+    );
+    return { row, state: authorizationState(row ?? null, new Date()) };
+  };
+  route(
+    "GET",
+    "/admin/support/authorization",
+    "Read the current support authorization state",
+    async (q, a) => {
+      admin(a);
+      const { row, state } = await supportRead(q);
+      return {
+        state,
+        authorization: row
+          ? {
+              id: row.id,
+              purpose: row.purpose,
+              issued_at: row.issued_at,
+              expires_at: row.expires_at,
+              revoked_at: row.revoked_at,
+            }
+          : null,
+        limits: {
+          max_ttl_minutes: SUPPORT_BUNDLE_LIMITS.maxTtlMinutes,
+          default_ttl_minutes: SUPPORT_BUNDLE_LIMITS.defaultTtlMinutes,
+          max_retained_packages: SUPPORT_BUNDLE_LIMITS.maxRetainedPackages,
+          max_bundle_bytes: SUPPORT_BUNDLE_LIMITS.maxBytes,
+        },
+      };
+    },
+    "workspace.read",
+  );
+  route(
+    "POST",
+    "/admin/support/authorization",
+    "Grant a time-bounded support authorization",
+    async (q, a, r) => {
+      admin(a);
+      const v = body(
+        z
+          .object({
+            purpose: z.string().min(1).max(64).optional(),
+            ttl_minutes: z.number().int().positive().max(SUPPORT_BUNDLE_LIMITS.maxTtlMinutes).optional(),
+          })
+          .strict(),
+        r,
+      );
+      const ttl = clampTtlMinutes(v.ttl_minutes);
+      // Replacing any prior active window keeps exactly one live authorization.
+      await q.query(
+        "UPDATE support_authorizations SET state='revoked', revoked_at=now() WHERE state='active' AND revoked_at IS NULL",
+      );
+      const inserted: any = await one(
+        q,
+        "INSERT INTO support_authorizations(id,tenant_id,state,purpose,expires_at,actor_id) VALUES(gen_random_uuid(),$1,'active',$2,now()+($3||' minutes')::interval,$4) RETURNING id,state,purpose,issued_at,expires_at",
+        [a.tenant_id, v.purpose ?? null, String(ttl), a.user_id],
+      );
+      await emit(q, a, "support.authorization_granted", inserted.id);
+      return { ...inserted, ttl_minutes: ttl };
+    },
+    "admin",
+  );
+  route(
+    "DELETE",
+    "/admin/support/authorization",
+    "Revoke the support authorization",
+    async (q, a) => {
+      admin(a);
+      const revoked = await q.query(
+        "UPDATE support_authorizations SET state='revoked', revoked_at=now() WHERE state='active' AND revoked_at IS NULL RETURNING id",
+      );
+      if (revoked.rowCount) await emit(q, a, "support.authorization_revoked", revoked.rows[0].id);
+      return { revoked: revoked.rowCount ?? 0 };
+    },
+    "admin",
+  );
+  route(
+    "POST",
+    "/admin/support/bundle",
+    "Generate a bounded support evidence bundle",
+    async (q, a) => {
+      admin(a);
+      const { row, state } = await supportRead(q);
+      // An explicit, active, unexpired authorization is required. Telemetry being
+      // enabled never implies support authorization.
+      assert(state === "active", 403, "No active support authorization");
+      try {
+        const telemetry: any = await operatorTelemetrySnapshot();
+        const transport = await operatorTelemetryTransportStatus();
+        const deployment = validateDeployment(process.env, "api");
+        const sources = await collectOperationalSources({
+          q: { query: (sql: string, params?: any[]) => db.system((inner) => inner.query(sql, params)) },
+          env: process.env,
+          backupDirectory: process.env.OPERATOR_TELEMETRY_BACKUP_DIR ?? null,
+        });
+        const bundle = composeSupportBundle({
+          telemetry,
+          transport,
+          deployment,
+          operational: sources,
+          schemaVersion: telemetry?.readiness?.schema_version ?? null,
+          applicationVersion: process.env.WORKSPACE_VERSION ?? null,
+          buildSha: process.env.WORKSPACE_BUILD_SHA ?? process.env.BUILD_SHA ?? null,
+          authorizationState: "active",
+          purpose: row?.purpose ?? null,
+        });
+        const serialized = serializeSupportBundle(bundle);
+        const bytes = Buffer.byteLength(serialized, "utf8");
+        const saved: any = await one(
+          q,
+          "INSERT INTO support_packages(id,tenant_id,authorization_id,digest,bytes,event_count) VALUES(gen_random_uuid(),$1,$2,$3,$4,$5) RETURNING id,digest,bytes,event_count,created_at",
+          [a.tenant_id, row?.id ?? null, bundle.digest, bytes, bundle.events.length],
+        );
+        // Bounded retention: keep only the configured number of newest packages.
+        await q.query(
+          "DELETE FROM support_packages WHERE id IN (SELECT id FROM support_packages ORDER BY created_at DESC OFFSET $1)",
+          [SUPPORT_BUNDLE_LIMITS.maxRetainedPackages],
+        );
+        await emit(q, a, "support.bundle_generated", saved.id);
+        return { package: saved, bundle: JSON.parse(serialized) };
+      } catch (error) {
+        await emit(q, a, "support.bundle_failed", null).catch(() => undefined);
+        throw error;
+      }
+    },
+    "admin",
+  );
+  route(
+    "GET",
+    "/admin/support/packages",
+    "List retained support package metadata",
+    async (q, a) => {
+      admin(a);
+      const rows = await q.query(
+        "SELECT id,digest,bytes,event_count,created_at FROM support_packages ORDER BY created_at DESC LIMIT $1",
+        [SUPPORT_BUNDLE_LIMITS.maxRetainedPackages],
+      );
+      return { packages: rows.rows, retained_limit: SUPPORT_BUNDLE_LIMITS.maxRetainedPackages };
+    },
     "workspace.read",
   );
   dataRoutes(route, storage, antivirus, antivirusMetrics, operatorTelemetrySnapshot, operatorTelemetryTransportStatus);
