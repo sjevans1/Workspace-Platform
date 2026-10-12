@@ -107,3 +107,31 @@ Outstanding for this artifact: the patched runtime image (replacing only `/usr/b
 preserving the Alpine runtime, entrypoint, filer configuration and the Rust `weed-volume` and
 worker binaries), SBOM, all-findings report, GHCR publication as
 `ghcr.io/sjevans1/workspace-acceptance-seaweedfs`, and the S3 acceptance set.
+
+## SeaweedFS patched acceptance image (built and locally verified; not yet published)
+
+| Field | Value |
+| --- | --- |
+| Dockerfile | `build/w27/images/seaweedfs/Dockerfile.patched` |
+| Runtime base | `docker.io/chrislusf/seaweedfs:4.48` (index digest `sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d`) |
+| Base choice | deliberately the upstream 4.48 image rather than the CI-H1 mirror, which records upstream tag 4.47 and would not be the approved 4.48 runtime |
+| Replaced content | `/usr/bin/weed` only (frozen sha256 `ff8d09e4a8c921f35a7a65b988c541d74f0b01725197ddb7fdf5728f2be37cb2`), verified inside the built image by `sha256sum` in the build step |
+| Local image id | `sha256:51c85ba0a48e71840223abcf02bb4d6029fbdeb67d5e2edecf1706406ddd8454` |
+| Target package | `ghcr.io/sjevans1/workspace-acceptance-seaweedfs` (non-mirror; not a `workspace-ci-mirror-*` name) |
+| OCI metadata | classification `patched-upstream`, intendedUse `acceptance-only`, upstream tag/commit, weed binary SHA-256 and builder digest |
+| `weed version` | `version 30GB 4.48 linux amd64` |
+| Runtime preserved | Alpine Linux v3.24; `/entrypoint.sh` and `/usr/bin/weed-volume` present; `Entrypoint=[/entrypoint.sh]`, `Cmd=[mini -dir=/data]` |
+| Runtime layout note | `/usr/bin/worker` does not exist in the upstream 4.48 image. Nothing was removed by this rebuild; the upstream runtime simply does not ship that path, so no worker binary is preserved there. |
+
+Outstanding for this artifact: SBOM, raw Trivy JSON, all-findings report, GHCR publication to an
+immutable digest, and the S3 acceptance set (bucket create, upload, download, list, delete and the
+existing recovery path). Publication and acceptance are not claimed here.
+
+### Evidence improvements carried into both reproducers
+
+`build/w27/build-seaweedfs-patched.sh` now retains the complete `go version -m
+/w/weed-patched.bin` output rather than the first twelve lines. Both reproducers now assert the
+exact permitted module delta rather than relying on `git diff --stat`: `golang.org/x/net` must be
+`v0.60.0` and `golang.org/x/text` must remain `v0.42.0`, and the build fails (exit 44 or 45) on any
+other value, with the complete module diff printed line by line so an unexpected direct or
+transitive change cannot pass unnoticed.

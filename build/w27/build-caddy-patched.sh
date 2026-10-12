@@ -55,6 +55,14 @@ go get "golang.org/x/net@$XNET_FLOOR" 2>&1 | sed -n "1,4p"
 
 echo "### patched dependency versions (after patch)"
 grep -E "^\s+golang.org/x/(net|text) " go.mod || true
+echo "### MODULE DELTA ASSERTION (only golang.org/x/net may move; x/text must stay)"
+sed -n "s/^\s*\(golang\.org\/x\/\(net\|text\)\) v\([0-9.]*\)$/\1 v\3/p" go.mod > ./x-after.txt
+test "$(sed -n 's/^golang.org\/x\/net v\([0-9.]*\)$/\1/p' ./x-after.txt | head -n1)" = "v0.60.0" || { echo "MODULE DELTA ASSERTION FAILED: x/net is not v0.60.0"; exit 44; }
+test "$(sed -n 's/^golang.org\/x\/text v\([0-9.]*\)$/\1/p' ./x-after.txt | head -n1)" = "v0.42.0" || { echo "MODULE DELTA ASSERTION FAILED: x/text moved from v0.42.0"; exit 45; }
+echo "### exact module delta assertion: PASS (x/net v0.60.0, x/text v0.42.0)"
+rm -f ./x-after.txt
+echo "### complete module diff versus upstream (every line, not a stat):"
+git diff -U0 go.mod go.sum | sed -n "/^[+-][^+-]/p"
 echo "### full module delta versus upstream go.mod:"
 git diff --stat go.mod go.sum || true
 
