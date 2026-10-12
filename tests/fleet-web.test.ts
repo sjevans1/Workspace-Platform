@@ -715,10 +715,21 @@ test("one production boolean drives transport, cookies and the browser-facing co
 
 test("the browser-facing public origin must be a clean HTTPS origin in production", () => {
   assert.equal(parseConsolePublicUrl("https://fleet-console.example.com", true), "https://fleet-console.example.com");
-  assert.equal(parseConsolePublicUrl("https://fleet-console.example.com/console/", true), "https://fleet-console.example.com/console");
+  // A trailing root slash is normalized away.
+  assert.equal(parseConsolePublicUrl("https://fleet-console.example.com/", true), "https://fleet-console.example.com");
+  // A custom HTTPS port is preserved.
   assert.equal(parseConsolePublicUrl("https://fleet-console.example.com:8443", true), "https://fleet-console.example.com:8443");
-  // A proxy path prefix is preserved and normalized so deep links resolve beneath it.
-  assert.equal(parseConsolePublicUrl("https://host/fleet/", true), "https://host/fleet");
+  assert.equal(parseConsolePublicUrl("https://fleet-console.example.com:8443/", true), "https://fleet-console.example.com:8443");
+  // Sub-path mounting is refused rather than accepted and then broken: the 1.0 console is
+  // published at the origin root and is not prefix-aware.
+  for (const prefixed of ["https://fleet-console.example.com/console", "https://fleet-console.example.com/console/", "https://host/fleet/"]) {
+    assert.throws(
+      () => parseConsolePublicUrl(prefixed, true),
+      /must not contain a path; deploy the 1\.0 console at the origin root/,
+      `${prefixed} must be refused`,
+    );
+    assert.throws(() => parseConsolePublicUrl(prefixed, false), /must not contain a path/, `${prefixed} is refused outside production too`);
+  }
   assert.throws(() => parseConsolePublicUrl("http://fleet-console.example.com", true), /must use https in production/);
   assert.throws(() => parseConsolePublicUrl("https://user:pass@fleet-console.example.com", true), /must not embed credentials/);
   assert.throws(() => parseConsolePublicUrl("https://fleet-console.example.com?a=b", true), /must not contain a query string/);

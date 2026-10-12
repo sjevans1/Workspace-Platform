@@ -66,9 +66,10 @@ export function isProductionMode(env: Record<string, string | undefined>): boole
 }
 
 // The browser reaches the console over HTTPS in production. In production this setting is
-// required and must be an https origin; embedded credentials, query strings and fragments
-// are refused. The console's own listener may stay on plaintext loopback behind a trusted
-// TLS terminator, so this is a public-origin contract, not a local-listener requirement.
+// required and must be an https origin at the root: embedded credentials, query strings,
+// fragments and any path are refused, because the 1.0 console is not prefix-aware. The
+// console's own listener may stay on plaintext loopback behind a trusted TLS terminator,
+// so this is a public-origin contract, not a local-listener requirement.
 export function parseConsolePublicUrl(raw: string | undefined, production: boolean): string | null {
   const value = (raw ?? "").trim();
   if (!value) {
@@ -86,7 +87,22 @@ export function parseConsolePublicUrl(raw: string | undefined, production: boole
   if (url.search) throw new Error("FLEET_CONSOLE_PUBLIC_URL must not contain a query string");
   if (url.hash) throw new Error("FLEET_CONSOLE_PUBLIC_URL must not contain a fragment");
   if (production && url.protocol !== "https:") throw new Error("FLEET_CONSOLE_PUBLIC_URL must use https in production");
-  return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
+  // OCP-2B 1.0 is published at the configured origin root. The console is not
+  // prefix-aware, so a sub-path mounting is refused here rather than accepted and then
+  // silently broken. The HTTPS reverse proxy forwards this root to the loopback
+  // listener; it does not rewrite a prefix.
+  // A path prefix (for reverse-proxy deployment) is preserved and normalized so read
+  // endpoints resolve beneath it. Trailing slashes are removed. FLEET_API_BASE_URL is a
+  // separate setting from the console's own public origin, and the BFF client honours
+  // this prefix on every read call.
+  // OCP-2B 1.0 is published at the configured origin root. The console is not
+  // prefix-aware, so a sub-path mounting is refused here rather than accepted and then
+  // silently broken. The HTTPS reverse proxy forwards this root to the loopback
+  // listener; it does not rewrite a prefix.
+  if (url.pathname !== "" && url.pathname !== "/") {
+    throw new Error("FLEET_CONSOLE_PUBLIC_URL must not contain a path; deploy the 1.0 console at the origin root");
+  }
+  return `${url.protocol}//${url.host}`;
 }
 
 // Bind safety. The default is loopback. In production the console must not be exposed
@@ -105,9 +121,12 @@ export function parseConsoleHost(raw: string | undefined, production: boolean): 
   return value;
 }
 
-// The console sends the shared operator credential as a bearer token on every request, so
-// the transport must not be able to leak it. Parsing is strict: malformed URLs, embedded
-// credentials, query strings and fragments are refused, and in production plaintext HTTP
+// The fleet API base URL is a separate setting from the console's own public origin: an
+// API path prefix is intentionally supported and normalized here, and the BFF client
+// resolves its read endpoints beneath it. The console sends the shared operator credential
+// as a bearer token on every request, so the transport must not be able to leak it.
+// Parsing is strict: malformed URLs, embedded credentials, query strings and fragments are
+// refused, and in production plaintext HTTP
 // is only ever permitted to an explicitly local loopback destination. Private, container
 // and RFC1918 addresses are NOT treated as loopback.
 export const LOOPBACK_HOSTNAMES = ["127.0.0.1", "::1", "[::1]", "localhost"] as const;
@@ -130,8 +149,14 @@ export function parseFleetApiBaseUrl(raw: string, production = false): string {
       "FLEET_API_BASE_URL must use https in production (plaintext http is permitted only for a loopback destination such as 127.0.0.1, ::1 or localhost)",
     );
   }
+  // OCP-2B 1.0 is published at the configured origin root. The console is not
+  // prefix-aware, so a sub-path mounting is refused rather than accepted and then
+  // silently broken. The HTTPS reverse proxy forwards this root to the loopback
+  // listener; it does not rewrite a prefix.
   // A path prefix (for reverse-proxy deployment) is preserved and normalized so read
-  // endpoints resolve beneath it. Trailing slashes are removed.
+  // endpoints resolve beneath it. Trailing slashes are removed. This is a separate setting
+  // from the console's own public origin, and the BFF client honours the prefix on every
+  // read call.
   const path = url.pathname.replace(/\/+$/, "");
   return `${url.protocol}//${url.host}${path}`;
 }

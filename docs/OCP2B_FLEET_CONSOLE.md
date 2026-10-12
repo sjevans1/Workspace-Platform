@@ -60,9 +60,10 @@ plaintext exposure in production:
 
 1. **browser → fleet-web**, when an operator submits the credential on `POST /login`.
    This is protected by the browser-facing HTTPS contract: production requires an
-   explicit `FLEET_CONSOLE_PUBLIC_URL` that must be an `https:` origin, the session
-   cookie is always `Secure` in production, and the console process itself binds loopback
-   only, so external exposure can only happen through the approved HTTPS ingress.
+   explicit `FLEET_CONSOLE_PUBLIC_URL` that must be an `https:` origin **at the root**,
+   the session cookie is always `Secure` in production, and the console process itself
+   binds loopback only, so external exposure can only happen through the approved HTTPS
+   ingress.
 2. **fleet-web → OCP-2A API**, where the credential is presented as a bearer token on
    every read call. This is protected by the fleet-API transport rules below.
 
@@ -73,6 +74,15 @@ There is no switch that permits an insecure production login.
 ```
 browser --HTTPS--> TLS terminator / reverse proxy --local hop--> fleet-web (loopback, HTTP)
 ```
+
+OCP-2B 1.0 is published at the configured HTTPS **origin root**
+(`https://fleet-console.example.com/`). The reverse proxy forwards that root to the local
+loopback listener and does not rewrite a path. **Sub-path mounting is not supported in
+1.0**: `FLEET_CONSOLE_PUBLIC_URL` is rejected if it carries any path, such as
+`https://fleet-console.example.com/console`, because the console's routes, redirects,
+session cookie path and asset URL are all root-relative and it is not prefix-aware. That
+constraint is deliberate rather than deferred: it is recorded here, not carried as a W27
+item, because there is no current requirement for sub-path hosting.
 
 The local hop between the terminator and the console process is an internal deployment
 detail and may remain plaintext loopback. Terminating TLS inside `fleet-web` itself would
@@ -103,8 +113,9 @@ with `new URL()` and validated strictly; every failure mode is fail-closed:
   service name like `fleet-service` are **not** treated as loopback and are refused;
 - outside production, HTTP remains usable so the console can be pointed at a local or
   development fleet API;
-- a path prefix is supported for reverse-proxy deployment (`https://host/fleet-api`) and
-  is normalized so read endpoints resolve beneath it.
+- a path prefix is supported for the **fleet API base URL** (`https://host/fleet-api`) and
+  is normalized so the BFF client resolves its read endpoints beneath it. This is a
+  separate setting from the console's own public origin, which is root-only.
 
 There is no TLS-disable switch and no way to relax certificate verification: Node's
 normal certificate validation always applies.
