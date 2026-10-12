@@ -36,6 +36,7 @@ const db = new Database(),
       config: settings.config,
       deploymentId: otel.deploymentIdSeed ?? process.env.ENCRYPTION_KEY ?? "workspace-unidentified",
       spool,
+      statusPath: settings.config.spoolPath.replace(/spool\.jsonl$/, "status.json"),
       payloadProvider: async () => {
         // Consume the canonical OCP-1A serialization; never reconstruct telemetry
         // and never bypass the OCP-1A prohibition scan.

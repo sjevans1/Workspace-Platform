@@ -414,6 +414,7 @@ export function startTelemetryExporter(options: {
   fetchImpl?: typeof fetch;
   now?: () => number;
   log?: (event: string, detail?: Record<string, unknown>) => void;
+  statusPath?: string;
 }): { stop: () => Promise<void>; status: () => TelemetryTransportStatus; runOnce: () => Promise<DeliveryOutcome | "skipped"> } {
   const now = () => options.now?.() ?? Date.now();
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -445,6 +446,20 @@ export function startTelemetryExporter(options: {
     };
   };
 
+  const persistStatus = () => {
+    if (!options.statusPath) return;
+    const path = options.statusPath;
+    void (async () => {
+      try {
+        await mkdir(dirname(path), { recursive: true });
+        // Bounded and secret-free by construction: this is exactly the status model.
+        await writeFile(path, JSON.stringify(status()), "utf8");
+      } catch {
+        // Fail-soft: status reporting never affects delivery or product operation.
+      }
+    })();
+  };
+
   const schedule = (delayMs: number) => {
     if (stopped) return;
     timer = setTimeout(() => {
@@ -468,6 +483,7 @@ export function startTelemetryExporter(options: {
 
   async function runOnce(): Promise<DeliveryOutcome | "skipped"> {
     if (stopped || !options.config.enabled) return "skipped";
+    persistStatus();
     if (now() < backoffUntil) return "skipped";
     if (!options.config.endpoint || !options.config.credentialId || !options.config.secret) {
       lastFailureCategory = "configuration";
@@ -521,10 +537,12 @@ export function startTelemetryExporter(options: {
         lastSuccessAt = new Date(now()).toISOString();
         lastFailureCategory = "none";
         options.log?.("telemetry.delivery.succeeded");
+        persistStatus();
         return "delivered";
       }
       const category = classifyFailure(undefined, status);
       record(category);
+      persistStatus();
       if (outcome === "permanent") {
         // Operator action is required: do not retry a malformed or rejected payload
         // forever. The item is dropped so bounded retention still applies.
@@ -533,6 +551,7 @@ export function startTelemetryExporter(options: {
       return outcome;
     } catch (error) {
       record(classifyFailure(error));
+      persistStatus();
       return "retryable";
     }
   }
@@ -547,4 +566,33 @@ export function startTelemetryExporter(options: {
     status,
     runOnce,
   };
+}
+
+// Read the worker-persisted transport status. Fail-soft: an absent or corrupt file
+// yields null and the caller reports configuration-derived state instead.
+export async function readTelemetryTransportStatus(
+  path: string,
+): Promise<TelemetryTransportStatus | null> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8"));
+    if (typeof parsed !== "object" || parsed === null) return null;
+    // Never surface unknown extra keys: the status shape is rebuilt explicitly.
+    return {
+      enabled: parsed.enabled === true,
+      envelope_version: String(parsed.envelope_version ?? TELEMETRY_ENVELOPE_VERSION),
+      contract_version: String(parsed.contract_version ?? OPERATOR_TELEMETRY_SCHEMA),
+      credential_id: typeof parsed.credential_id === "string" ? parsed.credential_id : null,
+      endpoint_origin: typeof parsed.endpoint_origin === "string" ? parsed.endpoint_origin : null,
+      last_attempt_at: typeof parsed.last_attempt_at === "string" ? parsed.last_attempt_at : null,
+      last_success_at: typeof parsed.last_success_at === "string" ? parsed.last_success_at : null,
+      last_failure_category: typeof parsed.last_failure_category === "string" ? parsed.last_failure_category : "none",
+      consecutive_failures: Number.isFinite(parsed.consecutive_failures) ? Number(parsed.consecutive_failures) : 0,
+      backoff_until: typeof parsed.backoff_until === "string" ? parsed.backoff_until : null,
+      spool_items: Number.isFinite(parsed.spool_items) ? Number(parsed.spool_items) : 0,
+      spool_bytes: Number.isFinite(parsed.spool_bytes) ? Number(parsed.spool_bytes) : 0,
+      spool_evicted: Number.isFinite(parsed.spool_evicted) ? Number(parsed.spool_evicted) : 0,
+    };
+  } catch {
+    return null;
+  }
 }

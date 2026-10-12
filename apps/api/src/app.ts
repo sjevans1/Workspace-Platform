@@ -130,10 +130,16 @@ import {
   type MetricsSnapshot,
 } from "../../../packages/operations/metrics.ts";
 import {
+  OPERATOR_TELEMETRY_SCHEMA as OCP1A_SCHEMA,
   composeOperatorTelemetry,
   operatorTelemetryConfig,
   serializeOperatorTelemetry,
 } from "../../../packages/operations/operator-telemetry.ts";
+import {
+  TELEMETRY_ENVELOPE_VERSION,
+  readTelemetryTransportStatus,
+  telemetryTransportConfig,
+} from "../../../packages/operations/telemetry-transport.ts";
 import {
   AntivirusUnavailableError,
   createAntivirus,
@@ -824,6 +830,38 @@ export async function buildApp(
     // and the payload ceiling are enforced on the real response bytes.
     return JSON.parse(serializeOperatorTelemetry(payload));
   };
+  // OCP-1B: bounded, secret-free transport status for a local owner/admin operator.
+  // The live delivery state is owned by the worker process and read back from its
+  // bounded status file; configuration-derived state comes straight from validated
+  // configuration. Never the credential secret, never a signature or authorization
+  // header, never a raw envelope or remote response body, never spool payloads.
+  const operatorTelemetryTransportStatus = async (): Promise<unknown> => {
+    const transport = telemetryTransportConfig(process.env);
+    const statusPath = transport.config.spoolPath.replace(/spool\.jsonl$/, "status.json");
+    const persisted = await readTelemetryTransportStatus(statusPath).catch(() => null);
+    return {
+      enabled: transport.config.enabled,
+      configuration_ok: transport.ok,
+      configuration_issues: transport.issues.map((i) => ({
+        setting: i.setting,
+        problem: i.problem,
+      })),
+      credential_id: transport.config.credentialId,
+      endpoint_origin: transport.config.endpointOrigin,
+      contract_version: OCP1A_SCHEMA,
+      envelope_version: TELEMETRY_ENVELOPE_VERSION,
+      last_attempt_at: persisted?.last_attempt_at ?? null,
+      last_success_at: persisted?.last_success_at ?? null,
+      last_failure_category: persisted?.last_failure_category ?? "none",
+      consecutive_failures: persisted?.consecutive_failures ?? 0,
+      backoff_until: persisted?.backoff_until ?? null,
+      spool_items: persisted?.spool_items ?? 0,
+      spool_bytes: persisted?.spool_bytes ?? 0,
+      spool_evicted: persisted?.spool_evicted ?? 0,
+      live_state_source: persisted ? "worker" : "unavailable",
+    };
+  };
+
   app.get(
     "/metrics",
     {
@@ -2495,7 +2533,7 @@ export async function buildApp(
     ],
     "workspace.read",
   );
-  dataRoutes(route, storage, antivirus, antivirusMetrics, operatorTelemetrySnapshot);
+  dataRoutes(route, storage, antivirus, antivirusMetrics, operatorTelemetrySnapshot, operatorTelemetryTransportStatus);
   await registerScim(app, db);
   app.addHook("onClose", async () => {
     try {
@@ -2512,6 +2550,7 @@ function dataRoutes(
   antivirus: Antivirus,
   antivirusMetrics: { clean: number; infected: number; error: number },
   operatorTelemetry: () => Promise<unknown>,
+  operatorTelemetryStatus: () => Promise<unknown>,
 ) {
   route(
     "GET",
@@ -3808,6 +3847,18 @@ function dataRoutes(
     async (_q, a) => {
       admin(a);
       return await operatorTelemetry();
+    },
+    "workspace.read",
+  );
+  // OCP-1B: local operator transport status. Owner/admin only; a plain member is
+  // denied by the same authorization the operational surfaces already use.
+  route(
+    "GET",
+    "/admin/operator-telemetry/status",
+    "Read bounded telemetry transport status",
+    async (_q, a) => {
+      admin(a);
+      return await operatorTelemetryStatus();
     },
     "workspace.read",
   );
