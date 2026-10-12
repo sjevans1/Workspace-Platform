@@ -395,7 +395,12 @@ export function classifyFailure(error: unknown, status?: number): FailureCategor
     if (status >= 500 || status === 408) return "retryable_response";
     return "permanent_response";
   }
-  const message = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  // Node's fetch reports a generic "fetch failed" and carries the real reason in
+  // the cause chain, so TLS and timeout detail must be read from there.
+  const message =
+    error instanceof Error
+      ? `${error.name} ${error.message} ${(error as { cause?: unknown }).cause ? String((error as { cause?: unknown }).cause) : ""}`
+      : String(error);
   if (/certificate|tls|ssl|self.signed|altname/i.test(message)) return "tls";
   if (/timeout|aborted|timed out/i.test(message)) return "timeout";
   return "network";
