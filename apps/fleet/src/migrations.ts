@@ -20,6 +20,14 @@ export const FLEET_MIGRATIONS: FleetMigration[] = [
 
 export const FLEET_MIGRATION_LEDGER = "fleet_schema_migrations";
 
+// Serializes migration application across replicas with a database-level advisory lock.
+// The key is a fixed constant owned by the fleet schema, deliberately independent of any
+// customer Workspace migration state, so concurrent startup cannot race: a second replica
+// blocks until the first has finished and released the lock.
+// "W27MIGRT" as a signed 64-bit advisory-lock key, so the fleet schema has one stable
+// serialization identity across replicas.
+export const FLEET_MIGRATION_LOCK_KEY = 0x574632374d494752n;
+
 // Applies every pending migration in ascending order and returns the versions applied.
 export async function runFleetMigrations(pool: pg.Pool, migrations: FleetMigration[] = FLEET_MIGRATIONS): Promise<number[]> {
   const versions = migrations.map((m) => m.version);
@@ -27,27 +35,38 @@ export async function runFleetMigrations(pool: pg.Pool, migrations: FleetMigrati
   await pool.query(
     `CREATE TABLE IF NOT EXISTS ${FLEET_MIGRATION_LEDGER}(version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`,
   );
-  const applied = new Set<number>(
-    (await pool.query(`SELECT version FROM ${FLEET_MIGRATION_LEDGER}`)).rows.map((row: any) => Number(row.version)),
-  );
-  const pending = migrations.filter((m) => !applied.has(m.version)).sort((a, b) => a.version - b.version);
-  const done: number[] = [];
-  for (const migration of pending) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query(migration.sql);
-      await client.query(`INSERT INTO ${FLEET_MIGRATION_LEDGER}(version,name) VALUES($1,$2)`, [migration.version, migration.name]);
-      await client.query("COMMIT");
-      done.push(migration.version);
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
+  // One replica at a time. The lock is held for the whole apply loop and released on both
+  // success and failure; the ledger is read AFTER acquiring it, so a replica that waited
+  // observes migrations another replica already applied and applies nothing.
+  const lock = await pool.connect();
+  try {
+    await lock.query("SELECT pg_advisory_lock($1::bigint)", [FLEET_MIGRATION_LOCK_KEY.toString()]);
+    const applied = new Set<number>(
+      (await lock.query(`SELECT version FROM ${FLEET_MIGRATION_LEDGER}`)).rows.map((row: any) => Number(row.version)),
+    );
+    const pending = migrations.filter((m) => !applied.has(m.version)).sort((a, b) => a.version - b.version);
+    const done: number[] = [];
+    for (const migration of pending) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(migration.sql);
+        await client.query(`INSERT INTO ${FLEET_MIGRATION_LEDGER}(version,name) VALUES($1,$2)`, [migration.version, migration.name]);
+        await client.query("COMMIT");
+        done.push(migration.version);
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
     }
+    return done;
+  } finally {
+    // Released in a finally so a failed migration cannot leave the fleet schema locked.
+    await lock.query("SELECT pg_advisory_unlock($1::bigint)", [FLEET_MIGRATION_LOCK_KEY.toString()]).catch(() => undefined);
+    lock.release();
   }
-  return done;
 }
 
 export async function fleetSchemaVersion(pool: pg.Pool): Promise<number> {

@@ -245,6 +245,19 @@ export function verifyIngestion(input: {
   return { ok: true, deploymentId: envelope.deployment_id, internalId: credential.internal_id, credentialId: credential.id, envelope };
 }
 
+// Bounded audit retention. Pruning is deterministic (a single created_at predicate), can
+// never remove a record newer than the configured cutoff, and is invoked only after a
+// lifecycle mutation has committed, so a retention failure cannot corrupt lifecycle state.
+export async function pruneFleetAudit(
+  pool: pg.Pool,
+  retentionMs: number,
+  now: number = Date.now(),
+): Promise<number> {
+  const cutoff = new Date(now - retentionMs);
+  const deleted = await pool.query("DELETE FROM fleet_audit WHERE created_at < $1", [cutoff.toISOString()]);
+  return deleted.rowCount ?? 0;
+}
+
 export type FleetHooks = {
   // Test-only seams: force a failure at a precise point so rollback and error
   // classification can be proven deterministically. Production never sets them.
@@ -621,6 +634,13 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
       // unusable secret material, and the secret is not changed when the audit cannot
       // commit.
       await auditedLifecycleMutation("credential.rotated", id, credentialId, async (client) => {
+        // Lock the parent deployment first, then the credential: the same order issuance
+        // uses, so there is no deadlock-prone inversion. If terminal revocation has already
+        // won, rotation must not return newly usable secret material, so a revoked
+        // deployment is refused here rather than only at the credential.
+        const deployment = await client.query("SELECT state FROM deployments WHERE id=$1 FOR UPDATE", [id]);
+        if (!deployment.rowCount) throw lifecycleError(404, "deployment_not_found");
+        if (deployment.rows[0].state === "revoked") throw lifecycleError(409, "deployment_revoked");
         const locked = await client.query(
           "SELECT state FROM deployment_credentials WHERE id=$1 AND deployment_id=$2 FOR UPDATE",
           [credentialId, id],
