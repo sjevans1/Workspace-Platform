@@ -499,7 +499,7 @@ export function buildFleetService(
   // Read-only operator APIs. These form the OCP-2B contract; there are deliberately
   // no mutation or remote-execution endpoints.
   app.get("/deployments", async (r, reply) => {
-    if (!(await operator(r, reply, "mutation"))) return;
+    if (!(await operator(r, reply))) return;
     const rows = await pool.query(
       `SELECT d.id,d.workspace_deployment_id,d.alias,d.state,d.first_seen,d.last_seen,d.app_version,d.build_sha,d.schema_version,d.contract_version,
               s.telemetry
@@ -651,7 +651,7 @@ export function buildFleetService(
   const newSecret = () => randomBytes(32).toString("base64url"); // 256 bits of entropy
 
   app.post("/deployments", async (r, reply) => {
-    if (!(await operator(r, reply))) return;
+    if (!(await operator(r, reply, "mutation"))) return;
     const body = (r.body ?? {}) as any;
     const workspaceId = typeof body.workspace_deployment_id === "string" ? body.workspace_deployment_id.trim() : "";
     if (!isCanonicalDeploymentId(workspaceId)) {

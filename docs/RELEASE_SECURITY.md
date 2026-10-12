@@ -63,8 +63,21 @@ application image and the derived ClamAV image. It now covers every other image 
 production and acceptance stacks actually consume, using the same accepted policy: a
 CycloneDX SBOM, a blocking scan for fixable HIGH/CRITICAL vulnerabilities, a separate
 non-blocking report of all findings including unfixed ones for risk accounting, and exact
-image binding in both the reference and the artifact name. Nothing is waived: there is no
-ignore file, and unfixed upstream findings are reported rather than suppressed.
+image binding. Nothing is waived: there is no ignore file, and unfixed upstream findings are
+reported rather than suppressed.
+
+**Image references are single-sourced.** `scripts/w27-image-inventory.mjs` is the only place
+the scan targets are resolved. It reads `ci/ghcr-mirror-manifest.json` and `compose.yaml`,
+verifies that every manifest-owned image the runtime consumes corresponds to the authoritative
+inventory, refuses a tag-only reference for the non-mirror image, refuses a drifted reference,
+and emits the exact scan references together with digest-derived artifact slugs, which the
+workflow consumes through the environment. The workflow contains no duplicated PostgreSQL,
+Caddy or SeaweedFS digest literals, so a workflow that falls behind the inventory or the
+runtime fails instead of scanning an image the release does not consume.
+
+**Artifact names carry immutable identity.** Every SBOM and scan artifact is named with a
+digest-derived identifier, not a tag or version alone, so an artifact can be traced to the
+exact image digest that produced it.
 
 | Image | Reference used for the gate | Purpose | Classification |
 | --- | --- | --- | --- |
@@ -72,16 +85,19 @@ ignore file, and unfixed upstream findings are reported rather than suppressed.
 | ClamAV | `openjm-workspace-clamav:local` (derived from the pinned ClamAV mirror) | outbound antivirus scanning | shipped |
 | PostgreSQL | `ghcr.io/sjevans1/workspace-ci-mirror-postgres@sha256:3645570c…` | database service | shipped |
 | Caddy | `ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44…` | TLS terminator / edge | shipped |
-| Valkey | `ghcr.io/valkey-io/valkey:8.1.10-alpine` | cache service | shipped |
+| Valkey | `ghcr.io/valkey-io/valkey@sha256:081c2f5c…` | cache service | shipped |
 | SeaweedFS | `ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs@sha256:ce9e796f…` | S3-compatible object storage used by the acceptance stack | **acceptance/test dependency, not a shipped customer image** |
 
 Recorded findings from this extension, stated honestly:
 
-- **Valkey is not in the CI-H1 mirror set.** It is consumed from its own upstream GHCR
-  namespace and is therefore bound by tag rather than by an immutable digest, so its scan is
-  pinned to the exact image the Compose stack uses but is not provanced through the manifest.
-  Bringing Valkey into the mirror set with a recorded digest is the recommended follow-up; it
-  is a provenance gap, not a vulnerability waiver, and no upgrade was made to clear a scan.
+- **Valkey is immutable by digest but is not CI-H1 mirror-provenanced.** It is consumed from
+  its own upstream GHCR namespace and is pinned in `compose.yaml` to the immutable index digest
+  `sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507`, resolved from the
+  registry, so the image scanned is cryptographically the image the supported release consumes.
+  It is deliberately not described as part of the Docker Hub CI-H1 mirror set. Bringing Valkey
+  into that mirror inventory as a reviewed follow-up would remove the last provenance
+  asymmetry; the immutability requirement itself is met and no upgrade was made to clear a
+  scan.
 - **SeaweedFS is acceptance infrastructure.** It appears in the CI-H1 manifest with CI as its
   consumer and is not a service in the production Compose stack, so it is scanned for
   acceptance coverage and explicitly not labelled a shipped customer image.

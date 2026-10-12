@@ -324,32 +324,89 @@ test("repeated invalid operator credentials are bounded, and clients are isolate
   await appW27.close();
 });
 
-test("read, mutation and ingestion budgets are enforced and recover after the window", async () => {
-  // Each surface gets its own app instance, so this proves enforcement and recovery without
-  // depending on bucket state from another test. Exact per-request accounting is pinned by
-  // the limiter unit test below; here the property under test is that abuse is bounded.
-  const collect = async (call: () => Promise<any>, count: number): Promise<number[]> => {
-    const seen: number[] = [];
-    for (let i = 0; i < count; i += 1) seen.push((await call()).statusCode);
-    return seen;
-  };
+test("configured read budget controls GET /deployments and nothing else does", async () => {
+  // FLEET_RATE_LIMIT_READ=3 exactly, with the mutation budget set to a different value so the
+  // test would fail if the route were charged to the wrong namespace.
+  const app = buildFleetService(
+    pool,
+    fleetConfig({
+      FLEET_DATABASE_URL: process.env.TEST_DATABASE_URL,
+      FLEET_OPERATOR_TOKEN: TOKEN,
+      FLEET_ENCRYPTION_KEY: KEY,
+      FLEET_RATE_LIMIT_READ: "3",
+      FLEET_RATE_LIMIT_MUTATION: "9",
+    }),
+  );
+  const read = () => app.inject({ method: "GET", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}` }, remoteAddress: "10.20.1.1" });
+  for (let i = 0; i < 3; i += 1) assert.equal((await read()).statusCode, 200, `read ${i + 1} of the configured three is admitted`);
+  const fourth = await read();
+  assert.equal(fourth.statusCode, 429, "the fourth authenticated read is limited");
+  assert.ok(fourth.headers["retry-after"], "a retry-after hint is returned");
+  // The mutation budget value does not control this route: nine would have admitted more.
+  assert.equal((await read()).statusCode, 429, "the read route stays charged to the read budget");
+  await app.close();
+});
 
-  const readApp = buildFleetService(pool, abuseConfig());
-  const read = () => readApp.inject({ method: "GET", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}` }, remoteAddress: "10.9.8.1" });
-  const reads = await collect(read, 6);
-  assert.equal(reads[0], 200, "a legitimate read is served");
-  assert.ok(reads.includes(429), `read volume is bounded: ${reads.join(",")}`);
-  assert.ok((await read()).headers["retry-after"], "a retry-after hint is returned");
-  await readApp.close();
+test("configured mutation budget charges deployment registration", async () => {
+  const app = buildFleetService(
+    pool,
+    fleetConfig({
+      FLEET_DATABASE_URL: process.env.TEST_DATABASE_URL,
+      FLEET_OPERATOR_TOKEN: TOKEN,
+      FLEET_ENCRYPTION_KEY: KEY,
+      FLEET_RATE_LIMIT_MUTATION: "2",
+      FLEET_RATE_LIMIT_READ: "9",
+    }),
+  );
+  const register = (n: number) =>
+    app.inject({
+      method: "POST",
+      url: "/deployments",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      // Unique valid opaque deployment ids, so duplicate-registration behaviour cannot mask the
+      // limiter: the first two are genuine registrations, not conflicts.
+      payload: { workspace_deployment_id: deploymentIdFrom(`w27-mutbudget-${RUN}-${n}`) },
+      remoteAddress: "10.20.2.1",
+    });
+  assert.equal((await register(1)).statusCode, 201, "the first registration is admitted and created");
+  assert.equal((await register(2)).statusCode, 201, "the second registration is admitted and created");
+  const third = await register(3);
+  assert.equal(third.statusCode, 429, "registration beyond the configured mutation budget is limited");
+  // The read budget value does not control this route: nine would have admitted more.
+  assert.equal((await register(4)).statusCode, 429, "registration stays charged to the mutation budget");
+  // A read from the same client is unaffected by the exhausted mutation budget.
+  const read = await app.inject({ method: "GET", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}` }, remoteAddress: "10.20.2.1" });
+  assert.equal(read.statusCode, 200, "a read from the same client uses an independent namespace");
+  await app.close();
+});
 
-  const mutateApp = buildFleetService(pool, abuseConfig());
-  const mutate = () => mutateApp.inject({ method: "POST", url: `/deployments/${deploymentW27}/lifecycle`, headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, payload: { state: "enabled" }, remoteAddress: "10.9.8.2" });
-  const mutations = await collect(mutate, 6);
-  assert.equal(mutations[0], 200, "a legitimate lifecycle mutation is served");
-  assert.ok(mutations.includes(429), `mutation volume is bounded: ${mutations.join(",")}`);
-  await mutateApp.close();
+test("read and mutation budgets are independent namespaces for one client", async () => {
+  const app = buildFleetService(
+    pool,
+    fleetConfig({
+      FLEET_DATABASE_URL: process.env.TEST_DATABASE_URL,
+      FLEET_OPERATOR_TOKEN: TOKEN,
+      FLEET_ENCRYPTION_KEY: KEY,
+      FLEET_RATE_LIMIT_READ: "1",
+      FLEET_RATE_LIMIT_MUTATION: "1",
+    }),
+  );
+  const client = "10.20.3.1";
+  const read = () => app.inject({ method: "GET", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}` }, remoteAddress: client });
+  const mutate = (n: number) =>
+    app.inject({ method: "POST", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, payload: { workspace_deployment_id: deploymentIdFrom(`w27-independent-${RUN}-${n}`) }, remoteAddress: client });
+  assert.equal((await read()).statusCode, 200);
+  assert.equal((await read()).statusCode, 429, "the read namespace is exhausted");
+  assert.equal((await mutate(1)).statusCode, 201, "the mutation namespace is still available after reads are exhausted");
+  assert.equal((await mutate(2)).statusCode, 429, "the mutation namespace then exhausts on its own count");
+  await app.close();
+});
 
-  const ingestApp = buildFleetService(pool, abuseConfig());
+test("ingestion volume is bounded and does not replace verification", async () => {
+  const app = buildFleetService(
+    pool,
+    fleetConfig({ FLEET_DATABASE_URL: process.env.TEST_DATABASE_URL, FLEET_OPERATOR_TOKEN: TOKEN, FLEET_ENCRYPTION_KEY: KEY, FLEET_RATE_LIMIT_INGEST: "2" }),
+  );
   const freshEnvelope = () =>
     JSON.stringify(
       buildEnvelope({
@@ -360,20 +417,33 @@ test("read, mutation and ingestion budgets are enforced and recover after the wi
         now: new Date(),
       }),
     );
-  const ingest = () => ingestApp.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: freshEnvelope(), remoteAddress: "10.9.8.3" });
-  const accepted = await ingest();
-  assert.equal(accepted.statusCode, 202, "an allowed envelope is still accepted and fully verified");
-  const ingests = await collect(ingest, 4);
-  assert.ok(ingests.includes(429), `ingestion volume is bounded: ${ingests.join(",")}`);
-  // Rate limiting is not a shortcut around verification: a hostile envelope from a fresh
-  // client is rejected by the verification chain, not by the limiter.
-  const hostile = await ingestApp.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: JSON.stringify({ envelope: "openjm.workspace.telemetry-envelope.v1" }), remoteAddress: "10.9.8.9" });
+  const ingest = () => app.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: freshEnvelope(), remoteAddress: "10.20.4.1" });
+  assert.equal((await ingest()).statusCode, 202, "an allowed envelope is still accepted and fully verified");
+  await ingest();
+  assert.equal((await ingest()).statusCode, 429, "ingestion volume is bounded");
+  const hostile = await app.inject({ method: "POST", url: "/ingest", headers: { "content-type": "application/json" }, payload: JSON.stringify({ envelope: "openjm.workspace.telemetry-envelope.v1" }), remoteAddress: "10.20.4.9" });
   assert.ok([400, 401, 403, 413, 415].includes(hostile.statusCode), `verification still governs payload validity: ${hostile.statusCode}`);
-  assert.notEqual(hostile.statusCode, 429, "a fresh client is not limited before it is verified");
-  await ingestApp.close();
+  assert.notEqual(hostile.statusCode, 429, "a fresh client is verified rather than limited");
+  await app.close();
+});
 
-  // Recovery is proven deterministically by the limiter unit test below, where the clock is
-  // supplied explicitly, rather than by a process-level sleep in this test.
+test("budgets recover after the configured window elapses", async () => {
+  const app = buildFleetService(
+    pool,
+    fleetConfig({
+      FLEET_DATABASE_URL: process.env.TEST_DATABASE_URL,
+      FLEET_OPERATOR_TOKEN: TOKEN,
+      FLEET_ENCRYPTION_KEY: KEY,
+      FLEET_RATE_LIMIT_READ: "1",
+      FLEET_RATE_LIMIT_WINDOW_MS: "2000",
+    }),
+  );
+  const read = () => app.inject({ method: "GET", url: "/deployments", headers: { authorization: `Bearer ${TOKEN}` }, remoteAddress: "10.20.5.1" });
+  assert.equal((await read()).statusCode, 200, "the first read is admitted");
+  assert.equal((await read()).statusCode, 429, "the second is limited");
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  assert.equal((await read()).statusCode, 200, "the budget recovers after the window elapses");
+  await app.close();
 });
 
 test("client attribution ignores spoofed forwarding headers unless a trusted proxy is configured", () => {
