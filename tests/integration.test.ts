@@ -10990,3 +10990,25 @@ test("OCP-1A operator telemetry is authorized, canonical and secret-free", async
     `member unexpectedly authorized: ${denied.statusCode} ${denied.body}`,
   );
 });
+
+test("OCP-1B telemetry transport status is authorized and secret-free", async () => {
+  // OCP-1B: bounded operator transport status. Disabled by default, secret-free,
+  // and readable only by owner/admin.
+  const status: any = await ok("GET", "/admin/operator-telemetry/status");
+  assert.equal(status.enabled, false, "transport must be disabled by default");
+  assert.equal(status.credential_id, null);
+  assert.equal(status.endpoint_origin, null);
+  assert.equal(status.contract_version, "openjm.workspace.operator-telemetry.v1");
+  assert.equal(status.envelope_version, "openjm.workspace.telemetry-envelope.v1");
+  assert.equal(status.spool_items, 0);
+  assert.equal(status.last_failure_category, "none");
+  const raw = JSON.stringify(status);
+  for (const sentinel of ["secret", "Bearer ", "signature", "payload", "postgres://"])
+    assert.ok(!raw.includes(sentinel), `transport status leaked ${sentinel}`);
+  const member = await freshMemberActor("OCP-1B member");
+  const denied = await req("GET", "/admin/operator-telemetry/status", undefined, member);
+  assert.ok(
+    denied.statusCode === 403 || denied.statusCode === 401,
+    `member unexpectedly authorized: ${denied.statusCode} ${denied.body}`,
+  );
+});
