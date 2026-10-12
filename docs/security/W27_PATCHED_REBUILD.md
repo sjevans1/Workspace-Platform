@@ -23,7 +23,12 @@ be described or recorded as mirror-provenanced (`digestVerifiedEqual=true` does 
 
 Acceptance status: **NOT met, stopped as instructed.** The rebuild removes the originally
 reachable findings from Caddy's Go dependencies, but binary reachability on the rebuilt artifact
-reports **one remaining reachable finding: GO-2026-5932**. The release rule for this decision is
+reports **one remaining reachable finding: GO-2026-5932**, which is
+`golang.org/x/crypto/openpgp` reported as unmaintained and unsafe by design with **`Fixed in:
+N/A`**, i.e. an unfixed reachable finding rather than a fixable one. Because the approved blocking
+policy is `--ignore-unfixed`, that finding does not by itself fail the Trivy gate, but it is
+unfixed, reachable, and therefore a release-risk decision for Sol rather than something to
+adjudicate, suppress, or VEX here. It stays visible in the all-findings report. The release rule for this decision is
 explicit: if any other reachable finding remains, stop and report it, and do not create a Caddy
 VEX merely because the binary was built in-house. No VEX record exists for Caddy and none was
 created. The rebuilt binary therefore does **not** replace the current Caddy image.
