@@ -9,20 +9,27 @@ be described or recorded as mirror-provenanced (`digestVerifiedEqual=true` does 
 | Field | Value |
 | --- | --- |
 | Upstream project | `caddyserver/caddy` |
-| Upstream tag | `v2.11.7` (exact tag; resolved to commit `72dd0fb067f6d7826c7f79907670ba4a713bfe37`, matching the required baseline) |
-| Source fetch | `git clone --depth 1 --branch v2.11.7` |
-| Builder image | `golang@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c` (digest-pinned; `go version go1.26.9 linux/amd64`) |
-| Go compiler | 1.26.9 |
-| Original deps | `golang.org/x/net v0.59.0`, `golang.org/x/text v0.42.0` |
-| Patched deps | `golang.org/x/net v0.60.0` only; **`golang.org/x/text` deliberately retained at v0.42.0** (no opportunistic upgrade; the earlier x/text bump was removed as instructed) |
-| Build flags | release tags `nobadger,nomysql,nopgx`, `CGO_ENABLED=0`, `-trimpath -ldflags '-s -w'` |
-| Binary | `/w/caddy-patched.bin`, 58,056,866 bytes (pre-correction build; superseded by the corrected build) |
-| Binary sha256 | `b69def3432d3072aaed1bb035b743b0df21d1bbe1bfc31c650b026492157f3b8` |
-| Reproducer | `build/w27/build-caddy-patched.sh` (corrections applied: digest-pinned builder, minimal patch, release tags, untruncated govulncheck evidence, tag/commit proof, clean clone target) |
+| Upstream tag | `v2.11.7` |
+| Upstream commit | `72dd0fb067f6d7826c7f79907670ba4a713bfe37` (asserted in the build: the script fails with `SOURCE DRIFT` if `git rev-parse HEAD` differs) |
+| Source fetch | `git clone --depth 1 --branch v2.11.7` from `https://github.com/caddyserver/caddy.git` |
+| Builder image | `golang@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c` (digest-pinned), `go1.26.9 linux/amd64` |
+| Analysis tool | `govulncheck@v1.9.0`, pinned (not `@latest`) |
+| Original dependencies | `golang.org/x/net v0.59.0`, `golang.org/x/text v0.42.0` |
+| Patched dependencies | `golang.org/x/net v0.60.0` only; `golang.org/x/text` retained at `v0.42.0` (minimal delta, no opportunistic upgrade) |
+| Build tags | `nobadger,nomysql,nopgx` (matching the upstream release configuration) |
+| Build flags | `CGO_ENABLED=0`, `-trimpath -ldflags '-s -w'` |
+| **Frozen binary size** | **51,974,306 bytes** |
+| **Frozen binary SHA-256** | **`90e5f85f9a206ea63bdc146d75c54e0ec5c8ca4d245605f0c1570706ed4a38e5`** |
+| Binary version string | `v2.11.7+modified (72dd0fb0…)` |
+| Reachability (govulncheck v1.9.0, binary mode) | 1 affected vulnerability: `GO-2026-5932` (`Fixed in: N/A`) — the approved non-blocking residual. **Zero reachable HIGH/CRITICAL.** |
+| Reproducer | `build/w27/build-caddy-patched.sh` (drifting source is fatal; no early-exit pipelines; re-runnable from a clean tree) |
 
-Acceptance status after the corrected rebuild: **the previously blocking reachable
-HIGH/toolchain findings are cleared**, and binary reachability on the corrected artifact reports
-**exactly one residual reachable item: GO-2026-5932**, which is
+The superseded pre-correction build produced `b69def3432d3072aaed1bb035b743b0df21d1bbe1bfc31c650b026492157f3b8` at 58,056,866 bytes, without the release build tags and with an unnecessary `x/text` bump. That value is retained only as history and must not be used for packaging.
+
+Acceptance status after the corrected rebuild: **the binary itself is qualified.** The previously
+blocking reachable HIGH/toolchain findings are cleared, and the only reachable item is the
+already-approved non-blocking residual `GO-2026-5932`. Image packaging, GHCR publication and
+runtime acceptance are the remaining steps and are not claimed here., which is
 `golang.org/x/crypto/openpgp` reported as unmaintained and unsafe by design with **`Fixed in:
 N/A`**, i.e. an unfixed reachable finding rather than a fixable one. Because the approved blocking
 policy is `--ignore-unfixed`, that finding does not by itself fail the Trivy gate, but it is
