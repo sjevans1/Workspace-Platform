@@ -35,7 +35,7 @@ Required areas:
 - trusted TLS/Secure-cookie/WSS and fleet transport review;
 - standalone operation with OCP unavailable or disabled.
 
-OCP hardening carried from #198 is explicitly bounded inside #210. Existing W27a issue #112 remains the full shipped-image SBOM/vulnerability-policy evidence lane, and CI-H1 #183 remains the GHCR mirror + immutable digest-pinning supply-chain lane. Neither is a separate feature wave.
+OCP hardening carried from #198 is explicitly bounded inside #210. Existing W27a issue #112 remains the full shipped-image SBOM/vulnerability-policy evidence lane. CI-H1 #183 is already implemented and closed; W27 must not rebuild it.
 
 ### Manual accessibility — NVDA (#211)
 
