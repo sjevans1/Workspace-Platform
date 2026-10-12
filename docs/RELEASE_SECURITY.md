@@ -50,7 +50,10 @@ The release gate previously applied its blocking scan only to the Workspace appl
 
 ### Phase 1: evidence collection never decides and never aborts
 
-`scripts/ci/w27-collect-evidence.sh` collects evidence for all six images. Every step is `continue-on-error`, so a scanner failure is recorded in `w27-evidence/<image>/collection-errors.txt` and the remaining images are still collected. One broken image can no longer hide the state of the other five.
+`scripts/ci/w27-collect-evidence.sh` collects evidence for all six images. Every step is `continue-on-error`, so a scanner failure is recorded in `w27-evidence/<image>/collection-errors.txt` and the remaining images are still collected. One broken image can no longer hide the state of the other five. The evaluator requires that
+record to exist for every one of the six images and to be empty: any recorded collection, scanner or
+tooling failure fails the gate even when the other evidence for that image still parses, so the
+fail-closed rule covers the collection record itself and not only the findings.
 
 Retained per image: the exact image identity (reference, resolved image id, provenance class), a CycloneDX SBOM, the raw scanner JSON, the human-readable all-findings report, the blocking-policy result, reachability evidence where the policy requires it, and the VEX where one applies.
 
@@ -65,7 +68,8 @@ Retained per image: the exact image identity (reference, resolved image id, prov
 - zero unadjudicated fixable HIGH/CRITICAL;
 - zero reachable blocking HIGH/CRITICAL;
 - the exact PostgreSQL/gosu VEX validation;
-- every required reachability record.
+- every required reachability record;
+- an existing, readable and empty `collection-errors.txt` for every one of the six images.
 
 Missing, unreadable or malformed evidence is a FAIL.
 

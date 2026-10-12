@@ -76,7 +76,8 @@
       "trivy-fixable.json"
     ],
     "resolverRecord": "resolver.json",
-    "note": "Missing, unreadable or malformed evidence is a FAIL. A scanner failure is recorded in collection-errors.json and does not stop collection of the other images."
+    "collectionErrorRecord": "collection-errors.txt",
+    "note": "Missing, unreadable or malformed evidence is a FAIL. A scanner failure is recorded in collection-errors.txt and does not stop collection of the other images. The evaluator requires that record to exist, to be readable and to be empty for every one of the six images, so any recorded collection, scanner or tooling failure fails the gate even when the remaining evidence for that image still parses."
   },
   "images": [
     {

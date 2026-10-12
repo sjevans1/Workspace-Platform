@@ -75,7 +75,10 @@ report is published with the evidence:
 - zero reachable blocking HIGH/CRITICAL, evaluated against the exact analysed binary identity;
 - the exact PostgreSQL/gosu VEX validation, whose finding list must equal the fixable set the
   blocking scan actually reported;
-- every required reachability record, and no reachability record where the policy requires none.
+- every required reachability record, and no reachability record where the policy requires none;
+- an existing, readable and empty `collection-errors.txt` for every one of the six images, so any
+  recorded collection, scanner or tooling failure fails the gate even when the rest of that image's
+  evidence still parses.
 
 Missing, unreadable or malformed evidence is a FAIL.
 

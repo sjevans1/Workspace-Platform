@@ -195,6 +195,7 @@ export class AggregateEvaluator {
     }
 
     this.checkIdentity(spec, dir);
+    this.checkCollectionErrors(spec, dir);
     const sbom = this.checkSbom(spec, dir);
     const raw = this.checkTrivy(spec, dir, "trivy-raw.json", "raw scanner JSON");
     this.checkAllFindingsReport(spec, dir);
@@ -225,6 +226,23 @@ export class AggregateEvaluator {
     summary.sbomComponents = sbom?.components?.length ?? null;
     summary.failures = this.failures.slice(before);
     this.images.push(summary);
+  }
+
+  // Phase 1 records every collection, scanner and tooling failure per image. The gate fails
+  // closed on that record itself: an image whose evidence otherwise parses is still a FAIL when the
+  // collector recorded a failure for it, so a scanner that failed silently cannot pass on a stale
+  // or partial artifact set.
+  checkCollectionErrors(spec, dir) {
+    const name = spec.logicalName;
+    const fileName = this.policy.evidence?.collectionErrorRecord ?? "collection-errors.txt";
+    const text = this.readText(path.join(dir, fileName), `${name}/${fileName} (collection error record)`);
+    if (text === null) return;
+    const recorded = text.trim();
+    if (recorded === "") return;
+    const lines = recorded.split("\n");
+    this.fail(
+      `${name}: phase 1 recorded ${lines.length} collection error(s) in ${fileName}; the gate fails closed on any recorded collection, scanner or tooling failure: ${lines[0]}`,
+    );
   }
 
   checkIdentity(spec, dir) {
