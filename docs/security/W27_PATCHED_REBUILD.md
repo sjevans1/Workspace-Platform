@@ -121,7 +121,10 @@ worker binaries), SBOM, all-findings report, GHCR publication as
 | OCI metadata | classification `patched-upstream`, intendedUse `acceptance-only`, upstream tag/commit, weed binary SHA-256 and builder digest |
 | `weed version` | `version 30GB 4.48 linux amd64` |
 | Runtime preserved | Alpine Linux v3.24; `/entrypoint.sh` and `/usr/bin/weed-volume` present; `Entrypoint=[/entrypoint.sh]`, `Cmd=[mini -dir=/data]` |
-| Runtime layout note | `/usr/bin/worker` does not exist in the upstream 4.48 image. Nothing was removed by this rebuild; the upstream runtime simply does not ship that path, so no worker binary is preserved there. |
+| Runtime base pinning | `docker.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d` (upstream tag 4.48), verified as `linux/amd64`; the build rejects a runtime-base mismatch |
+| Upstream Rust artifact `/usr/bin/weed-volume` | exists, **39,475,480 bytes**, sha256 `8b271bc326f593c1b3b7f5d90091b0ef789c89023c34dec908c919f8614384d1`, real ELF binary, preserved unchanged |
+| Upstream Rust artifact `/usr/bin/weed-worker` | exists, **252,739,408 bytes**, sha256 `9f10828f88b4ca4e1b770af68bbe5c9a38ca06623b187cfe6fd08238e9677fca`, real ELF binary, preserved unchanged |
+| Runtime layout note | An earlier version of this record claimed the upstream image ships no worker because it checked `/usr/bin/worker`, which is absent. That was the wrong path: upstream 4.48 installs the Rust maintenance worker at `/usr/bin/weed-worker` and its own `docker/entrypoint.sh` executes exactly that path. The corrected inventory above is authoritative. Only `/usr/bin/weed` is replaced; both Rust artifacts are inherited untouched. |
 
 Outstanding for this artifact: SBOM, raw Trivy JSON, all-findings report, GHCR publication to an
 immutable digest, and the S3 acceptance set (bucket create, upload, download, list, delete and the

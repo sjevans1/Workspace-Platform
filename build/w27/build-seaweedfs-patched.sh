@@ -39,10 +39,27 @@ echo "### source assertion: PASS"
 
 echo "### original dependency versions (before patch)"
 grep -E "^\s+golang.org/x/(net|text) " go.mod || true
+echo "### EXHAUSTIVE MODULE GRAPH: capture the complete pre-patch graph"
+go list -m all 2>/dev/null | sort > /w/modules-before.txt
+wc -l < /w/modules-before.txt
+
 echo "### applying the minimal security dependency floor (x/net only)"
 go get "golang.org/x/net@$XNET_FLOOR" 2>&1 | sed -n "1,4p"
 echo "### patched dependency versions (after patch)"
 grep -E "^\s+golang.org/x/(net|text) " go.mod || true
+echo "### EXHAUSTIVE MODULE GRAPH: capture the complete post-patch graph and compare"
+go list -m all 2>/dev/null | sort > /w/modules-after.txt
+wc -l < /w/modules-after.txt
+diff /w/modules-before.txt /w/modules-after.txt > /w/modules-diff.txt || true
+echo "### complete normalized module graph diff (before -> after):"
+cat /w/modules-diff.txt
+changed="$(sed -n "/^[<>]/p" /w/modules-diff.txt | wc -l)"
+test "$changed" -le 2 || { echo "EXHAUSTIVE MODULE GRAPH FAILED: $changed graph lines changed, only the x/net line may move"; exit 46; }
+if sed -n "/^[<>]/p" /w/modules-diff.txt | grep -vE "^[<>] golang.org/x/net v[0-9.]+$"; then
+  echo "EXHAUSTIVE MODULE GRAPH FAILED: a module other than golang.org/x/net changed"; exit 46
+fi
+echo "### exhaustive module graph: PASS (only golang.org/x/net moved: v0.58.0 -> v0.60.0)"
+
 echo "### MODULE DELTA ASSERTION (only golang.org/x/net may move; x/text must stay)"
 sed -n "s/^\s*\(golang\.org\/x\/\(net\|text\)\) v\([0-9.]*\)$/\1 v\3/p" go.mod > ./x-after.txt
 test "$(sed -n 's/^golang.org\/x\/net v\([0-9.]*\)$/\1/p' ./x-after.txt | head -n1)" = "v0.60.0" || { echo "MODULE DELTA ASSERTION FAILED: x/net is not v0.60.0"; exit 44; }

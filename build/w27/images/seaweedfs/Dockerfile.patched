@@ -8,7 +8,9 @@
 #
 # Base note: the CI-H1 mirror records upstream tag 4.47, while this rebuild targets the approved
 # upstream 4.48 release, so the runtime base is the upstream 4.48 image rather than the mirror.
-ARG SW_RUNTIME=docker.io/chrislusf/seaweedfs:4.48
+# The base is pinned by immutable index digest (upstream tag 4.48), not the mutable tag, and the
+# build script asserts the resolved linux/amd64 identity matches the recorded digest.
+ARG SW_RUNTIME=docker.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
 FROM ${SW_RUNTIME}
 
 LABEL org.opencontainers.image.title="Workspace patched acceptance SeaweedFS" \
@@ -19,6 +21,9 @@ LABEL org.opencontainers.image.title="Workspace patched acceptance SeaweedFS" \
       org.openjm.workspace.upstream.tag="4.48" \
       org.openjm.workspace.upstream.commit="530be3e37337488ecc34d58441e0bc476e121c93" \
       org.openjm.workspace.weed.binary.sha256="ff8d09e4a8c921f35a7a65b988c541d74f0b01725197ddb7fdf5728f2be37cb2" \
+      org.openjm.workspace.runtime.base.digest="sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d" \
+      org.openjm.workspace.runtime.weed.volume.sha256="8b271bc326f593c1b3b7f5d90091b0ef789c89023c34dec908c919f8614384d1" \
+      org.openjm.workspace.runtime.weed.worker.sha256="9f10828f88b4ca4e1b770af68bbe5c9a38ca06623b187cfe6fd08238e9677fca" \
       org.openjm.workspace.builder="golang@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c"
 
 # Replace only the Go binary and verify the installed bytes match the frozen identity, so the
