@@ -7,7 +7,12 @@
 // material. Because the console ships no client-side JavaScript, the token also cannot
 // appear in a browser bundle.
 //
-// This is a deliberately minimal bootstrap mechanism. Individual OpenJM operator
+// Invalidation semantics, stated exactly: the cookie is a signed payload of a random session
+// id and an expiry. Rotating FLEET_OPERATOR_TOKEN stops future sign-ins with the old bootstrap
+// credential but does NOT invalidate an already-issued cookie, because the token is only used
+// during login verification. Rotating FLEET_CONSOLE_SESSION_SECRET invalidates every existing
+// cookie at once, since the signature no longer verifies. Otherwise a stolen cookie stays
+// usable until its TTL expires. This is a deliberately minimal bootstrap mechanism. Individual OpenJM operator
 // identity, per-operator authorisation and session storage are W27 hardening items.
 
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";

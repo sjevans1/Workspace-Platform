@@ -1,0 +1,4 @@
+docker.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+platform=linux/amd64
+weed-worker=/usr/bin/weed-worker 252739408 9f10828f88b4ca4e1b770af68bbe5c9a38ca06623b187cfe6fd08238e9677fca elf
+weed-volume=/usr/bin/weed-volume 39475480 8b271bc326f593c1b3b7f5d90091b0ef789c89023c34dec908c919f8614384d1 elf

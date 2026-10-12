@@ -25,6 +25,14 @@ import {
   type TelemetryEnvelope,
 } from "../../../packages/operations/telemetry-transport.ts";
 import { OPERATOR_TELEMETRY_SUPPORTED_SCHEMAS, isCanonicalDeploymentId, validateOperatorTelemetryV1 } from "../../../packages/operations/operator-telemetry.ts";
+import {
+  FLEET_RATE_LIMIT_RULES,
+  RateLimiter,
+  clientKey,
+  rateLimitPolicy,
+  rateLimitedBody,
+  type RateLimitPolicy,
+} from "../../../packages/security/rate-limit.ts";
 
 export { runFleetMigrations, fleetSchemaVersion, FLEET_MIGRATIONS } from "./migrations.ts";
 import { runFleetMigrations } from "./migrations.ts";
@@ -41,6 +49,11 @@ export type FleetConfig = {
   historyLimit: number;
   maxEnvelopeBytes: number;
   replayRetentionMs: number;
+  // Bounded audit retention: how long an audit record may live, and the maximum number of
+  // records a single pruning pass may remove so no pass becomes an unbounded delete.
+  auditRetentionMs: number;
+  auditPruneBatch: number;
+  rateLimit: RateLimitPolicy;
 };
 
 // Fail closed on security-sensitive misconfiguration. Workspace never needs to
@@ -75,6 +88,11 @@ export function fleetConfig(env: Record<string, string | undefined>): FleetConfi
     maxEnvelopeBytes: bounded(env.FLEET_MAX_ENVELOPE_BYTES, 131_072, 4_096, 1_048_576),
     // Bounded replay retention: state is pruned deterministically on each accept.
     replayRetentionMs: bounded(env.FLEET_REPLAY_RETENTION_MS, 86_400_000, 60_000, 2_592_000_000),
+    // Safe default of 90 days, clamped to a 1 day minimum and a 730 day maximum.
+    auditRetentionMs: bounded(env.FLEET_AUDIT_RETENTION_MS, 90 * 86_400_000, 86_400_000, 730 * 86_400_000),
+    // At most 500 rows per pruning pass, clamped to 1..5000.
+    auditPruneBatch: bounded(env.FLEET_AUDIT_PRUNE_BATCH, 500, 1, 5_000),
+    rateLimit: rateLimitPolicy(env),
   };
 }
 
@@ -245,6 +263,44 @@ export function verifyIngestion(input: {
   return { ok: true, deploymentId: envelope.deployment_id, internalId: credential.internal_id, credentialId: credential.id, envelope };
 }
 
+// Bounded audit retention. Pruning is deterministic (a single created_at predicate), can
+// never remove a record newer than the configured cutoff, and is invoked only after a
+// lifecycle mutation has committed, so a retention failure cannot corrupt lifecycle state.
+export async function pruneFleetAudit(
+  pool: pg.Pool,
+  retentionMs: number,
+  batchSize: number,
+  now: number = Date.now(),
+): Promise<number> {
+  const cutoff = new Date(now - retentionMs).toISOString();
+  // One pass removes at most `batchSize` of the OLDEST eligible rows, so pruning can never
+  // become an unexpectedly large single delete (lock and WAL burst) and can never touch a
+  // row at or newer than the cutoff. Repeated passes converge.
+  const deleted = await pool.query(
+    `DELETE FROM fleet_audit WHERE id IN (
+       SELECT id FROM fleet_audit WHERE created_at < $1 ORDER BY created_at ASC LIMIT $2
+     )`,
+    [cutoff, batchSize],
+  );
+  return deleted.rowCount ?? 0;
+}
+
+// Retention is best-effort and runs outside the lifecycle transaction, after it has
+// committed, so a pruning failure can never roll back or corrupt a completed lifecycle
+// mutation.
+export async function pruneFleetAuditSafely(
+  pool: pg.Pool,
+  config: { auditRetentionMs: number; auditPruneBatch: number },
+  hooks?: FleetHooks,
+): Promise<number> {
+  try {
+    await hooks?.beforeAuditPrune?.();
+    return await pruneFleetAudit(pool, config.auditRetentionMs, config.auditPruneBatch);
+  } catch {
+    return 0;
+  }
+}
+
 export type FleetHooks = {
   // Test-only seams: force a failure at a precise point so rollback and error
   // classification can be proven deterministically. Production never sets them.
@@ -254,6 +310,7 @@ export type FleetHooks = {
   // Awaited inside the audited lifecycle transaction, after the row lock is held, so a
   // concurrent transition can be raced deterministically in tests.
   duringLifecycleTransaction?: (context: { action: string; deploymentId: string | null }) => Promise<void>;
+  beforeAuditPrune?: () => Promise<void> | void;
 };
 
 // Bounded client-facing lifecycle failures, so not-found and terminal-conflict results
@@ -270,20 +327,63 @@ function validation_payload(payload: string): any {
   }
 }
 
-export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: FleetHooks): FastifyInstance {
+export function buildFleetService(
+  pool: pg.Pool,
+  config: FleetConfig,
+  hooks?: FleetHooks,
+  // Test-only seams: the default rules and limiter are the production ones.
+  seams?: { rules?: typeof FLEET_RATE_LIMIT_RULES; limiter?: RateLimiter },
+): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: config.maxEnvelopeBytes + 1024 });
 
-  const operator = async (r: any, reply: any) => {
+  // Rule lookup is per name and falls back to the production rule, so an incomplete rule
+  // set (a test seam, or a future caller) can never leave a security control with an
+  // undefined window and turn it into a server error.
+  // Budgets come from validated configuration (see rate-limit.ts), so an operator can tune
+  // them within safe bounds and an incomplete override can never leave a rule undefined.
+  const ruleFor = (name: keyof typeof FLEET_RATE_LIMIT_RULES) => config.rateLimit.rules[name] ?? FLEET_RATE_LIMIT_RULES[name];
+  const limiter = seams?.limiter ?? new RateLimiter(config.rateLimit.maxKeys);
+  const clientOf = (r: any): string =>
+    clientKey(
+      (r.headers ?? {}) as Record<string, unknown>,
+      r.socket?.remoteAddress ?? r.ip,
+      config.rateLimit.trustedClientIpHeader,
+      config.rateLimit.trustedClientIpHeader !== null,
+    );
+  // Returns false when the request was rejected, having already sent a bounded 429.
+  const withinBudget = (r: any, reply: any, rule: { limit: number; windowMs: number }, prefix: string, now = Date.now()): boolean => {
+    const decision = limiter.check(`${prefix}:${clientOf(r)}`, rule, now);
+    if (decision.allowed) return true;
+    reply.code(429).header("retry-after", String(decision.retryAfterSeconds)).send(rateLimitedBody());
+    return false;
+  };
+
+  // The operator guard consumes a strict failure budget before answering 401 and a
+  // generous read or mutation budget before serving, so a hostile client cannot hammer
+  // authentication and cannot starve another client's budget.
+  const operator = async (r: any, reply: any, mode: "read" | "mutation" = "read") => {
     const header = String(r.headers.authorization ?? "");
-    if (!header.startsWith("Bearer ") || !operatorTokenMatches(header.slice(7), config.operatorTokenHash)) {
+    const authorized = header.startsWith("Bearer ") && operatorTokenMatches(header.slice(7), config.operatorTokenHash);
+    if (!authorized) {
+      const perClient = withinBudget(r, reply, ruleFor("operatorAuthFailure"), "operator-auth-failure");
+      if (!perClient) return false;
+      if (!limiter.check("operator-auth-failure-global", ruleFor("operatorAuthFailureGlobal")).allowed) {
+        reply.code(429).header("retry-after", "60").send(rateLimitedBody());
+        return false;
+      }
       reply.code(401).send({ error: "Fleet operator credential required" });
       return false;
     }
-    return true;
+    const rule = mode === "mutation" ? ruleFor("operatorMutation") : ruleFor("operatorRead");
+    return withinBudget(r, reply, rule, mode === "mutation" ? "operator-mutation" : "operator-read");
   };
 
   // Ingestion: the production OCP-1B receiver.
   app.post("/ingest", async (r, reply) => {
+    // Abuse budget first, purely as a bound on volume. Every allowed request still goes
+    // through the full verification chain below: size, versions, credential, binding,
+    // timestamp, digest, signature, canonical payload and replay.
+    if (!withinBudget(r, reply, ruleFor("ingestion"), "ingest")) return;
     const rawBody = typeof r.body === "string" ? r.body : JSON.stringify(r.body ?? null);
     let envelope: TelemetryEnvelope | null = null;
     try {
@@ -526,6 +626,9 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
         detail ? String(detail).slice(0, 64).replace(/[\u0000-\u001f\u007f]/g, "") : null,
       ]);
       await client.query("COMMIT");
+      // Retention runs after the commit, just past the transaction, so a pruning failure can
+      // never roll back or corrupt the lifecycle mutation that just succeeded.
+      await pruneFleetAuditSafely(pool, config, hooks);
       return result;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -548,7 +651,7 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   const newSecret = () => randomBytes(32).toString("base64url"); // 256 bits of entropy
 
   app.post("/deployments", async (r, reply) => {
-    if (!(await operator(r, reply))) return;
+    if (!(await operator(r, reply, "mutation"))) return;
     const body = (r.body ?? {}) as any;
     const workspaceId = typeof body.workspace_deployment_id === "string" ? body.workspace_deployment_id.trim() : "";
     if (!isCanonicalDeploymentId(workspaceId)) {
@@ -582,7 +685,7 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   });
 
   app.post("/deployments/:id/credentials", async (r, reply) => {
-    if (!(await operator(r, reply))) return;
+    if (!(await operator(r, reply, "mutation"))) return;
     const id = String((r.params as any).id);
     const credentialId = randomUUID();
     let secret = "";
@@ -612,7 +715,7 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   });
 
   app.post("/deployments/:id/credentials/:credentialId/rotate", async (r, reply) => {
-    if (!(await operator(r, reply))) return;
+    if (!(await operator(r, reply, "mutation"))) return;
     const { id, credentialId } = r.params as any;
     let secret = "";
     try {
@@ -621,6 +724,13 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
       // unusable secret material, and the secret is not changed when the audit cannot
       // commit.
       await auditedLifecycleMutation("credential.rotated", id, credentialId, async (client) => {
+        // Lock the parent deployment first, then the credential: the same order issuance
+        // uses, so there is no deadlock-prone inversion. If terminal revocation has already
+        // won, rotation must not return newly usable secret material, so a revoked
+        // deployment is refused here rather than only at the credential.
+        const deployment = await client.query("SELECT state FROM deployments WHERE id=$1 FOR UPDATE", [id]);
+        if (!deployment.rowCount) throw lifecycleError(404, "deployment_not_found");
+        if (deployment.rows[0].state === "revoked") throw lifecycleError(409, "deployment_revoked");
         const locked = await client.query(
           "SELECT state FROM deployment_credentials WHERE id=$1 AND deployment_id=$2 FOR UPDATE",
           [credentialId, id],
@@ -643,7 +753,7 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   });
 
   app.post("/deployments/:id/credentials/:credentialId/revoke", async (r, reply) => {
-    if (!(await operator(r, reply))) return;
+    if (!(await operator(r, reply, "mutation"))) return;
     const { id, credentialId } = r.params as any;
     try {
       // A credential is never revoked silently: revocation and its audit commit
@@ -666,7 +776,7 @@ export function buildFleetService(pool: pg.Pool, config: FleetConfig, hooks?: Fl
   });
 
   app.post("/deployments/:id/lifecycle", async (r, reply) => {
-    if (!(await operator(r, reply))) return;
+    if (!(await operator(r, reply, "mutation"))) return;
     const id = String((r.params as any).id);
     const target = lifecycleStateFor(((r.body ?? {}) as any).state);
     if (!target) {

@@ -4,6 +4,8 @@
 // never sent to the browser, never placed in a client bundle (this console ships no
 // client-side JavaScript at all), and never included in an error surfaced to a user.
 
+import { rateLimitPolicy, type RateLimitPolicy } from "../../../packages/security/rate-limit.ts";
+
 export type FleetConsoleConfig = {
   baseUrl: string;
   operatorToken: string;
@@ -18,6 +20,7 @@ export type FleetConsoleConfig = {
   sessionTtlMs: number;
   requestTimeoutMs: number;
   secureCookie: boolean;
+  rateLimit: RateLimitPolicy;
 };
 
 const bounded = (raw: string | undefined, fallback: number, min: number, max: number): number => {
@@ -55,6 +58,7 @@ export function fleetConsoleConfig(env: Record<string, string | undefined>): Fle
     // Production mode through EITHER mechanism always yields a Secure cookie; the
     // explicit setting can only add protection outside production, never remove it.
     secureCookie: production || String(env.FLEET_CONSOLE_SECURE_COOKIE ?? "").toLowerCase() === "true",
+    rateLimit: rateLimitPolicy(env),
   };
 }
 

@@ -7,6 +7,12 @@
 // console ships no client-side JavaScript at all, and its content security policy
 // forbids scripts, so there is no client bundle for a secret to leak into.
 
+import {
+  FLEET_RATE_LIMIT_RULES,
+  RateLimiter,
+  clientKey,
+  rateLimitedBody,
+} from "../../../packages/security/rate-limit.ts";
 import { readFileSync } from "node:fs";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
@@ -75,6 +81,8 @@ export function buildFleetConsole(
   config: FleetConsoleConfig,
   dependencies?: {
     client?: FleetClient;
+    // Test-only seam for the sign-in budgets; production uses the shared defaults.
+    rules?: typeof FLEET_RATE_LIMIT_RULES;
     // Verifies a submitted bootstrap credential server-side. Production always uses the
     // real OCP-2A check; injecting it keeps the sign-in path deterministically testable.
     verifier?: (token: string) => Promise<{ ok: true } | { ok: false; error: "unauthorized" | "unreachable" | "timeout" | "server_error" }>;
@@ -112,6 +120,28 @@ export function buildFleetConsole(
 
   const session = (request: any) => readSession(parseCookies(request.headers.cookie)[FLEET_SESSION_COOKIE], config.sessionSecret);
 
+  // Bounded protection for the bootstrap credential: repeated sign-in attempts are the only
+  // externally reachable way to guess it, so failures get a strict per-client budget and a
+  // separate overall budget, and the client key never contains the credential itself.
+  // Sign-in budgets come from validated configuration, so they are tunable within safe
+  // bounds and can never be undefined.
+  const signInRule = (name: keyof typeof FLEET_RATE_LIMIT_RULES) => config.rateLimit.rules[name] ?? FLEET_RATE_LIMIT_RULES[name];
+  const limiter = new RateLimiter(config.rateLimit.maxKeys);
+  const consoleClient = (request: any): string =>
+    clientKey(
+      (request.headers ?? {}) as Record<string, unknown>,
+      request.socket?.remoteAddress ?? request.ip,
+      config.rateLimit.trustedClientIpHeader,
+      config.rateLimit.trustedClientIpHeader !== null,
+    );
+  const signInBudget = (request: any, reply: any, rule: { limit: number; windowMs: number }, prefix: string): boolean => {
+    const decision = limiter.check(`${prefix}:${consoleClient(request)}`, rule);
+    if (decision.allowed) return true;
+    reply.code(429).header("retry-after", String(decision.retryAfterSeconds)).type("text/html; charset=utf-8");
+    reply.send(layout({ title: "Sign in", nav: "overview", body: renderLogin("Too many sign-in attempts. Wait a moment and try again.") }));
+    return false;
+  };
+
   const page = (reply: any, request: any, status: number, nav: NavKey, title: string, body: string, refreshedAt: string | null = null, serviceNotice: string | null = null) => {
     if (!session(request)) {
       reply.code(303).header("location", "/login").send("");
@@ -129,6 +159,7 @@ export function buildFleetConsole(
   });
 
   app.post("/login", async (request, reply) => {
+    if (!signInBudget(request, reply, signInRule("consoleLogin"), "console-login")) return;
     const submitted = String((request.body as any)?.token ?? "");
     if (!submitted) {
       reply.code(400).type("text/html; charset=utf-8").send(layout({ title: "Sign in", nav: "overview", body: renderLogin("Enter the fleet operator credential.") }));
@@ -140,6 +171,7 @@ export function buildFleetConsole(
       ? dependencies.verifier(submitted)
       : createFleetClient({ baseUrl: config.baseUrl, operatorToken: submitted, timeoutMs: config.requestTimeoutMs }).listDeployments());
     if (!check.ok) {
+      if (!signInBudget(request, reply, signInRule("consoleLoginFailure"), "console-login-failure")) return;
       const message =
         check.error === "unauthorized"
           ? "That fleet operator credential was not accepted."

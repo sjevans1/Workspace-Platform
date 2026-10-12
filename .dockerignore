@@ -12,3 +12,12 @@ playwright-report
 **/*.tsbuildinfo
 
 **/next-env.d.ts
+
+# W27 aggregate gate. The gate's whole claim is that the image it scans is the image the release
+# consumes. Neither of these paths exists in a CI checkout, but both are produced by W27 tooling
+# inside the working tree, and `COPY . .` would otherwise bake them into a locally built release
+# image: the committed evidence directory would be scanned as an SBOM artifact, and the transient
+# upstream clone is 250 MB of source that is not part of the release. Excluding them keeps a local
+# build byte-identical to the CI build instead of silently scanning something else.
+w27-evidence
+build/w27/seaweedfs

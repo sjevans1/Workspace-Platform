@@ -14,6 +14,18 @@ on:
         description: "Copy upstream images into GHCR and record mirror digests"
         type: boolean
         default: false
+      w27_patched:
+        description: "W27: build and qualify the patched-upstream Caddy and SeaweedFS images (not mirrors)"
+        type: boolean
+        default: false
+      w27_publish:
+        description: "W27: push the patched images after qualification"
+        type: boolean
+        default: false
+      w27_release_tag:
+        description: "W27: provenance tag to record for this patched-image qualification"
+        type: string
+        default: "w27-manual"
   schedule:
     # Low-frequency drift check (Mondays 06:17 UTC). Verify only.
     - cron: "17 6 * * 1"
@@ -24,6 +36,12 @@ permissions:
 
 jobs:
   mirror:
+    # Runs for the scheduled Monday upstream-drift check, in verify-only mode: the verify step
+    # selects --verify unless the event is a push or a dispatch that explicitly requests
+    # refresh=true. Also runs for a manual dispatch that requests a refresh. The patched-artifact
+    # jobs below are governed separately by inputs.w27_patched, so a patched-only dispatch never
+    # runs this job.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.refresh == true)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -81,3 +99,182 @@ jobs:
           # only after review; this workflow never pushes to the repository.
           git --no-pager diff --stat -- ci/ghcr-mirror-manifest.json || true
           git --no-pager diff -- ci/ghcr-mirror-manifest.json || true
+
+  # ---------------------------------------------------------------------------------------------
+  # W27 patched-upstream artifacts. These are NOT mirrors and never enter
+  # ci/ghcr-mirror-manifest.json: the CI-H1 mirror job above stays a byte-for-byte mirror operation
+  # with its own digestVerifiedEqual semantics. These jobs run only when w27_patched is selected.
+  # ---------------------------------------------------------------------------------------------
+  w27_caddy:
+    name: "W27 patched Caddy (shipped-runtime, not a mirror)"
+    # A normal mirror refresh must never build or publish a patched artifact: this job requires the
+    # explicit w27_patched dispatch input, not merely a dispatch event.
+    if: github.event_name == 'workflow_dispatch' && inputs.w27_patched == true
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/sjevans1/workspace-runtime-caddy
+      TAG: ${{ inputs.w27_release_tag }}
+      EXPECTED_BINARY_SHA: 90e5f85f9a206ea63bdc146d75c54e0ec5c8ca4d245605f0c1570706ed4a38e5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: "Log in to GHCR with the repository token"
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: "Reproduce the binary from exact upstream source and check the module graph"
+        run: bash build/w27/build-caddy-patched.sh
+      - name: "Verify frozen binary SHA"
+        run: |
+          set -euo pipefail
+          got="$(sha256sum .w27-evidence/caddy-patched.bin | cut -d' ' -f1)"
+          test "$got" = "$EXPECTED_BINARY_SHA" || { echo "binary identity mismatch: $got"; exit 1; }
+          echo "binary identity verified: $got"
+      - name: "Build the patched runtime and verify the installed binary"
+        run: |
+          set -euo pipefail
+          ctx="$(mktemp -d)"
+          cp build/w27/images/caddy/Dockerfile.patched "$ctx/Dockerfile"
+          cp .w27-evidence/caddy-patched.bin "$ctx/caddy-patched.bin"
+          docker build -f "$ctx/Dockerfile" -t "$IMAGE:$TAG" "$ctx"
+          rm -rf "$ctx"
+          installed="$(docker run --rm --entrypoint sha256sum "$IMAGE:$TAG" /usr/bin/caddy | cut -d' ' -f1)"
+          test "$installed" = "$EXPECTED_BINARY_SHA" || { echo "installed binary mismatch: $installed"; exit 1; }
+          echo "installed /usr/bin/caddy verified: $installed"
+          docker run --rm --entrypoint /usr/bin/caddy "$IMAGE:$TAG" version
+          docker run --rm --entrypoint /usr/bin/caddy "$IMAGE:$TAG" validate --config /etc/caddy/Caddyfile
+      - name: "Generate SBOM"
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.IMAGE }}:${{ env.TAG }}
+          format: spdx-json
+          output-file: caddy-w27-sbom.spdx.json
+      - name: "Install pinned Trivy CLI and record the scanner version"
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz"
+          echo "${EXPECTED_SHA}  /tmp/trivy.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version | tee trivy-version.txt
+
+      - name: "Raw Trivy JSON (all severities, unfixed included)"
+        run: trivy image --format json --scanners vuln --output caddy-w27-trivy-raw.json "$IMAGE:$TAG"
+      - name: "Human-readable all-findings report"
+        run: trivy image --format table --scanners vuln --output caddy-w27-trivy-all-findings.txt "$IMAGE:$TAG"
+      - name: "Blocking policy - zero unadjudicated fixable HIGH/CRITICAL"
+        run: trivy image --format json --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --output caddy-w27-trivy-blocking.json "$IMAGE:$TAG"
+      - name: "Reachability evidence and residual check"
+        run: |
+          set -euo pipefail
+          cp .w27-evidence/caddy-patched-build.txt caddy-w27-govulncheck.txt
+          grep -E "Vulnerability #|Fixed in:|affected by" .w27-evidence/caddy-patched-build.txt > caddy-w27-reachability-summary.txt || true
+          sed -n '/^Vulnerability #/,+6p' .w27-evidence/caddy-patched-build.txt | grep -q "Fixed in: [^N]" && { echo "a reachable finding reports an available fix; blocking"; exit 1; } || true
+          echo "only unfixed reachable items remain, headed by the approved residual GO-2026-5932"
+      - name: "Publish immutable digest"
+        id: publish
+        # Pushing is gated on the explicit publish input, so a qualification-only run (or a mirror
+        # refresh) can never publish or overwrite a patched artifact.
+        if: inputs.w27_publish == true
+        run: |
+          docker push "$IMAGE:$TAG"
+          digest="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$TAG")"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "published caddy $digest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: w27-caddy-evidence
+          path: |
+            caddy-w27-sbom.spdx.json
+            caddy-w27-trivy-raw.json
+            caddy-w27-trivy-all-findings.txt
+            caddy-w27-trivy-blocking.json
+            caddy-w27-govulncheck.txt
+            trivy-version.txt
+            caddy-w27-reachability-summary.txt
+
+  w27_seaweedfs:
+    name: "W27 patched SeaweedFS (acceptance-only, not a mirror)"
+    # As above: selection of the patched build is explicit, never implied by a dispatch.
+    if: github.event_name == 'workflow_dispatch' && inputs.w27_patched == true
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/sjevans1/workspace-acceptance-seaweedfs
+      TAG: ${{ inputs.w27_release_tag }}
+      EXPECTED_BINARY_SHA: ff8d09e4a8c921f35a7a65b988c541d74f0b01725197ddb7fdf5728f2be37cb2
+      EXPECTED_BASE_DIGEST: sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: "Log in to GHCR with the repository token"
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: "Pull the digest-pinned 4.48 runtime base"
+        run: docker pull "docker.io/chrislusf/seaweedfs@${EXPECTED_BASE_DIGEST}"
+      - name: "Reproduce the binary from exact upstream source and check the module graph"
+        run: bash build/w27/build-seaweedfs-patched.sh
+      - name: "Verify frozen binary SHA"
+        run: |
+          set -euo pipefail
+          got="$(sha256sum .w27-evidence/weed-patched.bin | cut -d' ' -f1)"
+          test "$got" = "$EXPECTED_BINARY_SHA" || { echo "binary identity mismatch: $got"; exit 1; }
+          echo "binary identity verified: $got"
+      - name: "Build the patched runtime and verify installed binary plus preserved Rust artifacts"
+        run: |
+          set -euo pipefail
+          ctx="$(mktemp -d)"
+          cp build/w27/images/seaweedfs/Dockerfile.patched "$ctx/Dockerfile"
+          cp .w27-evidence/weed-patched.bin "$ctx/weed-patched.bin"
+          docker build -f "$ctx/Dockerfile" -t "$IMAGE:$TAG" "$ctx"
+          rm -rf "$ctx"
+          installed="$(docker run --rm --entrypoint sha256sum "$IMAGE:$TAG" /usr/bin/weed | cut -d' ' -f1)"
+          test "$installed" = "$EXPECTED_BINARY_SHA" || { echo "installed binary mismatch: $installed"; exit 1; }
+          echo "installed /usr/bin/weed verified: $installed"
+          docker run --rm --entrypoint sh "$IMAGE:$TAG" -c 'for p in /usr/bin/weed-volume /usr/bin/weed-worker; do echo "$p size=$(stat -c%s "$p") sha256=$(sha256sum "$p" | cut -d" " -f1)"; done'
+      - name: "Generate SBOM"
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.IMAGE }}:${{ env.TAG }}
+          format: spdx-json
+          output-file: seaweedfs-w27-sbom.spdx.json
+      - name: "Install pinned Trivy CLI and record the scanner version"
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz"
+          echo "${EXPECTED_SHA}  /tmp/trivy.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version | tee trivy-version.txt
+
+      - name: "Raw Trivy JSON (all severities, unfixed included)"
+        run: trivy image --format json --scanners vuln --output seaweedfs-w27-trivy-raw.json "$IMAGE:$TAG"
+      - name: "Human-readable all-findings report"
+        run: trivy image --format table --scanners vuln --output seaweedfs-w27-trivy-all-findings.txt "$IMAGE:$TAG"
+      - name: "Blocking policy - zero unadjudicated fixable HIGH/CRITICAL"
+        run: trivy image --format json --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --output seaweedfs-w27-trivy-blocking.json "$IMAGE:$TAG"
+      - name: "Reachability evidence and eliminated-findings check"
+        run: |
+          set -euo pipefail
+          cp .w27-evidence/seaweedfs-patched-build.txt seaweedfs-w27-govulncheck.txt
+          for gone in GO-2026-6617 GO-2026-6613 GO-2026-6612; do
+            grep -q "$gone" .w27-evidence/seaweedfs-patched-build.txt && { echo "previously blocking finding $gone is still reachable"; exit 1; } || true
+          done
+          echo "GO-2026-6617, GO-2026-6613 and GO-2026-6612 are absent"
+          sed -n '/^Vulnerability #/,+6p' .w27-evidence/seaweedfs-patched-build.txt | grep -q "Fixed in: [^N]" && { echo "a reachable finding reports an available fix; blocking"; exit 1; } || true
+      - name: "Publish immutable digest"
+        id: publish
+        # Pushing is gated on the explicit publish input, so a qualification-only run (or a mirror
+        # refresh) can never publish or overwrite a patched artifact.
+        if: inputs.w27_publish == true
+        run: |
+          docker push "$IMAGE:$TAG"
+          digest="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$TAG")"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "published seaweedfs $digest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: w27-seaweedfs-evidence
+          path: |
+            seaweedfs-w27-sbom.spdx.json
+            seaweedfs-w27-trivy-raw.json
+            seaweedfs-w27-trivy-all-findings.txt
+            seaweedfs-w27-trivy-blocking.json
+            seaweedfs-w27-govulncheck.txt
+            trivy-version.txt

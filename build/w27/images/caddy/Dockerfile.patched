@@ -1,0 +1,34 @@
+# W27: patched-upstream Caddy runtime image.
+#
+# This is NOT a mirror. It derives from the approved Caddy runtime and replaces only
+# /usr/bin/caddy with the Workspace-rebuilt binary whose frozen identity is recorded in
+# docs/security/W27_PATCHED_REBUILD.md. Everything else — runtime packages, CA certificates,
+# /etc/caddy, /data, /config, ports, entrypoint and CMD semantics — is inherited unchanged so
+# operating behaviour is preserved.
+ARG CADDY_RUNTIME=ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+FROM ${CADDY_RUNTIME}
+
+# Truthful OCI metadata: a Workspace patched build of upstream Caddy v2.11.7, not an untouched
+# upstream image and not a mirror, carrying the identity of the binary it installs.
+LABEL org.opencontainers.image.title="Workspace patched runtime Caddy" \
+      org.opencontainers.image.description="Upstream Caddy v2.11.7 (commit 72dd0fb067f6d7826c7f79907670ba4a713bfe37) rebuilt by Workspace with Go 1.26.9 and golang.org/x/net v0.60.0 to remove reachable vulnerabilities. Not an upstream image and not a mirror." \
+      org.opencontainers.image.source="https://github.com/sjevans1/Workspace-Platform" \
+      org.openjm.workspace.image.classification="patched-upstream" \
+      org.openjm.workspace.upstream.tag="v2.11.7" \
+      org.openjm.workspace.upstream.commit="72dd0fb067f6d7826c7f79907670ba4a713bfe37" \
+      org.openjm.workspace.caddy.binary.sha256="90e5f85f9a206ea63bdc146d75c54e0ec5c8ca4d245605f0c1570706ed4a38e5" \
+      org.openjm.workspace.builder="golang@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c"
+
+# Replace only the Go binary. The upstream runtime expects cap_net_bind_service on this binary,
+# so capability restoration is fail-closed: the build must fail if setcap or the verification
+# fails, rather than silently emitting a runtime with different bind behaviour.
+COPY --chown=root:root caddy-patched.bin /usr/bin/caddy
+RUN set -euo pipefail \
+ && chmod 0755 /usr/bin/caddy \
+ && command -v setcap >/dev/null 2>&1 \
+ && setcap cap_net_bind_service=+ep /usr/bin/caddy \
+ && command -v getcap >/dev/null 2>&1 \
+ && getcap /usr/bin/caddy \
+ && getcap /usr/bin/caddy | grep -q 'cap_net_bind_service=ep' \
+ && /usr/bin/caddy version \
+ && echo "patched caddy installed with verified cap_net_bind_service"

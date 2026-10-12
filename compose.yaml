@@ -60,7 +60,10 @@ services:
     restart: unless-stopped
     security_opt: [no-new-privileges:true]
   valkey:
-    image: ghcr.io/valkey-io/valkey:8.1.10-alpine
+    # W27: pinned to an immutable digest resolved on 2026-10-12. Valkey is consumed from its
+    # own upstream GHCR namespace and is deliberately NOT part of the Docker Hub CI-H1 mirror
+    # set, so its immutable identity is recorded here and in docs/RELEASE_SECURITY.md.
+    image: ghcr.io/valkey-io/valkey@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
     command: [valkey-server, --save, "", --appendonly, "no"]
     healthcheck:
       test: [CMD, valkey-cli, ping]
@@ -170,7 +173,7 @@ services:
     depends_on:
       api: { condition: service_healthy }
   caddy:
-    image: ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    image: ghcr.io/sjevans1/workspace-runtime-caddy@sha256:05754b18a137780b49fa3280d864c7e8cb4a88270785fcce77108a471e0983cb
     environment:
       CADDY_ADDRESS: ${CADDY_ADDRESS:-:80}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}
