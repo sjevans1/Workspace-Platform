@@ -130,6 +130,11 @@ import {
   type MetricsSnapshot,
 } from "../../../packages/operations/metrics.ts";
 import {
+  composeOperatorTelemetry,
+  operatorTelemetryConfig,
+  serializeOperatorTelemetry,
+} from "../../../packages/operations/operator-telemetry.ts";
+import {
   AntivirusUnavailableError,
   createAntivirus,
   type Antivirus,
@@ -741,6 +746,84 @@ export async function buildApp(
         : "unavailable",
     };
   });
+  // OCP-1A: one authoritative snapshot assembly, reused by /metrics and by the
+  // operator telemetry composition service so telemetry never duplicates the
+  // existing health primitives.
+  const buildMetricsSnapshot = async (): Promise<MetricsSnapshot> => {
+    const [dependencies, collaboration, worker] = await Promise.all([
+      dependencyReadiness(),
+      serviceMetrics("collaboration", collabHealthUrl),
+      serviceMetrics("worker", workerHealthUrl),
+    ]);
+    return {
+      startedAt: metricsStartedAt,
+      dependencies,
+      services: {
+        api: { configured: true, healthy: true },
+        collaboration,
+        worker,
+      },
+      http: httpMetrics.snapshot(),
+      antivirus: antivirusMetrics,
+    };
+  };
+  // OCP-1A: the canonical operator telemetry snapshot. Composed from the same
+  // primitives as /metrics, observational only, never on the normal request path,
+  // and every unavailable source degrades to "unknown" rather than failing.
+  const operatorTelemetrySnapshot = async (): Promise<unknown> => {
+    const snapshot = await buildMetricsSnapshot();
+    const config = operatorTelemetryConfig(process.env);
+    const deployment = validateDeployment(process.env, "api");
+    let schemaVersion: string | null = null;
+    try {
+      const applied = await db.system((q) =>
+        q.query("SELECT version FROM schema_migrations ORDER BY applied_at DESC LIMIT 1"),
+      );
+      schemaVersion = applied.rows?.[0]?.version ? String(applied.rows[0].version) : null;
+    } catch {
+      schemaVersion = null;
+    }
+    const payload = composeOperatorTelemetry({
+      application: "workspace",
+      version: process.env.WORKSPACE_VERSION ?? "unknown",
+      buildSha: process.env.WORKSPACE_BUILD_SHA ?? process.env.BUILD_SHA ?? null,
+      // OCP-1A deployment identity policy: an operator-supplied opaque identity, or
+      // else a digest seed taken from a locally held deployment secret. Never a
+      // customer name, tenant/user/resource/document id, hostname, email, domain, IP
+      // or the customer-safe alias. Only the bounded digest leaves the deployment.
+      deploymentIdSeed:
+        config.deploymentIdSeed ?? process.env.ENCRYPTION_KEY ?? "workspace-unidentified",
+      alias: config.alias,
+      releaseChannel: config.releaseChannel,
+      environment: config.environment,
+      region: config.region,
+      startedAt: metricsStartedAt,
+      dependencies: snapshot.dependencies,
+      overallHealthy: true,
+      services: snapshot.services,
+      http: snapshot.http,
+      antivirus: snapshot.antivirus,
+      queueDepth: null,
+      storageCapacity: null,
+      databaseCapacity: null,
+      lastBackupAt: null,
+      backupVerified: null,
+      schemaVersion,
+      upgradeReady: deployment.ok,
+      tlsHealthy:
+        process.env.COOKIE_SECURE === "true"
+          ? true
+          : process.env.COOKIE_SECURE === "false"
+            ? false
+            : null,
+      identityProfile: (deployment.summary as any)?.auth ?? null,
+      storageProfile: (deployment.summary as any)?.storage ?? null,
+      events: [],
+    });
+    // The returned body is the machine-vetted serialization, so the prohibition scan
+    // and the payload ceiling are enforced on the real response bytes.
+    return JSON.parse(serializeOperatorTelemetry(payload));
+  };
   app.get(
     "/metrics",
     {
@@ -761,23 +844,8 @@ export async function buildApp(
         reply.code(401);
         return { error: "Metrics credential required" };
       }
-      const [dependencies, collaboration, worker] = await Promise.all([
-        dependencyReadiness(),
-        serviceMetrics("collaboration", collabHealthUrl),
-        serviceMetrics("worker", workerHealthUrl),
-      ]);
       reply.type("text/plain; version=0.0.4; charset=utf-8");
-      return renderPrometheusMetrics({
-        startedAt: metricsStartedAt,
-        dependencies,
-        services: {
-          api: { configured: true, healthy: true },
-          collaboration,
-          worker,
-        },
-        http: httpMetrics.snapshot(),
-        antivirus: antivirusMetrics,
-      });
+      return renderPrometheusMetrics(await buildMetricsSnapshot());
     },
   );
   app.get("/api/v1/branding", async () => defaultBranding());
@@ -2427,7 +2495,7 @@ export async function buildApp(
     ],
     "workspace.read",
   );
-  dataRoutes(route, storage, antivirus, antivirusMetrics);
+  dataRoutes(route, storage, antivirus, antivirusMetrics, operatorTelemetrySnapshot);
   await registerScim(app, db);
   app.addHook("onClose", async () => {
     try {
@@ -2443,6 +2511,7 @@ function dataRoutes(
   storage: Storage,
   antivirus: Antivirus,
   antivirusMetrics: { clean: number; infected: number; error: number },
+  operatorTelemetry: () => Promise<unknown>,
 ) {
   route(
     "GET",
@@ -3728,6 +3797,21 @@ function dataRoutes(
     },
     "workspace.read",
   );
+  // OCP-1A: local operator telemetry inspection. Returns exactly the canonical v1
+  // payload a future OCP-1B exporter would transmit, so a customer owner/admin can
+  // see what would be eligible for fleet telemetry. Read-only, secret-free, does not
+  // enable outbound telemetry, and does not require the OpenJM Fleet Control Plane.
+  route(
+    "GET",
+    "/admin/operator-telemetry",
+    "Inspect the canonical operator telemetry payload",
+    async (_q, a) => {
+      admin(a);
+      return await operatorTelemetry();
+    },
+    "workspace.read",
+  );
+
   route(
     "PATCH",
     "/branding",
