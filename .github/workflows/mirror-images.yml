@@ -36,6 +36,7 @@ permissions:
 
 jobs:
   mirror:
+    if: inputs.refresh
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -138,32 +139,26 @@ jobs:
           image: ${{ env.IMAGE }}:${{ env.TAG }}
           format: spdx-json
           output-file: caddy-w27-sbom.spdx.json
+      - name: "Install pinned Trivy CLI"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.58.0/trivy_0.58.0_Linux-64bit.tar.gz"
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version
+      - name: "Install pinned Trivy CLI"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.58.0/trivy_0.58.0_Linux-64bit.tar.gz"
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version
       - name: "Raw Trivy JSON (all severities, unfixed included)"
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
-          format: json
-          output: caddy-w27-trivy-raw.json
-          scanners: vuln
-          ignore-unfixed: false
+        run: trivy image --format json --scanners vuln --output caddy-w27-trivy-raw.json "$IMAGE:$TAG"
       - name: "Human-readable all-findings report"
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
-          format: table
-          output: caddy-w27-trivy-all-findings.txt
-          scanners: vuln
-          ignore-unfixed: false
+        run: trivy image --format table --scanners vuln --output caddy-w27-trivy-all-findings.txt "$IMAGE:$TAG"
       - name: "Blocking policy - zero unadjudicated fixable HIGH/CRITICAL"
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
-          format: json
-          output: caddy-w27-trivy-blocking.json
-          scanners: vuln
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-          exit-code: "1"
+        run: trivy image --format json --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --output caddy-w27-trivy-blocking.json "$IMAGE:$TAG"
       - name: "Reachability evidence and residual check"
         run: |
           set -euo pipefail
@@ -232,31 +227,11 @@ jobs:
           format: spdx-json
           output-file: seaweedfs-w27-sbom.spdx.json
       - name: "Raw Trivy JSON (all severities, unfixed included)"
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
-          format: json
-          output: seaweedfs-w27-trivy-raw.json
-          scanners: vuln
-          ignore-unfixed: false
+        run: trivy image --format json --scanners vuln --output seaweedfs-w27-trivy-raw.json "$IMAGE:$TAG"
       - name: "Human-readable all-findings report"
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
-          format: table
-          output: seaweedfs-w27-trivy-all-findings.txt
-          scanners: vuln
-          ignore-unfixed: false
+        run: trivy image --format table --scanners vuln --output seaweedfs-w27-trivy-all-findings.txt "$IMAGE:$TAG"
       - name: "Blocking policy - zero unadjudicated fixable HIGH/CRITICAL"
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
-          format: json
-          output: seaweedfs-w27-trivy-blocking.json
-          scanners: vuln
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-          exit-code: "1"
+        run: trivy image --format json --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --output seaweedfs-w27-trivy-blocking.json "$IMAGE:$TAG"
       - name: "Reachability evidence and eliminated-findings check"
         run: |
           set -euo pipefail
