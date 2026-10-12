@@ -239,6 +239,139 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           severity: HIGH,CRITICAL
+      # W27a (#112): the accepted SBOM and fail-closed scan policy applied to every other image
+      # the supported production and acceptance stacks consume. References are bound to the
+      # immutable digests provenanced by ci/ghcr-mirror-manifest.json wherever the manifest owns
+      # them, and to the exact Compose reference otherwise; nothing here is an ignore or a waiver.
+      - name: Prepare distribution images for SBOM and scanning
+        run: |
+          # postgres: shipped Compose database service
+          docker pull ghcr.io/sjevans1/workspace-ci-mirror-postgres@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+          docker tag ghcr.io/sjevans1/workspace-ci-mirror-postgres@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826 w27-postgres:scan
+          # caddy: shipped Compose edge terminator service
+          docker pull ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+          docker tag ghcr.io/sjevans1/workspace-ci-mirror-caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b w27-caddy:scan
+          # valkey: shipped Compose cache service, consumed from the upstream GHCR namespace rather than a CI-H1 mirror
+          docker pull ghcr.io/valkey-io/valkey:8.1.10-alpine
+          docker tag ghcr.io/valkey-io/valkey:8.1.10-alpine w27-valkey:scan
+          # seaweedfs: acceptance-only S3 compatibility dependency, not a shipped customer runtime image
+          docker pull ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
+          docker tag ghcr.io/sjevans1/workspace-ci-mirror-seaweedfs@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882 w27-seaweedfs:scan
+      - name: Generate postgres SBOM (17.11-bookworm)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: w27-postgres:scan
+          format: cyclonedx-json
+          output-file: openjm-postgres-17.11-bookworm-sbom.cdx.json
+          artifact-name: openjm-postgres-17.11-bookworm-sbom
+          upload-artifact: true
+      - name: Scan postgres image for fixable high/critical vulnerabilities (17.11-bookworm)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-postgres:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+      - name: Report all postgres findings including unfixed (17.11-bookworm)
+        # Visibility only: unfixed upstream findings are reported for risk accounting rather
+        # than hidden, and this step never fails the build and never suppresses anything.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-postgres:scan
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+
+      - name: Generate caddy SBOM (2.11.4-alpine)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: w27-caddy:scan
+          format: cyclonedx-json
+          output-file: openjm-caddy-2.11.4-alpine-sbom.cdx.json
+          artifact-name: openjm-caddy-2.11.4-alpine-sbom
+          upload-artifact: true
+      - name: Scan caddy image for fixable high/critical vulnerabilities (2.11.4-alpine)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-caddy:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+      - name: Report all caddy findings including unfixed (2.11.4-alpine)
+        # Visibility only: unfixed upstream findings are reported for risk accounting rather
+        # than hidden, and this step never fails the build and never suppresses anything.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-caddy:scan
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+
+      - name: Generate valkey SBOM (8.1.10-alpine)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: w27-valkey:scan
+          format: cyclonedx-json
+          output-file: openjm-valkey-8.1.10-alpine-sbom.cdx.json
+          artifact-name: openjm-valkey-8.1.10-alpine-sbom
+          upload-artifact: true
+      - name: Scan valkey image for fixable high/critical vulnerabilities (8.1.10-alpine)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-valkey:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+      - name: Report all valkey findings including unfixed (8.1.10-alpine)
+        # Visibility only: unfixed upstream findings are reported for risk accounting rather
+        # than hidden, and this step never fails the build and never suppresses anything.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-valkey:scan
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+
+      - name: Generate seaweedfs SBOM (4.47)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: w27-seaweedfs:scan
+          format: cyclonedx-json
+          output-file: openjm-seaweedfs-4.47-sbom.cdx.json
+          artifact-name: openjm-seaweedfs-4.47-sbom
+          upload-artifact: true
+      - name: Scan seaweedfs image for fixable high/critical vulnerabilities (4.47)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-seaweedfs:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+      - name: Report all seaweedfs findings including unfixed (4.47)
+        # Visibility only: unfixed upstream findings are reported for risk accounting rather
+        # than hidden, and this step never fails the build and never suppresses anything.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: w27-seaweedfs:scan
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: LOW,MEDIUM,HIGH,CRITICAL
       - name: Start deployment
         run: |
           docker compose up -d
