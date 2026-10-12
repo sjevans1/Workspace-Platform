@@ -36,7 +36,12 @@ permissions:
 
 jobs:
   mirror:
-    if: inputs.refresh
+    # Runs for the scheduled Monday upstream-drift check, in verify-only mode: the verify step
+    # selects --verify unless the event is a push or a dispatch that explicitly requests
+    # refresh=true. Also runs for a manual dispatch that requests a refresh. The patched-artifact
+    # jobs below are governed separately by inputs.w27_patched, so a patched-only dispatch never
+    # runs this job.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.refresh == true)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
