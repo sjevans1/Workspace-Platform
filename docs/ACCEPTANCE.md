@@ -1,5 +1,8 @@
 # First-pass acceptance status
 
+> **Authoritative release checkpoint — 2026-10-12:** W01–W26 and OCP-1/OCP-2 are accepted. The fixed remaining path is **W27 [#210] -> manual NVDA [#211] -> W28 [#212] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older execution sequences below are retained as historical evidence and must not be used to restart accepted waves.
+
+
 This is an executable alpha built from the OpenJM Workspace Astra handoff, not a claim that the complete MVP definition of done has been met.
 
 ## Verified through 1 October 2026

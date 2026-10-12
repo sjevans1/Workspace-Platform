@@ -1,5 +1,8 @@
 # Build checkpoint
 
+> **Authoritative release checkpoint — 2026-10-12:** W01–W26 and OCP-1/OCP-2 are accepted. The fixed remaining path is **W27 [#210] -> manual NVDA [#211] -> W28 [#212] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older execution sequences below are retained as historical evidence and must not be used to restart accepted waves.
+
+
 Updated 6 October 2026. Repository: https://github.com/sjevans1/Workspace-Platform
 
 ## Current Workspace 1.0 baseline — W17 accepted

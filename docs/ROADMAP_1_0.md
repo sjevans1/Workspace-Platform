@@ -1,5 +1,8 @@
 # OpenJM Workspace — Standalone 1.0 delivery roadmap
 
+> **Authoritative release checkpoint — 2026-10-12:** W01–W26 and OCP-1/OCP-2 are accepted. The fixed remaining path is **W27 [#210] -> manual NVDA [#211] -> W28 [#212] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older execution sequences below are retained as historical evidence and must not be used to restart accepted waves.
+
+
 **Current execution baseline:** 2026-10-06, `main` after merged W17 PR #158 (`6b7f60f422723ec19e8a5006f3033ab082d7e8b9`).  
 **Persistent tracker:** [Issue #62](https://github.com/sjevans1/Workspace-Platform/issues/62).  
 **Bundled execution plan:** [DELIVERY_WAVES_1_0.md](DELIVERY_WAVES_1_0.md).  
