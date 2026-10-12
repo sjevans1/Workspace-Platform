@@ -230,6 +230,6 @@ test("13. the console is usable at this project's desktop or tablet viewport", a
   // collapsing or clipping content away.
   const table = page.locator("table.table").first();
   await expect(table).toBeVisible();
-  table.scrollIntoViewIfNeeded();
+  await table.scrollIntoViewIfNeeded();
   console.log(`console viewport ${testInfo.project.name} ${viewport.width}x${viewport.height}: ok`);
 });

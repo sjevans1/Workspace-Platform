@@ -19,7 +19,7 @@
 //
 // Usage: node scripts/w27-security-aggregate.mjs [--root <dir>] [--evidence <dir>] [--json]
 
-import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { resolveReleaseImages } from "./w27-image-inventory.mjs";
@@ -561,7 +561,14 @@ export class AggregateEvaluator {
       notes: this.notes,
       failures: this.failures,
     };
-    if (this.json) writeFileSync(this.json, `${JSON.stringify(report, null, 2)}\n`);
+    if (this.json) {
+      // The evidence directory may never have been created, for example when phase 1 was skipped
+      // after an unrelated earlier failure. The structured report must still be written, so create
+      // its parent directory recursively rather than crashing with ENOENT. A missing evidence
+      // directory remains a FAIL and is never reinterpreted as a PASS.
+      mkdirSync(path.dirname(this.json), { recursive: true });
+      writeFileSync(this.json, `${JSON.stringify(report, null, 2)}\n`);
+    }
     return report;
   }
 }

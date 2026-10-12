@@ -171,12 +171,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium firefox webkit
-      # OCP-2B: the fleet console's own browser acceptance. Chromium only, isolated from
-      # the customer Workspace stack, its data and its visual baselines, and scoped to
-      # this dedicated harness rather than the Workspace e2e suite.
-      - name: Verify OCP-2B fleet console browser acceptance
-        if: ${{ inputs.suite == 'full' }}
-        run: npm run test:harness:fleet-console
       - name: Validate deployment configuration
         run: |
           node scripts/init-env.mjs
@@ -318,6 +312,16 @@ jobs:
           name: w27-security-evidence
           path: w27-evidence
           if-no-files-found: warn
+
+      # OCP-2B: the fleet console's own browser acceptance. Chromium only, isolated from the
+      # customer Workspace stack, its data and its visual baselines, and scoped to this dedicated
+      # harness rather than the Workspace e2e suite. Deliberately sequenced AFTER the W27 evidence
+      # collection, aggregate evaluation and evidence upload, and before the deployment starts, so
+      # an unrelated OCP UI-harness failure can never again prevent W27 evidence from being
+      # collected and preserved. It remains a blocking gate: no continue-on-error.
+      - name: Verify OCP-2B fleet console browser acceptance
+        if: ${{ inputs.suite == 'full' }}
+        run: npm run test:harness:fleet-console
 
       - name: Start deployment
         run: |
