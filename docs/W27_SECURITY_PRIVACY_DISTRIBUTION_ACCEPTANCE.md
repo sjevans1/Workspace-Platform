@@ -74,11 +74,16 @@ Already accepted and referenced rather than re-proved here: tenancy and RLS, ses
 authorization, upload and antivirus handling, webhook SSRF controls, OCP-1B signature and
 replay, fleet lifecycle state and audit, and TLS/Secure-cookie/WSS acceptance.
 
-Proven by release CI, but only when the deployment tier runs: the per-image SBOMs and
-fail-closed scans for the Workspace image, ClamAV and now PostgreSQL, Caddy, Valkey and
-SeaweedFS. Those steps are committed and their evidence will be produced under the FULL
-qualification that follows independent approval; this record does not claim them as verified
-yet.
+Proven by release CI, but only when the deployment tier runs: the per-image SBOMs and fail-closed
+scans for the whole six-image qualification set (Workspace, ClamAV, PostgreSQL, Caddy, Valkey,
+SeaweedFS). The gate collects evidence for all six before deciding anything, and one blocking
+fail-closed evaluator then decides. W27 also closed the reachable-vulnerability gaps that this wider
+gate surfaced: FULL `38250970609` failed honestly on reachable blockers in Caddy and SeaweedFS, both
+were repaired by patched upstream rebuilds published in run `38267553760` and frozen to immutable
+digests, and the rebuilt binaries report zero reachable HIGH/CRITICAL. PostgreSQL/gosu remains the
+only VEX disposition. Exact-digest acceptance for both patched artifacts has been run against only
+those frozen digests. The committed evidence is only as strong as the run it comes from, so this
+record quotes the qualification state rather than treating a committed step as verified output.
 
 ## 4. Privacy and retention reconciliation
 
@@ -135,7 +140,8 @@ remains a host-specific review item.
 | `docs/licenses/**` | retained licence texts referenced by the inventory |
 | BlockNote (MPL-2.0) | only Core, React, Mantine and server utilities are used; no `@blocknote/xl` package is installed or imported; files are unmodified and wrapped; notices must ship with distributed bundles and an internal copy of the corresponding source archives should be kept |
 | ClamAV (GPL) | consumed as an unmodified image for scanning; obligations attach to redistribution of that component |
-| PostgreSQL, Valkey, Caddy, SeaweedFS | consumed as unmodified upstream images with their own notices and licence terms |
+| PostgreSQL, Valkey | consumed as unmodified upstream images with their own notices and licence terms |
+| Caddy, SeaweedFS | consumed as **patched upstream rebuilds**, not upstream images: the upstream project source is rebuilt with one approved module change and the resulting binary is installed into a preserved upstream runtime. They are published under Workspace-owned package names (`workspace-runtime-caddy`, `workspace-acceptance-seaweedfs`), they are explicitly not mirrors, and the upstream licence and notice obligations for the patched components therefore attach to Workspace as the party that produced the binary. SeaweedFS is acceptance-only infrastructure and is not a shipped customer image. |
 | Node and base images | unmodified runtime bases pinned through the CI-H1 manifest; base-image notices travel with the images |
 
 No legal counsel review is claimed. Open external question, requiring a business/legal
@@ -189,8 +195,20 @@ is rejected after a session-secret change.
 
 ## 10. Remaining limitations and external items
 
-- Phase A scan and SBOM evidence is produced only by the deployment tier and is therefore
-  pending FULL qualification after independent approval.
+- Phase A scan and SBOM evidence is produced only by the deployment tier of the release pipeline and
+  is therefore pending FULL qualification after independent approval. The six-image collector and its
+  blocking evaluator are committed, committed tests cover the gate's decisions, and the qualification
+  results recorded in `docs/security/W27_IMAGE_RESULTS.md` come from running that gate locally against
+  the same frozen image identities.
+- Caddy and SeaweedFS are patched upstream rebuilds rather than upstream images, so Workspace owns the
+  provenance of those two binaries: the exact source commit, the single approved module delta, the
+  frozen binary SHA-256 and the reproducer are recorded in `docs/security/W27_PATCHED_REBUILD.md`, the
+  resolver re-asserts the delta on every run, and neither artifact is described as a mirror. They are
+  not signed or attested yet.
+- SeaweedFS is acceptance-only infrastructure. Its image is consumed solely by the CI S3 acceptance
+  service and is never part of the shipped production stack.
+- The general fixable and reachable HIGH/CRITICAL policy was not weakened for W27. One VEX disposition
+  exists (PostgreSQL/gosu) and the gate refuses any attempt by another image to inherit it.
 - Valkey is immutable by digest. It is pinned in `compose.yaml` to
   `ghcr.io/valkey-io/valkey@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507`,
   and both the supported runtime and the W27 scan resolve to that same immutable reference, so
@@ -207,3 +225,42 @@ is rejected after a session-secret change.
   for a commercial release, require an external business/legal decision.
 - Workspace tenant retention figures that are not stated in this repository must be confirmed
   per deployment; this record does not invent them.
+
+## 11. W27 exact-digest acceptance
+
+Both patched artifacts were accepted against only their frozen digest. The acceptance proves the
+identity chain end to end before it exercises the artifact: runtime container = consumer definition =
+provenance record = resolver output = the image the aggregate gate scanned.
+
+### Caddy, `ghcr.io/sjevans1/workspace-runtime-caddy@sha256:05754b18…`
+
+20 of 20 checks passed. Verified: image digest identity across all five legs; `caddy version` reports
+the qualified upstream commit `72dd0fb0…` with the local modification; `caddy validate` accepts the
+shipped Caddyfile; the installed `/usr/bin/caddy` is the qualified patched binary; the runtime base
+layout (`/etc/caddy`, `/data`, `/config`) is preserved; the running container serves HTTP 308 to
+HTTPS; trusted HTTPS reaches the API readiness route with the chain verified against Caddy's own
+internal CA; HSTS is present; the reverse proxy routes `/metrics` to the API and a credentialless
+read is refused; the session cookie is `Secure`, `HttpOnly` and `SameSite=Lax`; and a WSS
+collaboration upgrade through Caddy returns `101 Switching Protocols`.
+
+The repository's existing browser/TLS acceptance (`e2e/tls.spec.ts`, "trusted HTTPS uses secure
+cookies and WSS collaboration") passed against the deployed stack: 1 test passed. On this host that
+run needed two adjustments that do not touch the product: the browser was given the CI host mapping
+with `--host-resolver-rules` because `/etc/hosts` requires root here, and the Caddy internal CA was
+installed into the user NSS database. Certificate validation was never disabled.
+
+### SeaweedFS, `ghcr.io/sjevans1/workspace-acceptance-seaweedfs@sha256:0f7b74e1…`
+
+13 of 13 checks passed. Verified: image digest identity across all four legs including the running
+service container; the installed `/usr/bin/weed` is the qualified patched binary; `weed version`
+reports 4.48; the inherited Rust `weed-volume` and `weed-worker` artifact hashes are unchanged; the
+service accepts connections on its S3 port; buckets are created; and the repository's own S3
+acceptance harness passes, covering upload, download, list, delete and the isolated backup-recovery
+path against this exact service.
+
+### What the acceptance does not claim
+
+These are qualification runs against the frozen artifacts. They are not a penetration test and not an
+external review. The acceptance is committed as `scripts/ci/w27-exact-digest-acceptance.sh` so a
+reviewer can re-run it; it fails when no container is running the frozen digest, so it cannot pass
+silently without a deployed stack.

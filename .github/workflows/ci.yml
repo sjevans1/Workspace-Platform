@@ -205,179 +205,115 @@ jobs:
             }
             console.log(`PASS: shipped source-map-js is ${v}`);
           '
-      - name: Generate container SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          image: openjm-workspace:local
-          format: cyclonedx-json
-          output-file: openjm-workspace-container-sbom.cdx.json
-          artifact-name: openjm-workspace-container-sbom
-          upload-artifact: true
-      - name: Scan release image for fixable high/critical vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: openjm-workspace:local
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-      - name: Generate ClamAV runtime SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          image: openjm-workspace-clamav:local
-          format: cyclonedx-json
-          output-file: openjm-workspace-clamav-sbom.cdx.json
-          artifact-name: openjm-workspace-clamav-sbom
-          upload-artifact: true
-      - name: Scan ClamAV runtime image for fixable high/critical vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: openjm-workspace-clamav:local
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
+      # ---------------------------------------------------------------------------------------
+      # W27 six-image aggregate security gate - phase 1: evidence collection.
+      #
+      # The qualification set is exactly Workspace, ClamAV, PostgreSQL, Caddy, Valkey and
+      # SeaweedFS. Collection NEVER decides and NEVER aborts: every step in this phase is
+      # continue-on-error, and a scanner failure is recorded per image in
+      # w27-evidence/<image>/collection-errors.txt while the remaining images are still
+      # collected. The single blocking evaluator further down is the only component that
+      # decides PASS/FAIL, so one broken image cannot hide the state of the other five.
+      # ---------------------------------------------------------------------------------------
+      - name: Install the pinned SBOM and scanner tooling
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          mkdir -p w27-evidence
+          EXPECTED_TRIVY_SHA="c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+          curl -fsSL -o /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz"
+          echo "${EXPECTED_TRIVY_SHA}  /tmp/trivy.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version
+          EXPECTED_SYFT_SHA="c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47"
+          curl -fsSL -o /tmp/syft.tar.gz "https://github.com/anchore/syft/releases/download/v1.54.1/syft_1.54.1_linux_amd64.tar.gz"
+          echo "${EXPECTED_SYFT_SHA}  /tmp/syft.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/syft.tar.gz -C /tmp syft
+          sudo install -m 0755 /tmp/syft /usr/local/bin/syft
+          syft --version
+
       # W27a (#112): the scan targets are resolved from the authoritative inventory and the
       # supported runtime definition rather than duplicated here, so the image scanned is the
       # image that ships. The resolver refuses a drifted Compose reference and refuses a
-      # tag-only reference for the non-mirror image, so this cannot silently go stale.
+      # tag-only reference for the non-mirror image, so this cannot silently go stale. The
+      # evaluator re-runs the same resolver and validates the recorded references against their
+      # authoritative sources itself rather than trusting this record.
       - name: Resolve release image references from the authoritative inventory
+        id: w27-resolve
+        continue-on-error: true
         run: |
-          node scripts/w27-image-inventory.mjs >> "$GITHUB_ENV"
-          grep -c '^W27_[A-Z_]*_REF=' "$GITHUB_ENV"
-      - name: Prepare distribution images for SBOM and scanning
+          set -uo pipefail
+          mkdir -p w27-evidence
+          node scripts/w27-image-inventory.mjs > w27-evidence/resolver.env 2> w27-evidence/resolver.err
+          status=$?
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const [dir, code] = process.argv.slice(1);
+            fs.writeFileSync(
+              path.join(dir, "resolver.json"),
+              JSON.stringify(
+                {
+                  command: "node scripts/w27-image-inventory.mjs",
+                  exitCode: Number(code),
+                  stdout: fs.readFileSync(path.join(dir, "resolver.env"), "utf8"),
+                  stderr: fs.readFileSync(path.join(dir, "resolver.err"), "utf8"),
+                },
+                null,
+                2,
+              ) + "\n",
+            );
+          ' w27-evidence "$status"
+          cat w27-evidence/resolver.env >> "$GITHUB_ENV"
+          grep -c '^W27_[A-Z_]*_REF=' "$GITHUB_ENV" || true
+
+      - name: Prepare the registry-consumed images for evidence collection
+        continue-on-error: true
         run: |
-          # PostgreSQL, Caddy and SeaweedFS come from the manifest-provenanced mirrors;
-          # Valkey is immutable by digest but deliberately not mirror-provenanced.
-          docker pull "$W27_POSTGRES_REF"
-          docker tag "$W27_POSTGRES_REF" w27-postgres:scan
-          docker pull "$W27_CADDY_REF"
-          docker tag "$W27_CADDY_REF" w27-caddy:scan
-          docker pull "$W27_VALKEY_REF"
-          docker tag "$W27_VALKEY_REF" w27-valkey:scan
-          docker pull "$W27_SEAWEEDFS_REF"
-          docker tag "$W27_SEAWEEDFS_REF" w27-seaweedfs:scan
-      # PostgreSQL 17.11-bookworm, shipped database service
-      # scanning: ${{ env.W27_POSTGRES_REF }}
-      - name: Generate postgres SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          image: w27-postgres:scan
-          format: cyclonedx-json
-          output-file: openjm-postgres-${{ env.W27_POSTGRES_SLUG }}-sbom.cdx.json
-          artifact-name: openjm-postgres-${{ env.W27_POSTGRES_SLUG }}-sbom
-          upload-artifact: true
-      - name: Scan postgres image for fixable high/critical vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-postgres:scan
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-      - name: Report all postgres findings including unfixed
-        # Visibility only for risk accounting: never fails the build, never suppresses.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-postgres:scan
-          format: table
-          exit-code: "0"
-          ignore-unfixed: false
-          vuln-type: os,library
-          severity: LOW,MEDIUM,HIGH,CRITICAL
+          # Collection is recorded, never enforced here: a failed pull becomes a recorded
+          # collection failure and the evaluator fails closed on the missing evidence.
+          for ref in "$W27_POSTGRES_REF" "$W27_CADDY_REF" "$W27_VALKEY_REF" "$W27_SEAWEEDFS_REF"; do
+            test -n "$ref" || continue
+            docker pull "$ref" || echo "recorded: pull failed for $ref"
+          done
 
-      # Caddy 2.11.4-alpine, shipped edge terminator
-      # scanning: ${{ env.W27_CADDY_REF }}
-      - name: Generate caddy SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          image: w27-caddy:scan
-          format: cyclonedx-json
-          output-file: openjm-caddy-${{ env.W27_CADDY_SLUG }}-sbom.cdx.json
-          artifact-name: openjm-caddy-${{ env.W27_CADDY_SLUG }}-sbom
-          upload-artifact: true
-      - name: Scan caddy image for fixable high/critical vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-caddy:scan
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-      - name: Report all caddy findings including unfixed
-        # Visibility only for risk accounting: never fails the build, never suppresses.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-caddy:scan
-          format: table
-          exit-code: "0"
-          ignore-unfixed: false
-          vuln-type: os,library
-          severity: LOW,MEDIUM,HIGH,CRITICAL
+      - name: Collect evidence for the six qualification images (phase 1, never decides)
+        continue-on-error: true
+        run: bash scripts/ci/w27-collect-evidence.sh w27-evidence
 
-      # Valkey 8.1.10-alpine, shipped cache, digest-pinned but not mirror-provenanced
-      # scanning: ${{ env.W27_VALKEY_REF }}
-      - name: Generate valkey SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          image: w27-valkey:scan
-          format: cyclonedx-json
-          output-file: openjm-valkey-${{ env.W27_VALKEY_SLUG }}-sbom.cdx.json
-          artifact-name: openjm-valkey-${{ env.W27_VALKEY_SLUG }}-sbom
-          upload-artifact: true
-      - name: Scan valkey image for fixable high/critical vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-valkey:scan
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-      - name: Report all valkey findings including unfixed
-        # Visibility only for risk accounting: never fails the build, never suppresses.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-valkey:scan
-          format: table
-          exit-code: "0"
-          ignore-unfixed: false
-          vuln-type: os,library
-          severity: LOW,MEDIUM,HIGH,CRITICAL
+      # ---------------------------------------------------------------------------------------
+      # W27 six-image aggregate security gate - phase 2: one blocking fail-closed evaluator.
+      #
+      # PASS requires exactly six expected image records, every required SBOM, valid immutable
+      # identities that match the authoritative provenance sources, resolver/provenance
+      # validation, zero unadjudicated fixable HIGH/CRITICAL, zero reachable blocking
+      # HIGH/CRITICAL, the exact PostgreSQL/gosu VEX validation and every required reachability
+      # record. Missing, unreadable or malformed evidence is a FAIL.
+      # ---------------------------------------------------------------------------------------
+      - name: Aggregate six-image security evaluator (blocking, fail-closed)
+        if: always()
+        run: node scripts/w27-security-aggregate.mjs --evidence w27-evidence --json w27-evidence/aggregate-report.json
 
-      # SeaweedFS 4.47, acceptance-only S3 compatibility dependency
-      # scanning: ${{ env.W27_SEAWEEDFS_REF }}
-      - name: Generate seaweedfs SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Publish the aggregate security report
+        if: always()
+        run: |
+          if [ -f w27-evidence/aggregate-report.json ]; then
+            cat w27-evidence/aggregate-report.json
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat w27-evidence/aggregate-report.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no aggregate report was produced" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
-          image: w27-seaweedfs:scan
-          format: cyclonedx-json
-          output-file: openjm-seaweedfs-${{ env.W27_SEAWEEDFS_SLUG }}-sbom.cdx.json
-          artifact-name: openjm-seaweedfs-${{ env.W27_SEAWEEDFS_SLUG }}-sbom
-          upload-artifact: true
-      - name: Scan seaweedfs image for fixable high/critical vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-seaweedfs:scan
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-      - name: Report all seaweedfs findings including unfixed
-        # Visibility only for risk accounting: never fails the build, never suppresses.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: w27-seaweedfs:scan
-          format: table
-          exit-code: "0"
-          ignore-unfixed: false
-          vuln-type: os,library
-          severity: LOW,MEDIUM,HIGH,CRITICAL
+          name: w27-security-evidence
+          path: w27-evidence
+          if-no-files-found: warn
+
       - name: Start deployment
         run: |
           docker compose up -d

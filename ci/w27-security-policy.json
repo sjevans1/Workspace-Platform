@@ -1,0 +1,186 @@
+{
+  "schemaVersion": "1.0.0",
+  "document": "W27 six-image aggregate security policy (frozen)",
+  "generatedBy": "Workspace W27 PR #214",
+  "qualificationDate": "2026-10-12",
+  "note": "This file is the single declared source of the W27 blocking policy. The aggregate evaluator (scripts/w27-security-aggregate.mjs) reads it, the committed VEX and the collected evidence, and is the only component that decides PASS/FAIL. It never scans and never suppresses: evidence collection is separate and never decides.",
+  "policy": {
+    "blockingSeverities": [
+      "HIGH",
+      "CRITICAL"
+    ],
+    "ignoreUnfixedForBlocking": true,
+    "vulnTypes": [
+      "os",
+      "library"
+    ],
+    "weakened": false,
+    "statement": "The general fixable and reachable HIGH/CRITICAL policy is unchanged and was not weakened for W27. Exactly one VEX disposition exists (PostgreSQL/gosu). No image may inherit another image's VEX. Patched artifacts are rebuilds, never mirrors.",
+    "frozenDecisions": [
+      "PostgreSQL/gosu remains the only W27 VEX; no scope expansion.",
+      "Caddy requires zero fixable HIGH/CRITICAL and zero reachable HIGH/CRITICAL; GO-2026-5932 remains visible, non-VEXed and non-blocking.",
+      "SeaweedFS blockers GO-2026-6617, GO-2026-6613 and GO-2026-6612 must remain absent.",
+      "SeaweedFS may keep visible GO-2022-0646 (MODERATE), GO-2022-0635 (LOW) and GO-2026-5932.",
+      "No Caddy VEX. No SeaweedFS VEX."
+    ]
+  },
+  "vex": {
+    "postgres": {
+      "path": "docs/security/vex-gosu-postgres-17.11-bookworm.json",
+      "vulnerability": "GO-STDLIB-FINDINGS-IN-BUNDLED-GOSU",
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "componentId": "pkg:golang/github.com/tianon/gosu@1.19",
+      "componentName": "gosu",
+      "componentVersion": "1.19",
+      "componentSha256": "52c8749d0142edd234e9d6bd5237dff2d81e71f43537e2f4f66f75dd4b243dd0",
+      "subcomponentId": "/usr/local/bin/gosu",
+      "parentImageDigest": "sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826",
+      "platform": "linux/amd64",
+      "findingIds": [
+        "CVE-2025-61726",
+        "CVE-2025-61729",
+        "CVE-2025-68121",
+        "CVE-2026-25679",
+        "CVE-2026-27145",
+        "CVE-2026-32280",
+        "CVE-2026-32281",
+        "CVE-2026-32283",
+        "CVE-2026-33811",
+        "CVE-2026-33814",
+        "CVE-2026-33818",
+        "CVE-2026-39820",
+        "CVE-2026-39821",
+        "CVE-2026-39822",
+        "CVE-2026-39836",
+        "CVE-2026-42499",
+        "CVE-2026-42504",
+        "CVE-2026-56853",
+        "CVE-2026-56858",
+        "CVE-2026-56859",
+        "CVE-2026-56860",
+        "CVE-2026-56862",
+        "CVE-2026-78667",
+        "CVE-2026-78669",
+        "CVE-2026-97031"
+      ]
+    }
+  },
+  "evidence": {
+    "directory": "w27-evidence",
+    "requiredFilesPerImage": [
+      "identity.json",
+      "sbom.cdx.json",
+      "trivy-raw.json",
+      "trivy-all-findings.txt",
+      "trivy-fixable.json"
+    ],
+    "resolverRecord": "resolver.json",
+    "note": "Missing, unreadable or malformed evidence is a FAIL. A scanner failure is recorded in collection-errors.json and does not stop collection of the other images."
+  },
+  "images": [
+    {
+      "logicalName": "workspace",
+      "displayName": "Workspace application",
+      "purpose": "customer application runtime",
+      "provenanceClass": "built-local",
+      "intendedUse": "shipped-runtime",
+      "identityKind": "local-build",
+      "sbomRequired": true,
+      "reachabilityRequired": false,
+      "vexRequired": false,
+      "vexAllowed": false,
+      "allowedVisibleReachable": [],
+      "mustBeAbsentReachable": []
+    },
+    {
+      "logicalName": "clamav",
+      "displayName": "ClamAV runtime",
+      "purpose": "outbound antivirus scanning",
+      "provenanceClass": "built-local",
+      "intendedUse": "shipped-runtime",
+      "identityKind": "local-build",
+      "sbomRequired": true,
+      "reachabilityRequired": false,
+      "vexRequired": false,
+      "vexAllowed": false,
+      "allowedVisibleReachable": [],
+      "mustBeAbsentReachable": []
+    },
+    {
+      "logicalName": "postgres",
+      "displayName": "PostgreSQL",
+      "purpose": "database service",
+      "provenanceClass": "mirror",
+      "intendedUse": "shipped-runtime",
+      "identityKind": "registry-digest",
+      "sbomRequired": true,
+      "reachabilityRequired": true,
+      "reachabilityTool": "govulncheck",
+      "reachabilityBinaryPath": "/usr/local/bin/gosu",
+      "reachabilitySource": "vex",
+      "vexRequired": true,
+      "vexAllowed": true,
+      "allowedVisibleReachable": [],
+      "mustBeAbsentReachable": []
+    },
+    {
+      "logicalName": "caddy",
+      "displayName": "Caddy",
+      "purpose": "TLS terminator and reverse proxy edge",
+      "provenanceClass": "patched-upstream",
+      "intendedUse": "shipped-runtime",
+      "identityKind": "registry-digest",
+      "sbomRequired": true,
+      "reachabilityRequired": true,
+      "reachabilityTool": "govulncheck",
+      "reachabilityBinaryPath": "/usr/bin/caddy",
+      "reachabilitySource": "govulncheck",
+      "vexRequired": false,
+      "vexAllowed": false,
+      "allowedVisibleReachable": [
+        "GO-2026-5932"
+      ],
+      "mustBeAbsentReachable": []
+    },
+    {
+      "logicalName": "valkey",
+      "displayName": "Valkey",
+      "purpose": "cache service",
+      "provenanceClass": "immutable-non-mirror",
+      "intendedUse": "shipped-runtime",
+      "identityKind": "registry-digest",
+      "sbomRequired": true,
+      "reachabilityRequired": false,
+      "vexRequired": false,
+      "vexAllowed": false,
+      "allowedVisibleReachable": [],
+      "mustBeAbsentReachable": []
+    },
+    {
+      "logicalName": "seaweedfs",
+      "displayName": "SeaweedFS",
+      "purpose": "S3-compatible object storage for the acceptance stack",
+      "provenanceClass": "patched-upstream",
+      "intendedUse": "acceptance-only",
+      "identityKind": "registry-digest",
+      "sbomRequired": true,
+      "reachabilityRequired": true,
+      "reachabilityTool": "govulncheck",
+      "reachabilityBinaryPath": "/usr/bin/weed",
+      "reachabilitySource": "govulncheck",
+      "vexRequired": false,
+      "vexAllowed": false,
+      "allowedVisibleReachable": [
+        "GO-2022-0646",
+        "GO-2022-0635",
+        "GO-2026-5932"
+      ],
+      "mustBeAbsentReachable": [
+        "GO-2026-6617",
+        "GO-2026-6613",
+        "GO-2026-6612"
+      ]
+    }
+  ]
+}
