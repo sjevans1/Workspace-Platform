@@ -7,6 +7,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildFleetConsole, fleetConsoleConfig } from "../apps/fleet-web/src/server.ts";
 import { FLEET_CONSOLE_ROUTES } from "../apps/fleet-web/src/server.ts";
@@ -162,7 +163,14 @@ test("the console browser harness cannot be collected by the Workspace browser g
   const consoleConfig = readFileSync(fileURLToPath(new URL("../playwright.fleet-console.config.ts", import.meta.url)), "utf8");
   const consoleTestDir = /testDir:\s*"([^"]+)"/.exec(consoleConfig)?.[1];
   assert.equal(consoleTestDir, "./e2e-fleet-console");
-  assert.ok(!consoleTestDir!.startsWith(testDir!), "the console harness must live outside the Workspace test directory");
+  // Directory-aware, not a string prefix: "./e2e-fleet-console" starts with "./e2e" as
+  // text while living beside it, so resolve both and compare real containment.
+  const workspaceDir = path.resolve(fileURLToPath(new URL("../e2e", import.meta.url)));
+  const consoleHarnessDir = path.resolve(fileURLToPath(new URL("../e2e-fleet-console", import.meta.url)));
+  assert.ok(
+    consoleHarnessDir !== workspaceDir && !consoleHarnessDir.startsWith(workspaceDir + path.sep),
+    "the console harness must live outside the Workspace test directory",
+  );
   // The console spec really is in the console directory and nowhere under the Workspace one.
   const consoleDir = fileURLToPath(new URL("../e2e-fleet-console", import.meta.url));
   const files = readdirSync(consoleDir);
