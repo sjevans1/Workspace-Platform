@@ -53,6 +53,27 @@ browser-readable cookie, page source, a query string or a client bundle, and no 
 body contains it. A regression test asserts the token is absent from every console page,
 from the only static asset, and from the session cookie, and that no page loads a script.
 
+## Transport security
+
+The console sends the shared operator credential as a bearer token on every outbound
+request, so the transport must not be able to leak it. `FLEET_API_BASE_URL` is parsed
+with `new URL()` and validated strictly; every failure mode is fail-closed:
+
+- malformed URLs and non-http(s) schemes are refused;
+- embedded username/password, query strings and fragments are refused;
+- in production, `https:` is required for every destination that is not loopback;
+- plaintext `http:` is permitted in production **only** for an explicitly local loopback
+  destination: `127.0.0.1`, `::1` or `localhost`. Private, container and RFC1918
+  addresses such as `10.0.0.10`, `192.168.1.5`, `172.16.4.4`, `169.254.1.1` or a
+  service name like `fleet-service` are **not** treated as loopback and are refused;
+- outside production, HTTP remains usable so the console can be pointed at a local or
+  development fleet API;
+- a path prefix is supported for reverse-proxy deployment (`https://host/fleet-api`) and
+  is normalized so read endpoints resolve beneath it.
+
+There is no TLS-disable switch and no way to relax certificate verification: Node's
+normal certificate validation always applies.
+
 ## Bootstrap operator access
 
 W27 will address individual operator identity, and this package deliberately does not
@@ -67,6 +88,10 @@ build a second enterprise identity system in the meantime.
 - The cookie is `HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` in production, and
   expires within a bounded session lifetime (default 8 hours, maximum 24 hours).
 - `POST /logout` clears the cookie, which destroys the session.
+- Malformed cookie input is ignored rather than fatal: invalid percent-encoding in a
+  cookie is treated as an invalid cookie, so an unauthenticated request stays
+  unauthenticated instead of producing a server error, and a valid session still works
+  when another cookie in the same header is malformed.
 - Tampered or expired cookies are simply unauthenticated. A session record that somehow
   contained credential material is refused rather than trusted.
 - Customer Workspace tenant sessions are not connected to fleet authorization, and a
@@ -165,9 +190,36 @@ realtime push; a modest periodic refresh is deliberately not implemented in 1.0.
 | `FLEET_CONSOLE_SESSION_TTL_MS` | no | Session lifetime, clamped to 15 minutes to 24 hours (default 8 hours) |
 | `FLEET_CONSOLE_REQUEST_TIMEOUT_MS` | no | Fleet API timeout, clamped to 500 ms to 15 s (default 5 s) |
 | `FLEET_CONSOLE_SECURE_COOKIE` | no | Force `Secure` cookies outside production |
+| `FLEET_CONSOLE_PRODUCTION` | no | Treat the deployment as production for transport rules when `NODE_ENV` is not set |
 
 Configuration fails closed: a missing base URL, credential or session secret refuses to
 start, and the console never inherits the customer Workspace database configuration.
+
+## Browser acceptance
+
+A dedicated, deliberately small browser harness proves the console works in a real
+browser. It is separate from the customer Workspace Playwright suite: its own config
+(`playwright.fleet-console.config.ts`) and spec directory (`e2e/fleet-console/`), a real
+`buildFleetConsole()` listener started by the Playwright `webServer` on a local port, a
+deterministic stub FleetClient and login verifier, and Chromium only, at two viewports
+(desktop 1280x800 and tablet 834x1112). It never touches the customer Workspace compose
+stack, its data or its visual baselines.
+
+It proves, in a browser rather than by string assertions: unauthenticated navigation
+lands on sign-in; sign-in succeeds and the session cookie is `HttpOnly` with no
+credential in browser storage; the overview renders factual counts; navigation works
+through browser semantics and the stylesheet is genuinely applied; search and filters work
+through native controls; detail opens and an unknown id gives a bounded 404; unknown and
+absent values visibly render as `Unknown` / `Not reported` / `Never seen`; alerts and
+audit render; sign-out returns to sign-in and protected navigation is denied; no
+`<script>` exists on any surface; keyboard navigation and visible focus reach the skip
+link, navigation, filters and primary controls; and the layout remains usable at both
+viewports.
+
+In CI it runs as a single FULL-only deployment-tier step, `Verify OCP-2B fleet console
+browser acceptance`, which runs only this harness and fails FULL if it fails. FAST and
+STANDARD neither install nor run browsers. No visual baselines are created, and the
+existing Workspace browser, visual and accessibility gates are untouched.
 
 ## Local start and tests
 
@@ -179,6 +231,7 @@ Targeted tests:
 
 ```
 node --import tsx --test tests/fleet-web.test.ts
+npm run test:harness:fleet-console
 ```
 
 The suite covers plane separation, configuration fail-closed behaviour, credential
@@ -202,6 +255,5 @@ Individual fleet-operator identity rather than the shared bootstrap credential;
 per-operator authorisation; server-side session storage and revocation; fleet audit
 retention and lifecycle management; fleet migration concurrency for multi-replica
 startup; encryption-key rotation guidance; a final HMAC/timing security review; fleet rate
-limiting and abuse protection; deployment and credential lifecycle hardening around
-concurrent credential operations on a terminally revoked deployment; and wiring a
-deterministic browser/E2E acceptance harness for this console into the deployment tier.
+limiting and abuse protection; and deployment and credential lifecycle hardening around
+concurrent credential operations on a terminally revoked deployment.

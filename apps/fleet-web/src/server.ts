@@ -56,7 +56,17 @@ function parseCookies(header: string | undefined): Record<string, string> {
   for (const part of String(header ?? "").split(";")) {
     const separator = part.indexOf("=");
     if (separator <= 0) continue;
-    cookies[part.slice(0, separator).trim()] = decodeURIComponent(part.slice(separator + 1).trim());
+    const raw = part.slice(separator + 1).trim();
+    let value: string;
+    try {
+      value = decodeURIComponent(raw);
+    } catch {
+      // Malformed percent-encoding is an invalid cookie, not a server error: the cookie
+      // is ignored, so an unauthenticated request stays unauthenticated rather than
+      // producing a 500.
+      continue;
+    }
+    cookies[part.slice(0, separator).trim()] = value;
   }
   return cookies;
 }

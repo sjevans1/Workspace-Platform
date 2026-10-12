@@ -23,11 +23,11 @@ const bounded = (raw: string | undefined, fallback: number, min: number, max: nu
 // Fail closed: the console is useless and unsafe without an API base, the operator
 // credential and a session signing secret.
 export function fleetConsoleConfig(env: Record<string, string | undefined>): FleetConsoleConfig {
-  const baseUrl = (env.FLEET_API_BASE_URL ?? "").trim();
+  const rawBaseUrl = (env.FLEET_API_BASE_URL ?? "").trim();
   const operatorToken = env.FLEET_OPERATOR_TOKEN ?? "";
   const sessionSecret = env.FLEET_CONSOLE_SESSION_SECRET ?? "";
-  if (!baseUrl) throw new Error("FLEET_API_BASE_URL is required (the OCP-2A fleet API base URL)");
-  if (!/^https?:\/\//.test(baseUrl)) throw new Error("FLEET_API_BASE_URL must be an absolute http(s) URL");
+  const production = String(env.NODE_ENV ?? "").toLowerCase() === "production" || String(env.FLEET_CONSOLE_PRODUCTION ?? "").toLowerCase() === "true";
+  const baseUrl = parseFleetApiBaseUrl(rawBaseUrl, production);
   if (operatorToken.length < 24) throw new Error("FLEET_OPERATOR_TOKEN is required (server-side only)");
   if (sessionSecret.length < 32) throw new Error("FLEET_CONSOLE_SESSION_SECRET must be at least 32 characters");
   return {
@@ -41,6 +41,38 @@ export function fleetConsoleConfig(env: Record<string, string | undefined>): Fle
     requestTimeoutMs: bounded(env.FLEET_CONSOLE_REQUEST_TIMEOUT_MS, 5_000, 500, 15_000),
     secureCookie: String(env.FLEET_CONSOLE_SECURE_COOKIE ?? "").toLowerCase() === "true" || env.NODE_ENV === "production",
   };
+}
+
+
+// The console sends the shared operator credential as a bearer token on every request, so
+// the transport must not be able to leak it. Parsing is strict: malformed URLs, embedded
+// credentials, query strings and fragments are refused, and in production plaintext HTTP
+// is only ever permitted to an explicitly local loopback destination. Private, container
+// and RFC1918 addresses are NOT treated as loopback.
+export const LOOPBACK_HOSTNAMES = ["127.0.0.1", "::1", "[::1]", "localhost"] as const;
+
+export function parseFleetApiBaseUrl(raw: string, production = false): string {
+  if (!raw) throw new Error("FLEET_API_BASE_URL is required (the OCP-2A fleet API base URL)");
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("FLEET_API_BASE_URL must be an absolute URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("FLEET_API_BASE_URL must use http or https");
+  if (url.username || url.password) throw new Error("FLEET_API_BASE_URL must not embed credentials");
+  if (url.search) throw new Error("FLEET_API_BASE_URL must not contain a query string");
+  if (url.hash) throw new Error("FLEET_API_BASE_URL must not contain a fragment");
+  const loopback = (LOOPBACK_HOSTNAMES as readonly string[]).includes(url.hostname);
+  if (url.protocol === "http:" && production && !loopback) {
+    throw new Error(
+      "FLEET_API_BASE_URL must use https in production (plaintext http is permitted only for a loopback destination such as 127.0.0.1, ::1 or localhost)",
+    );
+  }
+  // A path prefix (for reverse-proxy deployment) is preserved and normalized so read
+  // endpoints resolve beneath it. Trailing slashes are removed.
+  const path = url.pathname.replace(/\/+$/, "");
+  return `${url.protocol}//${url.host}${path}`;
 }
 
 export type FleetApiResult<T> =

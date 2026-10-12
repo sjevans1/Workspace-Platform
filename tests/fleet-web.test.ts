@@ -10,7 +10,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildFleetConsole, fleetConsoleConfig } from "../apps/fleet-web/src/server.ts";
 import { FLEET_CONSOLE_ROUTES } from "../apps/fleet-web/src/server.ts";
-import { createFleetClient } from "../apps/fleet-web/src/fleet-api.ts";
+import { createFleetClient, parseFleetApiBaseUrl } from "../apps/fleet-web/src/fleet-api.ts";
 import { FLEET_SESSION_COOKIE, issueSession, readSession } from "../apps/fleet-web/src/session.ts";
 import {
   NEVER_SEEN,
@@ -166,7 +166,10 @@ test("console configuration fails closed and keeps the operator token server-sid
   assert.throws(() => fleetConsoleConfig({ FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN, FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET }), /FLEET_API_BASE_URL/);
   assert.throws(() => fleetConsoleConfig({ FLEET_API_BASE_URL: "https://f", FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET }), /FLEET_OPERATOR_TOKEN/);
   assert.throws(() => fleetConsoleConfig({ FLEET_API_BASE_URL: "https://f", FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN }), /FLEET_CONSOLE_SESSION_SECRET/);
-  assert.throws(() => fleetConsoleConfig({ FLEET_API_BASE_URL: "not-a-url", FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN, FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET }), /absolute http/);
+  assert.throws(
+    () => fleetConsoleConfig({ FLEET_API_BASE_URL: "not-a-url", FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN, FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET }),
+    /must be an absolute URL/,
+  );
   const bounded = fleetConsoleConfig({
     FLEET_API_BASE_URL: "https://f",
     FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN,
@@ -550,4 +553,96 @@ test("primary surfaces carry landmarks, headings, labels and text status", async
   assert.ok(inventory.includes('<label for="online_state">'), "filters are labelled");
   assert.match(inventory, /aria-label="Fleet deployments"|aria-label="Fleet deployments"/, "tables are labelled");
   assert.ok(inventory.includes("<th scope="), "table headers use scope");
+});
+
+// ---------------------------------------------------------------------------
+// Review pass 2 findings
+// ---------------------------------------------------------------------------
+test("the fleet API transport refuses to carry the operator credential insecurely", () => {
+  const production = (url: string) => parseFleetApiBaseUrl(url, true);
+  const development = (url: string) => parseFleetApiBaseUrl(url, false);
+
+  // Production HTTPS is the supported transport.
+  assert.equal(production("https://fleet.example.com"), "https://fleet.example.com");
+  assert.equal(production("https://fleet.example.com:8443/"), "https://fleet.example.com:8443");
+  // A path prefix is preserved and normalized for reverse-proxy deployment.
+  assert.equal(production("https://fleet.example.com/fleet-api/"), "https://fleet.example.com/fleet-api");
+
+  // Production plaintext to a remote host is refused.
+  assert.throws(() => production("http://fleet.example.com"), /must use https in production/);
+  assert.throws(() => production("http://fleet.example.com:4100"), /must use https in production/);
+  // Private, container and RFC1918 destinations are NOT treated as loopback.
+  for (const privateUrl of [
+    "http://10.0.0.10:4100",
+    "http://192.168.1.5:4100",
+    "http://172.16.4.4:4100",
+    "http://fleet.internal:4100",
+    "http://fleet-service:4100",
+    "http://169.254.1.1:4100",
+  ]) {
+    assert.throws(() => production(privateUrl), /must use https in production/, `${privateUrl} must be refused in production`);
+  }
+  // Plaintext is permitted only for an explicitly local loopback destination.
+  for (const loopback of ["http://127.0.0.1:4100", "http://localhost:4100", "http://[::1]:4100", "http://127.0.0.1:4100/"]) {
+    assert.ok(production(loopback).startsWith("http://"), `${loopback} is permitted as a loopback destination`);
+  }
+  // Development HTTP remains usable for local testing.
+  assert.equal(development("http://127.0.0.1:4100"), "http://127.0.0.1:4100");
+  assert.equal(development("http://fleet.internal:4100"), "http://fleet.internal:4100");
+
+  // Embedded credentials, query strings, fragments and malformed URLs are refused.
+  assert.throws(() => production("https://user:pass@fleet.example.com"), /must not embed credentials/);
+  assert.throws(() => production("https://fleet.example.com?token=abc"), /must not contain a query string/);
+  assert.throws(() => production("https://fleet.example.com#frag"), /must not contain a fragment/);
+  assert.throws(() => production("fleet.example.com"), /must be an absolute URL/);
+  assert.throws(() => production("ftp://fleet.example.com"), /must use http or https/);
+  assert.throws(() => production(""), /FLEET_API_BASE_URL is required/);
+
+  // Production configuration is enforced through fleetConsoleConfig itself.
+  const base = { FLEET_OPERATOR_TOKEN: OPERATOR_TOKEN, FLEET_CONSOLE_SESSION_SECRET: SESSION_SECRET, NODE_ENV: "production" };
+  assert.equal(fleetConsoleConfig({ ...base, FLEET_API_BASE_URL: "https://fleet.example.com" }).baseUrl, "https://fleet.example.com");
+  assert.throws(() => fleetConsoleConfig({ ...base, FLEET_API_BASE_URL: "http://fleet.example.com" }), /must use https in production/);
+  assert.throws(() => fleetConsoleConfig({ ...base, FLEET_API_BASE_URL: "http://10.0.0.10:4100" }), /must use https in production/);
+  assert.equal(fleetConsoleConfig({ ...base, FLEET_API_BASE_URL: "http://127.0.0.1:4100" }).baseUrl, "http://127.0.0.1:4100");
+  assert.equal(
+    fleetConsoleConfig({ ...base, NODE_ENV: "development", FLEET_API_BASE_URL: "http://fleet.internal:4100" }).baseUrl,
+    "http://fleet.internal:4100",
+  );
+});
+
+test("the bearer credential is sent only on the server-side hop and never returned", async () => {
+  const seen: { url: string; authorization: string | undefined }[] = [];
+  const client = createFleetClient({
+    baseUrl: parseFleetApiBaseUrl("https://fleet.example.com/fleet-api", true),
+    operatorToken: OPERATOR_TOKEN,
+    timeoutMs: 50,
+    fetchImpl: (async (url: any, init: any) => {
+      seen.push({ url: String(url), authorization: init.headers?.authorization });
+      return new Response(JSON.stringify({ deployments: [] }), { status: 200 });
+    }) as any,
+  });
+  await client.listDeployments();
+  // The prefix is honoured so read endpoints resolve beneath the configured base.
+  assert.equal(seen[0].url, "https://fleet.example.com/fleet-api/deployments");
+  assert.equal(seen[0].authorization, `Bearer ${OPERATOR_TOKEN}`, "the bearer travels on the outbound server-side request");
+  // A console page never carries the bearer to the browser.
+  const page = await get("/deployments");
+  assert.ok(!/Bearer\s/.test(page.body), "no bearer token is rendered into a page");
+  assert.ok(!page.body.includes(OPERATOR_TOKEN));
+});
+
+test("malformed cookie input cannot turn an unauthenticated request into a server error", async () => {
+  // Invalid percent-encoding in the console cookie is ignored, not fatal.
+  for (const bad of ["fleet_console_session=%E0%A4%A", "fleet_console_session=%", "fleet_console_session=%ZZ", "=nokey", "fleet_console_session"]) {
+    const response = await app.inject({ method: "GET", url: "/", headers: { cookie: bad } });
+    assert.equal(response.statusCode, 303, `cookie ${bad} must be ignored rather than erroring`);
+    assert.equal(response.headers.location, "/login");
+  }
+  // A malformed cookie alongside a valid session does not break authentication.
+  const mixed = await app.inject({ method: "GET", url: "/", headers: { cookie: `other=%E0%A4%A; ${sessionCookie}` } });
+  assert.equal(mixed.statusCode, 200, "a valid session still works when another cookie is malformed");
+  assert.match(mixed.body, /Fleet overview/);
+  // And an outright hostile cookie header is still bounded.
+  const hostile = await app.inject({ method: "GET", url: "/", headers: { cookie: "%E0%A4%A; ; ;=;%ZZ" } });
+  assert.equal(hostile.statusCode, 303);
 });
