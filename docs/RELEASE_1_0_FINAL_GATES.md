@@ -17,9 +17,15 @@ This file is the concise release-state source of truth after Wave X and OCP clos
 
 ## Remaining release path
 
-The fixed sequence is:
+The fixed sequence was revised by product decision on 2026-10-12 after W27 acceptance.
 
-`release reconciliation -> W27 (#210) -> manual NVDA (#211) -> W28 (#212) -> Workspace 1.0 tag/handover`
+**Core scope change:** Connected Work and deterministic workflows are now required before the Workspace 1.0 tag. The current accepted `d9f269e...` build remains the qualified UAT baseline, not the final feature-complete 1.0 candidate.
+
+The revised sequence is:
+
+`W27 accepted -> W29 Connected Work (#218) -> W30 Deterministic Workflows (#219) -> manual NVDA (#211) -> W28 final independent-host RC (#212) -> Workspace 1.0 tag/handover`
+
+W29 includes optional/off-by-default email, calendar, Telegram, WhatsApp and Discord connectors. W30 supplies the deterministic trigger/condition/action engine and remains executable without an LLM. External accounts are never required for disconnected Workspace use.
 
 ### W27 — security, privacy and commercial distribution (#210)
 
@@ -64,6 +70,6 @@ After W27 and #211 close:
 
 ## No-scope-expansion rule
 
-No new product feature enters 1.0 after this checkpoint unless it is required to correct a release-blocking defect discovered by W27, manual accessibility review or W28 independent-host acceptance.
+The 2026-10-12 product decision explicitly promotes only **W29 Connected Work (#218)** and **W30 Deterministic Workflows (#219)** into the remaining Workspace 1.0 scope. This is the sole approved feature-scope expansion after the W27 checkpoint.
 
-W29/W30 and other post-1.0 ideas stay deferred.
+Do not infer a broader reopening of accepted W01-W28 functionality. A future agent/LLM layer remains separate from the deterministic execution authority and is not implicitly promoted by this decision.
