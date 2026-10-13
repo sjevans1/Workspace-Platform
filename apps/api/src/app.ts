@@ -107,6 +107,7 @@ import {
   templateSummaries,
 } from "../../../packages/templates/index.ts";
 import { instantiateTemplate } from "./template-instantiate.ts";
+import { connectedWorkRoutes, registerConnectorIngress } from "./connected-work.ts";
 import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
 import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import {
@@ -772,6 +773,42 @@ export async function buildApp(
       serviceMetrics("collaboration", collabHealthUrl),
       serviceMetrics("worker", workerHealthUrl),
     ]);
+    // W29-A / W30-A counters are observational only. An unavailable source is
+    // omitted rather than failing the whole metrics response, exactly like the
+    // other operational sources.
+    let connectors: Record<string, number> | undefined;
+    let workflows: Record<string, number> | undefined;
+    try {
+      connectors = await db.system(async (q) => {
+        const row = (await q.query("SELECT * FROM workspace_connector_health()")).rows[0];
+        return {
+          count: Number(row?.connections || 0),
+          attention_required: Number(row?.attention_required || 0),
+          sync_failures: Number(row?.sync_failures || 0),
+          events_received: Number(row?.events_received || 0),
+          events_duplicate: Number(row?.events_duplicate || 0),
+        };
+      });
+    } catch {
+      connectors = undefined;
+    }
+    try {
+      workflows = await db.system(async (q) => {
+        const row = (await q.query("SELECT * FROM workspace_workflow_health()")).rows[0];
+        return {
+          enabled: Number(row?.workflows_enabled || 0),
+          runs_started: Number(row?.runs_started || 0),
+          runs_succeeded: Number(row?.runs_succeeded || 0),
+          runs_failed: Number(row?.runs_failed || 0),
+          runs_queued: Number(row?.runs_queued || 0),
+          runs_dead_letter: Number(row?.runs_dead_letter || 0),
+          retries: Number(row?.retries || 0),
+          execution_latency_seconds: Number(row?.execution_latency_seconds || 0),
+        };
+      });
+    } catch {
+      workflows = undefined;
+    }
     return {
       startedAt: metricsStartedAt,
       dependencies,
@@ -782,6 +819,8 @@ export async function buildApp(
       },
       http: httpMetrics.snapshot(),
       antivirus: antivirusMetrics,
+      ...(connectors ? { connectors } : {}),
+      ...(workflows ? { workflows } : {}),
     };
   };
   // OCP-1A: the canonical operator telemetry snapshot. Composed from the same
@@ -2695,6 +2734,12 @@ export async function buildApp(
     "workspace.read",
   );
   dataRoutes(route, storage, antivirus, antivirusMetrics, operatorTelemetrySnapshot, operatorTelemetryTransportStatus);
+  // W29-A / W30-A: Connected Work and deterministic automation surfaces. Route
+  // registrations stay in their own module rather than enlarging this file, and the
+  // provider ingress endpoint is registered separately because, unlike every other
+  // route here, it carries no session.
+  connectedWorkRoutes(route, db);
+  registerConnectorIngress(app, db);
   await registerScim(app, db);
   app.addHook("onClose", async () => {
     try {

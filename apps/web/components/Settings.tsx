@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { Plus, Copy, ArrowUpRight } from "lucide-react";
 import { api, run, notify, changed, date } from "../lib/api";
 import { Modal, Field, FeatureExample } from "./common";
+import Connections from "./Connections";
+import Automations from "./Automations";
 import type { Appearance } from "../lib/appearance";
 export default function Settings({
   me,
@@ -31,9 +33,21 @@ export default function Settings({
     [modal, setModal] = useState(""),
     [secret, setSecret] = useState("");
   const admin = ["owner", "admin"].includes(me.user.role);
+  // Connections and automations belong to every member: a plain member owns
+  // their own delegated connections and their own workflows, and the server
+  // enforces the authorization. The rest of the tabs stay administrator only.
   const tabs = admin
-    ? ["profile", "members", "branding", "integrations", "webhooks", "audit"]
-    : ["profile"];
+    ? [
+        "profile",
+        "members",
+        "branding",
+        "integrations",
+        "webhooks",
+        "connections",
+        "automations",
+        "audit",
+      ]
+    : ["profile", "connections", "automations"];
   async function load() {
     if (!admin) return;
     setMembers(await api("/members"));
@@ -72,21 +86,23 @@ export default function Settings({
           </button>
         ))}
       </div>
-      <FeatureExample
-        feature={
-          tab === "members"
-            ? "members"
-            : tab === "branding"
-              ? "branding"
-              : tab === "integrations"
-                ? "integrations"
-                : tab === "webhooks"
-                  ? "webhooks"
-                  : tab === "audit"
-                    ? "audit"
-                    : "profile"
-        }
-      />
+      {tab !== "connections" && tab !== "automations" && (
+        <FeatureExample
+          feature={
+            tab === "members"
+              ? "members"
+              : tab === "branding"
+                ? "branding"
+                : tab === "integrations"
+                  ? "integrations"
+                  : tab === "webhooks"
+                    ? "webhooks"
+                    : tab === "audit"
+                      ? "audit"
+                      : "profile"
+          }
+        />
+      )}
       {tab === "profile" && (
         <>
           <section className="settings-section">
@@ -129,20 +145,25 @@ export default function Settings({
               </form>
             ) : (
               <p className="muted">
-                Local password sign-in is disabled for this deployment. Use
-                your configured single sign-on provider.
+                Local password sign-in is disabled for this deployment. Use your
+                configured single sign-on provider.
               </p>
             )}
           </section>
           <section className="settings-section">
             <h2>Appearance</h2>
-            <p className="muted">Personal display preference for this browser. Workspace continues to work independently of any AI service.</p>
+            <p className="muted">
+              Personal display preference for this browser. Workspace continues
+              to work independently of any AI service.
+            </p>
             <label className="field">
               <span>Colour theme</span>
               <select
                 aria-label="Colour theme"
                 value={appearance}
-                onChange={(event) => setAppearance(event.target.value as Appearance)}
+                onChange={(event) =>
+                  setAppearance(event.target.value as Appearance)
+                }
               >
                 <option value="system">Follow device</option>
                 <option value="light">Light</option>
@@ -253,15 +274,15 @@ export default function Settings({
         <section className="settings-section">
           <h2>Brand identity</h2>
           <p className="muted">
-            Organisation branding applies <strong>after sign-in</strong>, to this
-            organisation only. The <strong>deployment</strong> controls the
-            sign-in surface, so these settings never change what an unauthenticated
-            visitor sees, and never affect another organisation.
+            Organisation branding applies <strong>after sign-in</strong>, to
+            this organisation only. The <strong>deployment</strong> controls the
+            sign-in surface, so these settings never change what an
+            unauthenticated visitor sees, and never affect another organisation.
           </p>
           <p className="muted">
             The accent must stay readable: it carries the primary button and the
-            accent indicators on both the light and dark surfaces. An accent that
-            cannot is rejected when you save.
+            accent indicators on both the light and dark surfaces. An accent
+            that cannot is rejected when you save.
           </p>
           <form
             className="form"
@@ -419,10 +440,7 @@ export default function Settings({
                 this organisation’s Workspace sessions.
               </p>
             </div>
-            <button
-              className="button primary"
-              onClick={() => setModal("scim")}
-            >
+            <button className="button primary" onClick={() => setModal("scim")}>
               <Plus size={15} />
               Create SCIM connector
             </button>
@@ -436,7 +454,9 @@ export default function Settings({
                 <strong>{connector.label}</strong>
                 <small>
                   Default role: {connector.default_role} · Last used{" "}
-                  {connector.last_used_at ? date(connector.last_used_at) : "never"}
+                  {connector.last_used_at
+                    ? date(connector.last_used_at)
+                    : "never"}
                 </small>
                 <p className="small-text muted">
                   {connector.revoked_at
@@ -466,9 +486,7 @@ export default function Settings({
             guest or member, never admin or owner.
           </p>
           {scimGroups.length === 0 && (
-            <p className="muted">
-              No SCIM groups have been synchronized yet.
-            </p>
+            <p className="muted">No SCIM groups have been synchronized yet.</p>
           )}
           {scimGroups.map((group: any) => (
             <div className="integration-row" key={group.id}>
@@ -613,7 +631,8 @@ export default function Settings({
           <h3>Recent deliveries</h3>
           <p className="muted small-text">
             Administrators can retry dead deliveries on active subscriptions.
-            Retries preserve the event ID for consumer deduplication and are audited.
+            Retries preserve the event ID for consumer deduplication and are
+            audited.
           </p>
           <div className="table-scroll">
             <table className="simple-table">
@@ -640,7 +659,8 @@ export default function Settings({
                     <td>
                       {d.status === "dead" &&
                       hooks.subscriptions.some(
-                        (sub: any) => sub.id === d.subscription_id && sub.active,
+                        (sub: any) =>
+                          sub.id === d.subscription_id && sub.active,
                       ) ? (
                         <button
                           className="button"
@@ -666,7 +686,9 @@ export default function Settings({
                           {replayingDelivery === d.id ? "Requeuing…" : "Replay"}
                         </button>
                       ) : d.status === "dead" ? (
-                        <span className="muted small-text">Subscription paused</span>
+                        <span className="muted small-text">
+                          Subscription paused
+                        </span>
                       ) : (
                         <span className="muted">—</span>
                       )}
@@ -681,6 +703,8 @@ export default function Settings({
           </button>
         </section>
       )}
+      {tab === "connections" && <Connections me={me} />}
+      {tab === "automations" && <Automations me={me} />}
       {tab === "audit" && (
         <section className="settings-section">
           <h2>Audit trail</h2>
@@ -721,9 +745,9 @@ export default function Settings({
                   ? "Create SCIM connector"
                   : modal === "oidc"
                     ? "Register identity provider"
-                  : modal === "webhook"
-                  ? "Add event subscription"
-                  : `New ${modal}`
+                    : modal === "webhook"
+                      ? "Add event subscription"
+                      : `New ${modal}`
           }
           close={() => setModal("")}
         >
@@ -856,8 +880,12 @@ export default function Settings({
                     value={oidcMethod}
                     onChange={(e) => setOidcMethod(e.target.value)}
                   >
-                    <option value="client_secret_basic">Client secret — HTTP Basic</option>
-                    <option value="client_secret_post">Client secret — POST body</option>
+                    <option value="client_secret_basic">
+                      Client secret — HTTP Basic
+                    </option>
+                    <option value="client_secret_post">
+                      Client secret — POST body
+                    </option>
                     <option value="none">Public client — no secret</option>
                   </select>
                 </Field>
@@ -875,9 +903,9 @@ export default function Settings({
                 )}
                 <p className="muted small-text">
                   This only saves a disabled registration. There is no
-                  connection test, automatic issuer discovery, or active
-                  tenant sign-in in this release. The client secret is never
-                  displayed again.
+                  connection test, automatic issuer discovery, or active tenant
+                  sign-in in this release. The client secret is never displayed
+                  again.
                 </p>
               </>
             )}
@@ -916,7 +944,11 @@ export default function Settings({
             )}
             <button className="button primary">
               {modal === "oidc" ? "Register" : "Create"}{" "}
-              {modal === "invite" ? "invitation" : modal === "oidc" ? "provider" : modal}
+              {modal === "invite"
+                ? "invitation"
+                : modal === "oidc"
+                  ? "provider"
+                  : modal}
             </button>
           </form>
         </Modal>

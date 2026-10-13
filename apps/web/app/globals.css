@@ -2635,3 +2635,89 @@ textarea:focus-visible {
   padding: 24px 0;
   opacity: 0.75;
 }
+
+/* W29-A / W30-A Settings surfaces: Connections and Automations.
+   Appended only. New class names only; no existing rule is changed. */
+.connections-actions,
+.automations-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.connections-status-connected,
+.automations-status-succeeded,
+.automations-status-enabled {
+  color: #46614a;
+  background: #e6f1e7;
+  border-color: #cfe3d0;
+}
+.connections-status-attention_required,
+.connections-status-pending,
+.automations-status-attention_required,
+.automations-status-attention,
+.automations-status-waiting,
+.automations-status-draft,
+.automations-status-queued,
+.automations-status-pending,
+.automations-status-running {
+  color: #7a6220;
+  background: #fbefd8;
+  border-color: #f0e2c0;
+}
+.connections-status-error,
+.connections-status-revoked,
+.automations-status-error,
+.automations-status-failed,
+.automations-status-dead_letter,
+.automations-status-cancelled,
+.automations-status-skipped {
+  color: #8a3b2c;
+  background: #fdf1ef;
+  border-color: #f0d3cd;
+}
+.connections-status-disabled,
+.automations-status-disabled {
+  color: #6c7e70;
+  background: #f0f3ed;
+  border-color: #e5eae1;
+}
+.automations-plan {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.automations-reference {
+  margin: 10px 0 20px;
+  font-size: 12px;
+}
+.automations-reference summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+:root[data-theme="dark"] .connections-status-connected,
+:root[data-theme="dark"] .automations-status-succeeded,
+:root[data-theme="dark"] .automations-status-enabled {
+  color: #a9e2b8;
+}
+:root[data-theme="dark"] .connections-status-attention_required,
+:root[data-theme="dark"] .connections-status-pending,
+:root[data-theme="dark"] .automations-status-attention_required,
+:root[data-theme="dark"] .automations-status-attention,
+:root[data-theme="dark"] .automations-status-waiting,
+:root[data-theme="dark"] .automations-status-draft,
+:root[data-theme="dark"] .automations-status-queued,
+:root[data-theme="dark"] .automations-status-pending,
+:root[data-theme="dark"] .automations-status-running {
+  color: #f0d79a;
+}
+:root[data-theme="dark"] .connections-status-error,
+:root[data-theme="dark"] .connections-status-revoked,
+:root[data-theme="dark"] .automations-status-error,
+:root[data-theme="dark"] .automations-status-failed,
+:root[data-theme="dark"] .automations-status-dead_letter,
+:root[data-theme="dark"] .automations-status-cancelled,
+:root[data-theme="dark"] .automations-status-skipped {
+  color: #f4a596;
+}

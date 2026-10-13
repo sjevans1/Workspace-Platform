@@ -11075,3 +11075,361 @@ test("OCP-1C support evidence requires explicit bounded authorization", async ()
   ])
     assert.ok(actions.includes(expected), `missing audit event ${expected}`);
 });
+
+test("W29-A connector catalog reports the synthetic provider, nine declared keys and the capability vocabulary", async () => {
+  const catalog = await ok("GET", "/connectors/catalog");
+  assert.equal(catalog.vocabulary_version, "1.0.0");
+  assert.deepEqual(
+    catalog.providers.map((p: any) => p.key),
+    ["synthetic-test"],
+  );
+  assert.equal(catalog.providers[0].implemented, true);
+  assert.equal(catalog.providers[0].display_name, "Synthetic test provider");
+  assert.equal(catalog.declared.length, 9);
+  assert.deepEqual(
+    catalog.declared.map((d: any) => d.key),
+    [
+      "caldav",
+      "discord",
+      "google-calendar",
+      "google-mail",
+      "imap-smtp",
+      "microsoft-calendar",
+      "microsoft-mail",
+      "telegram",
+      "whatsapp",
+    ],
+  );
+  for (const declared of catalog.declared)
+    assert.equal(
+      declared.implemented,
+      false,
+      `${declared.key} must not be advertised as implemented`,
+    );
+  assert.equal(catalog.capabilities.length, 14);
+  assert.equal(new Set(catalog.capabilities.map((c: any) => c.key)).size, 14);
+  assert.deepEqual(catalog.limits, {
+    max_connections_per_tenant: 50,
+    max_user_connections_per_user: 20,
+    max_events_per_sync: 50,
+  });
+  // The catalog is a read surface: an ordinary member of the tenant may read it.
+  const member = await freshMemberActor("W29-A catalog member");
+  const memberView = await ok("GET", "/connectors/catalog", undefined, member);
+  assert.equal(memberView.providers[0].implemented, true);
+});
+
+test("W29-A connector CRUD enforces user ownership, tenant ownership and cross-tenant isolation", async () => {
+  const member = await freshMemberActor("W29-A crud member");
+  // A plain member may create a delegated, user-owned connection.
+  const created = await req(
+    "POST",
+    "/connectors/connections",
+    {
+      provider_key: "synthetic-test",
+      label: "Member delegated mailbox",
+      ownership: "user",
+    },
+    member,
+  );
+  assert.ok([200, 201].includes(created.statusCode), created.body);
+  const owned = created.json().connection;
+  assert.equal(owned.ownership, "user");
+  assert.equal(owned.owner_user_id, member.id);
+  assert.equal(owned.status, "pending");
+
+  // A plain member may NOT create a shared, tenant-owned connection.
+  const shared = await req(
+    "POST",
+    "/connectors/connections",
+    {
+      provider_key: "synthetic-test",
+      label: "Shared company mailbox",
+      ownership: "tenant",
+    },
+    member,
+  );
+  assert.equal(shared.statusCode, 403, shared.body);
+
+  // The tenant owner creates the shared connection the member must not manage.
+  const tenantOwned = await ok("POST", "/connectors/connections", {
+    provider_key: "synthetic-test",
+    label: "Shared company mailbox",
+    ownership: "tenant",
+  });
+  const sharedId = tenantOwned.connection.id;
+  assert.equal(tenantOwned.connection.ownership, "tenant");
+
+  for (const attempt of [
+    () =>
+      req(
+        "POST",
+        `/connectors/connections/${sharedId}/enabled`,
+        { enabled: false },
+        member,
+      ),
+    () =>
+      req(
+        "POST",
+        `/connectors/connections/${sharedId}/enabled`,
+        { enabled: true },
+        member,
+      ),
+    () => req("POST", `/connectors/connections/${sharedId}/revoke`, {}, member),
+    () => req("POST", `/connectors/connections/${sharedId}/test`, {}, member),
+  ]) {
+    const denied = await attempt();
+    assert.equal(
+      denied.statusCode,
+      403,
+      `member must not manage a shared connection: ${denied.statusCode} ${denied.body}`,
+    );
+  }
+
+  // Another user's delegated connection reports as ABSENT (404), never forbidden.
+  const stranger = await freshMemberActor("W29-A crud stranger");
+  const peek = await req(
+    "GET",
+    `/connectors/connections/${owned.id}`,
+    undefined,
+    stranger,
+  );
+  assert.equal(peek.statusCode, 404, peek.body);
+
+  // A member of a SECOND tenant cannot see the id at all; isolation is the database's.
+  const tenantId = randomUUID();
+  const otherUserId = randomUUID();
+  await db.tenant(tenantId, async (q) => {
+    await q.query(
+      "INSERT INTO organisations(id,name) VALUES($1,'W29-A second tenant')",
+      [tenantId],
+    );
+    await q.query(
+      "INSERT INTO users(id,email,name) VALUES($1,$2,'W29-A second tenant member')",
+      [otherUserId, `stranger-${otherUserId}@example.test`],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)",
+      [tenantId, otherUserId],
+    );
+  });
+  const otherToken = await db.tenant(tenantId, (q) =>
+    createSession(q, tenantId, otherUserId),
+  );
+  const crossTenant = await req(
+    "GET",
+    `/connectors/connections/${owned.id}`,
+    undefined,
+    { cookie: "workspace_session=" + otherToken, csrf: csrf(otherToken) },
+  );
+  assert.equal(crossTenant.statusCode, 404, crossTenant.body);
+});
+
+test("W29-A connector connect never returns secret material over HTTP", async () => {
+  const secret = "webhook-secret-do-not-echo-0123456789";
+  const created = await ok("POST", "/connectors/connections", {
+    provider_key: "synthetic-test",
+    label: "Secret handling probe",
+    ownership: "user",
+  });
+  const id = created.connection.id;
+  const connected = await req(
+    "POST",
+    `/connectors/connections/${id}/connect`,
+    { secret, metadata: { account_hint: "ops" } },
+    owner,
+  );
+  assert.ok([200, 201].includes(connected.statusCode), connected.body);
+  for (const leak of ["secret_encrypted", secret])
+    assert.ok(
+      !connected.body.includes(leak),
+      `connect response leaked ${leak}`,
+    );
+  const read = await req(
+    "GET",
+    `/connectors/connections/${id}`,
+    undefined,
+    owner,
+  );
+  for (const leak of ["secret_encrypted", secret])
+    assert.ok(!read.body.includes(leak), `connection read leaked ${leak}`);
+  const events = await req(
+    "GET",
+    `/connectors/connections/${id}/events`,
+    undefined,
+    owner,
+  );
+  for (const leak of ["secret_encrypted", secret])
+    assert.ok(!events.body.includes(leak), `events read leaked ${leak}`);
+});
+
+test("W29-A connector mutations require CSRF and refuse service tokens", async () => {
+  const member = await freshMemberActor("W29-A csrf member");
+  const created = await ok(
+    "POST",
+    "/connectors/connections",
+    { provider_key: "synthetic-test", label: "CSRF probe", ownership: "user" },
+    member,
+  );
+  const id = created.connection.id;
+
+  // A mutation without a CSRF token is refused.
+  const missing = await req(
+    "POST",
+    `/connectors/connections/${id}/enabled`,
+    { enabled: false },
+    member,
+    { "x-csrf-token": "" },
+  );
+  assert.equal(missing.statusCode, 403, missing.body);
+  // A mutation carrying a wrong CSRF token is refused the same way.
+  const wrong = await req(
+    "POST",
+    `/connectors/connections/${id}/enabled`,
+    { enabled: false },
+    member,
+    { "x-csrf-token": "not-the-csrf-token" },
+  );
+  assert.equal(wrong.statusCode, 403, wrong.body);
+
+  // Connector management is a human-session feature: a service token authenticates
+  // but is refused, because it carries API scopes rather than a signed-in session.
+  const serviceId = randomUUID();
+  await db.tenant(owner.tenant, async (q) => {
+    await q.query(
+      "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,'W29-A connector service',true)",
+      [serviceId, serviceId + "@service.internal"],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role) VALUES($1,$2,'member')",
+      [owner.tenant, serviceId],
+    );
+  });
+  const serviceToken = await db.tenant(owner.tenant, (q) =>
+    createSession(
+      q,
+      owner.tenant,
+      serviceId,
+      ["pages.read"],
+      "W29-A connector service",
+    ),
+  );
+  const refused = await req(
+    "POST",
+    `/connectors/connections/${id}/revoke`,
+    {},
+    null,
+    { authorization: "Bearer " + serviceToken },
+  );
+  assert.equal(refused.statusCode, 403, refused.body);
+});
+
+test("W29-A connector ingress verifies tokens, dedupes replays and cannot enumerate connections", async () => {
+  const token = "ingress-token-secret-0123456789abcdef";
+  const created = await ok("POST", "/connectors/connections", {
+    provider_key: "synthetic-test",
+    label: "Ingress probe",
+    ownership: "user",
+  });
+  const id = created.connection.id;
+  await ok("POST", `/connectors/connections/${id}/connect`, { secret: token });
+  const event = {
+    event_type: "synthetic.ping",
+    provider_event_id: "provider-evt-1",
+    dedupe_key: "dedupe-1",
+    resource_refs: [],
+    summary: "hello",
+  };
+  const accepted = await req("POST", `/connectors/ingress/${id}`, event, null, {
+    "x-connector-token": token,
+  });
+  assert.equal(accepted.statusCode, 202, accepted.body);
+  const first = accepted.json();
+  assert.equal(first.accepted, true);
+  assert.equal(first.duplicate, false);
+  assert.equal(first.event_type, "synthetic.ping");
+
+  // A replay of the same delivery is accepted as a duplicate, not a new event.
+  const replay = await req("POST", `/connectors/ingress/${id}`, event, null, {
+    "x-connector-token": token,
+  });
+  assert.equal(replay.statusCode, 202, replay.body);
+  assert.equal(replay.json().duplicate, true);
+  const events = await ok("GET", `/connectors/connections/${id}/events`);
+  const matching = events.events.filter(
+    (e: any) => e.provider_event_id === "provider-evt-1",
+  );
+  assert.equal(
+    matching.length,
+    1,
+    "a replay must not create a second event row",
+  );
+  assert.equal(Number(matching[0].duplicate_count), 1);
+
+  // Unknown connection and forged token answer IDENTICALLY, so the endpoint cannot
+  // be used to discover which connection ids exist.
+  const forged = await req("POST", `/connectors/ingress/${id}`, event, null, {
+    "x-connector-token": "forged-token-0123456789abcdef",
+  });
+  assert.equal(forged.statusCode, 401, forged.body);
+  const unknown = await req(
+    "POST",
+    `/connectors/ingress/${randomUUID()}`,
+    event,
+    null,
+    { "x-connector-token": token },
+  );
+  assert.equal(unknown.statusCode, 401, unknown.body);
+  assert.equal(unknown.statusCode, forged.statusCode);
+  assert.equal(unknown.body, forged.body);
+
+  // A revoked connection stops accepting ingress.
+  await ok("POST", `/connectors/connections/${id}/revoke`, {});
+  const revoked = await req("POST", `/connectors/ingress/${id}`, event, null, {
+    "x-connector-token": token,
+  });
+  assert.equal(revoked.statusCode, 401, revoked.body);
+});
+
+test("W29-A connector sync is recorded and counted in connector metrics", async () => {
+  const token = "sync-ingress-token-0123456789abcdef";
+  const metricsBefore = await ok("GET", "/connectors/metrics");
+  const created = await ok("POST", "/connectors/connections", {
+    provider_key: "synthetic-test",
+    label: "Sync probe",
+    ownership: "user",
+  });
+  const id = created.connection.id;
+  await ok("POST", `/connectors/connections/${id}/connect`, { secret: token });
+
+  const sync = await ok("POST", `/connectors/connections/${id}/sync`, {});
+  assert.equal(sync.queued, true);
+  assert.equal(sync.status, "pending");
+  // The connection stays connected and usable after a sync request.
+  const reloaded = await ok("GET", `/connectors/connections/${id}`);
+  assert.equal(reloaded.connection.status, "connected");
+  assert.equal(reloaded.connection.enabled, true);
+
+  // The metrics surface reflects the rows this test created.
+  const ingested = await req(
+    "POST",
+    `/connectors/ingress/${id}`,
+    {
+      event_type: "synthetic.metric",
+      provider_event_id: "metric-evt-1",
+      dedupe_key: "metric-dedupe-1",
+    },
+    null,
+    { "x-connector-token": token },
+  );
+  assert.equal(ingested.statusCode, 202, ingested.body);
+  const metricsAfter = await ok("GET", "/connectors/metrics");
+  assert.ok(
+    metricsAfter.connections >= metricsBefore.connections + 1,
+    "metrics must count the created connection",
+  );
+  assert.ok(
+    metricsAfter.events_received >= metricsBefore.events_received + 1,
+    "metrics must count the ingested event",
+  );
+});
