@@ -1,6 +1,6 @@
 # OpenJM Workspace — Standalone 1.0 delivery roadmap
 
-> **Authoritative release checkpoint — 2026-10-12:** W01–W26 and OCP-1/OCP-2 are accepted. The fixed remaining path is **W27 [#210] -> manual NVDA [#211] -> W28 [#212] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older execution sequences below are retained as historical evidence and must not be used to restart accepted waves.
+> **Authoritative release checkpoint — 2026-10-12 scope rebaseline:** W01–W28 baseline evidence is accepted through `main@d9f269e864ab217aca9fde910dfe1fabf3b53b65`. Shane has promoted the previously discussed **W29 Connected Work** and **W30 native deterministic workflows** into the Workspace 1.0 build. The fixed remaining path is **W29 [#215] -> W30 [#216] -> final NVDA [#211] -> W31 [#217] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older text that treats W29/W30 as post-1.0 is historical.
 
 
 **Current execution baseline:** 2026-10-06, `main` after merged W17 PR #158 (`6b7f60f422723ec19e8a5006f3033ab082d7e8b9`).  
@@ -10,7 +10,7 @@
 
 ## 1. What "complete" means
 
-**Scope is a commercially deployable, self-hosted/white-label Workspace 1.0**, not unlimited one-to-one Notion/AppFlowy feature parity. A customer can install, brand, administer and recover it without OpenJM Enterprise AI, any LLM, a paid editor, an external S3 provider or any SaaS account. For a single-node supported deployment, a user can compose/collaborate on pages; organize spaces, references, comments and searchable content; manage databases with table, board, calendar, relations, formula/rollup basics; import/export data; share securely; and operate/recover the installation with validated boundaries. There is a documented support/deployment matrix, pilot sign-off and 1.0 release artifact.
+**Scope is a commercially deployable, self-hosted/white-label Workspace 1.0**, not unlimited one-to-one Notion/AppFlowy feature parity. A customer can install, brand, administer and recover it without OpenJM Enterprise AI, any LLM, a paid editor, an external S3 provider or any SaaS account. For a single-node supported deployment, a user can compose/collaborate on pages; organize spaces, references, comments and searchable content; manage databases with table, board, calendar, relations, formula/rollup basics; import/export data; share securely; optionally connect governed Google/Microsoft email and external calendars; build deterministic trigger/condition/action workflows without AI; and operate/recover the installation with validated boundaries. Email/calendar connectors remain optional and off by default, so the no-SaaS-account standalone promise survives. There is a documented support/deployment matrix, pilot sign-off and 1.0 release artifact.
 
 **Mandatory isolation:** Workspace remains its own repository, containers/processes, PostgreSQL database, storage, credentials, authorization and deployment. Do not modify `OpenJM-Enterprise-AI`; no mandatory dependencies on it. An optional, off-by-default integration may consume Workspace's versioned permission-aware APIs/events, with revocation and reconciliation, but AI outages may not affect normal Workspace use.
 
@@ -72,7 +72,10 @@ Read **ID / order / dependencies** as a planning sequence, not a promise of exac
 | **W25** | **WebKit/Safari, WCAG and visual regression**: add Safari/WebKit browser acceptance, screen-reader manual audit and repeatable screenshots with redacted fixtures. | W16 | Core mobile/desktop workflows, contrast/focus/order/live regions, no public private screenshot data. |
 | **W26** | **White-label customer installation and admin UX**: site identity, logo/contrast checks, admin onboarding, configuration validation and local-first install profiles. | W04, W16, W23 | First-install/upgrade test on supported Linux and Windows/WSL (where supported); no SaaS sign-up; profile for local files or explicitly validated S3. |
 | **W27** | **Security/privacy/commercial distribution gates**: release threat model & penetration-test remediation, dependency/image policies, secrets/key rotation, retention compliance configuration and redistribution notices/source archives. | W02–W26 substantially complete | Red-team tenancy/API/file attack cases; confirmed supply-chain artifacts; exact ClamAV GPLv2 corresponding source and MPL source/notice obligations reviewed; legal review required. |
-| **W28** | **Release candidate and 1.0 tag**: independent customer-like host, end-to-end tenant/onboarding/auth, two-user authoring, DB relations/formula/rollup, import/export, encrypted backup/restore, accessibility, performance, recovery, support docs, upgrade smoke test and acceptance sign-off. | W01–W27 | Zero open release-blocking defects, green exact release SHA plus verified `main`, real-host evidence and deployment runbooks, changelog/support matrix, signed-off release decision before version tag. |
+| **W28** | **Independent-host acceptance and UAT baseline**: clean-host install/recovery/TLS/operations evidence and a persistent preview/UAT environment. This is no longer the final tag gate after the W29/W30 scope promotion. | W01–W27 | Real-host install/restore evidence, UAT health and no regression of accepted baseline behavior. |
+| **W29** | **Connected Work** ([#215](https://github.com/sjevans1/Workspace-Platform/issues/215)): shared governed connector control plane plus optional Google/Microsoft mailbox and external-calendar integration. | W20–W22 useful substrate; W27 security baseline | Encrypted credentials, least privilege, resumable/idempotent sync, tenant isolation, connect/disconnect/revoke, calendar event linking/write actions, email thread capture/draft/send governance, real-provider acceptance recorded separately, standalone mode with zero connectors. |
+| **W30** | **Native deterministic workflows** ([#216](https://github.com/sjevans1/Workspace-Platform/issues/216)): trigger -> condition -> action builder, schedules, approvals, run history and connector actions without an AI dependency. | W20 worker/outbox, W29 action contracts | DST-safe schedules, permission re-check, idempotency/retry/dead-letter, loop prevention, approvals, immutable version/run evidence, browser builder/run-history flows, backup/restore and capacity acceptance. |
+| **W31** | **Final Workspace 1.0 requalification, tag and handover** ([#217](https://github.com/sjevans1/Workspace-Platform/issues/217)): freeze the post-W29/W30 release SHA and re-run the complete release contract. | W29, W30, final NVDA #211 | Full CI-3L on exact SHA, W27 gates still green, independent-host standalone + connector-enabled acceptance, workflow acceptance, final docs/license/source package, post-merge main verification and explicit release sign-off before tag. |
 
 **Priority explanation:** P0 = essential before release; P1 = critical product depth that can be built after P0 security without relaxing security gates. If a capability is deferred during release review, revise the 1.0 feature promise and acceptance criteria *first*; do not silently mark the PR done.
 
@@ -83,7 +86,7 @@ Read **ID / order / dependencies** as a planning sequence, not a promise of exac
 - **Authoring chain:** W10 → W11 → W12; W10 → W18 → W19.
 - **Navigation/index chain:** existing #61 → W13 → W14.
 - **Operations/contracts:** W20 → W21 → W22, W23 → W24.
-- **Release convergence:** W16/W19/W24 → W25/W26 → W27 → W28.
+- **Release convergence:** W16/W19/W24 → W25/W26 → W27 → W28 baseline → W29 Connected Work → W30 deterministic workflows → final NVDA → W31 final requalification/tag.
 
 ## 5. Parallel engineering without cross-contamination
 
@@ -94,9 +97,9 @@ Work may proceed in **separate isolated worktrees/design lanes** while publishin
 | Security/identity | W01 → W02 → W03 → W04 | Own auth, middleware, SSO policy; never relax policy for tests. |
 | Product/data | W05 → W06/W08 → W07/W09; W10 → W11/W12 | Own property schemas, editor and UI; coordinate integration test fixture changes before merge. |
 | Search/experience | W13 → W14 → W15 → W16 → W17 | Keep user-visible ACL guarantees; avoid conflicting edits to `Workspace.tsx` and navigation until main refreshed. |
-| Platform/release | W20 → W21/W22; W18/W19; W23/W24 → W25–W28 | No live OpenJM Enterprise AI runtime/dependency; use isolated test providers and data. |
+| Platform/release | W20 → W21/W22; W18/W19; W23/W24 → W25–W28 → W29 → W30 → W31 | No mandatory OpenJM Enterprise AI runtime/dependency; W29 provider accounts are optional/off by default; deterministic W30 must remain useful without AI; use isolated/fake providers in CI and separate real-provider acceptance. |
 
-**Next sequence (Oct 2026):** execute **Wave R** from [DELIVERY_WAVES_1_0.md](DELIVERY_WAVES_1_0.md): W18 interrupted-edit recovery → W19 reconnect/collaboration fault reliability → the W24 capacity gates that qualify those behaviors. Reuse one fault/load harness and preserve independent W-ID acceptance evidence. Then proceed through bundled integration (W20–W22), operations/recovery (W23 + remaining W24), experience/packaging (W25–W26) and governance/release (W27–W28) waves. Older W02–W04/W08–W12 packages are closed by satisfying only their genuinely missing gates; do not rebuild accepted slices.
+**Next sequence (Oct 2026 rebaseline):** accepted W01–W28 work is baseline evidence. Implement **W29 #215** in bounded connector/calendar/email subpackages, then **W30 #216** in bounded runtime/scheduling/authorization/builder/operations subpackages. Run final manual NVDA #211 on the completed surface, then execute **W31 #217** as the frozen final release qualification/tag gate. Do not rebuild accepted W01–W28 slices unless W29/W30 expose a genuine blocker.
 
 ## 6. Mandatory definition of done — every implementation PR
 
