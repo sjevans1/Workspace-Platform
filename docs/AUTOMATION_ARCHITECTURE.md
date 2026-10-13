@@ -40,14 +40,16 @@ the tick loop in `apps/worker/src/worker.ts`.
 | Item | Location |
 |---|---|
 | Definitions, revisions, runs, steps, schedule state, health function | `infrastructure/migrations/030_automation_runtime.sql` |
+| Operator-provisioned automation service identity and its capability allowlist | `infrastructure/migrations/031_automation_service_principal.sql` |
 | DSL, conditions, schedules, triggers, actions, engine | `packages/automation/{dsl,conditions,schedule,triggers,actions,engine}.ts` |
 | Standard action registration at module load | `packages/automation/index.ts` |
 | HTTP surface for workflows, runs, catalog and metrics | `apps/api/src/connected-work.ts` |
 | Worker phases `automationTick` and `workspaceEventTick` | `apps/worker/src/connected-work.ts`, called from `apps/worker/src/worker.ts` |
 
-The storage layer is authoritative and complete: the five tables, the
-immutable-revision trigger, the count-only health function
-`workspace_workflow_health()` and the per-table RLS and grant posture.
+The storage layer is authoritative and complete: the five workflow tables plus
+`tenant_automation_principals`, the immutable-revision trigger, the count-only
+health function `workspace_workflow_health()` and the per-table RLS and grant
+posture.
 
 The engine module `packages/automation` implements the rules below and registers
 the six standard actions at module load, so importing the package is enough to run
@@ -68,8 +70,6 @@ Explicitly deferred, and NOT implemented here:
   adapter is the synthetic one.
 - **A workflow authoring interface and template library.** The HTTP contract
   exists; authoring tooling beyond the JSON definition is not part of the runtime.
-- **Service-principal workflows.** The schema and `resolveAuthority` support
-  `authority='service_principal'`, but nothing selects it in this tranche.
 - **Agent or model steps.** See *No LLM is required for workflow execution*.
 - **A loop detector.** There is no runtime cycle detector; see *Idempotency and
   loop bounds*.
@@ -224,7 +224,9 @@ normalized input belongs to a workflow.
   and the workflow timezone disagree. Nothing in the runtime reads the host's local
   timezone.
 - **Kinds.** `one_time` returns its instant once and then null. `interval` uses
-  `every_seconds`, based on `from` (the last scheduled instant) or `at`.
+  `every_seconds`, based on `from` (the last scheduled instant) or `at`. An
+  interval trigger carries no `at`, so at publish time the base is the instant the
+  schedule is enabled and each firing then advances from the instant that fired.
   `cron` accepts a 5-field expression (`minute hour day-of-month month
   day-of-week`) supporting `*`, lists, ranges and `*/n`, parsed by `parseCron`.
 - **DST forward (spring forward).** A local time that does not exist resolves to
@@ -336,40 +338,28 @@ capabilities}`.
 - A **delegated user** run executes with the owning user's role from their live
   membership of the tenant.
 - A **service principal** run executes as an explicitly constrained tenant
-  automation identity: `users.is_service` must be true, the role used is `member`,
-  and the only capabilities the run holds are those declared by the actions on the
-  pinned revision (`declaredCapabilities` collects one `service_capability` per
-  action). There is no other privilege. `resolveAuthority` implements this branch,
-  and it also requires a live membership row for the authority user, but nothing
-  selects it in this tranche: `createWorkflow` and `saveDraft` write
-  `authority='delegated_user'`, so every run that executes today is delegated.
-- Authority is resolved at run start and recorded on the run in
-  `workflow_runs.authority`. If the authority user's membership is missing or not
-  `active`, the run fails with `authorization_revoked`, no step executes and no
-  external action occurs.
-- A run executes under that pinned authority, not under the caller's. Any live
-  member may trigger a manual run, and the run still acts as the workflow's
-  authority, so a member cannot borrow their own broader permissions by pressing
-  Run.
-
-Every execution re-checks, rather than trusting the state at authoring time:
-
-1. the tenant (`tenant_id` is asserted even though RLS makes cross-tenant access
-   impossible);
-2. the authority user's live membership and role;
-3. the Workspace permission for the resource a workspace action touches, through
-   `requireAccess` inside the action itself;
-4. the workflow's status and its pinned revision;
-5. for `connector.action.invoke`: the connection exists, `enabled` is true,
-   `status` is `connected`, the run's authority is allowed to use it (a delegated
-   run may only use a connection whose `owner_user_id` is its authority user, or a
-   tenant-shared connection when the authority actor is an owner or administrator),
-   and the connection holds the requested capability in `capabilities_granted`.
-
-Any of those failures is fatal for the step: revocation is fail-closed, a denied
-connector access raises an error carrying `fatal`, and the engine classifies 403
-from the connector port as `authorization_revoked`. A run never continues with a
-permission it lost, and never acts with authority it was not granted.
+  automation identity. The identity is provisioned by an owner/admin in
+  `tenant_automation_principals` (migration 031), NOT chosen by the workflow: the
+  engine reads the identity from that row and ignores whatever user the revision
+  names, so a workflow author can never nominate an arbitrary user, least of all an
+  owner, as its own execution authority. `users.is_service` must be true, the role
+  used is `member`, a live membership is required, and the run holds only the
+  capabilities the operator granted, intersected with the ones the pinned revision
+  actually uses.
+- **The allowlist is enforced, not decorative.** `provisionServicePrincipal` /
+  `deprovisionServicePrincipal` / `getServicePrincipal` maintain it (admin only, and
+  the database restricts the stored values to the capabilities the action registry
+  declares). Every action carries a `service_capability`, and `executeRun` refuses
+  an action whose capability is outside the run's authority at the single point
+  every step passes through. The refusal is a step failure classified
+  `authorization_revoked`, so the run is recorded as failed and the connector is
+  never touched. Removing the allowlist stops every service-principal workflow
+  immediately; a workflow created without a provisioned identity is refused 409.
+- **Neither authority can exceed the tenant.** A delegated run is bounded by its
+  owner's live Workspace permissions, and a service principal is an ordinary
+  `member`, never `owner` or `admin`.
+  `workflow_runs.authority` records the resolved authority for the run, so the
+  evidence shows which model executed it.
 
 ## Run model and status vocabulary
 

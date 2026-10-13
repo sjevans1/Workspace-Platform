@@ -66,6 +66,8 @@ const AUDIT_WORKFLOW_ACTIONS = new Set([
   "workflow.run_triggered",
   "workflow.run_cancelled",
   "workflow.run_retried",
+  "workflow.service_principal_provisioned",
+  "workflow.service_principal_deprovisioned",
 ]);
 
 function clock(deps: EngineDeps): Date {
@@ -225,7 +227,12 @@ async function lastRunFor(
 export async function createWorkflow(
   q: Query,
   actor: Actor,
-  input: { name: string; description?: string; definition: unknown },
+  input: {
+    name: string;
+    description?: string;
+    definition: unknown;
+    authority?: unknown;
+  },
 ): Promise<any> {
   const name = String(input.name || "").trim();
   assert(
@@ -252,21 +259,24 @@ export async function createWorkflow(
     "Workflow limit reached for this workspace",
   );
 
+  const stored = await resolveStoredAuthority(q, actor, input.authority);
   const id = randomUUID();
   await q.query(
     "INSERT INTO workflow_definitions(id,tenant_id,name,description,status,owner_user_id,authority," +
-      " current_draft_revision,created_by) VALUES($1,$2,$3,$4,'draft',$5,'delegated_user',1,$5)",
-    [id, actor.tenant_id, name, description, actor.user_id],
+      " current_draft_revision,created_by) VALUES($1,$2,$3,$4,'draft',$5,$6,1,$5)",
+    [id, actor.tenant_id, name, description, actor.user_id, stored.authority],
   );
   // Revision 1 is created here and never mutated again; editing produces revision 2 onward.
   await q.query(
     "INSERT INTO workflow_revisions(tenant_id,workflow_id,revision,schema_version,definition,digest,authority," +
-      " authority_user_id,created_by) VALUES($1,$2,1,1,$3,$4,'delegated_user',NULL,$5)",
+      " authority_user_id,created_by) VALUES($1,$2,1,1,$3,$4,$5,$6,$7)",
     [
       actor.tenant_id,
       id,
       json(definition),
       definitionDigest(definition),
+      stored.authority,
+      stored.authority_user_id,
       actor.user_id,
     ],
   );
@@ -372,6 +382,21 @@ export async function saveDraft(
   const definition = parseWorkflowDefinition(input.definition);
   const nextRevision = Number(row.current_draft_revision) + 1;
   // A NEW revision row every edit: an active run keeps executing the revision it was pinned to.
+  const authorityUserId =
+    row.authority === "service_principal"
+      ? ((
+          await one(
+            q,
+            "SELECT user_id FROM tenant_automation_principals WHERE tenant_id=$1",
+            [actor.tenant_id],
+          )
+        )?.user_id ?? null)
+      : null;
+  assert(
+    row.authority !== "service_principal" || authorityUserId,
+    409,
+    "The tenant automation identity is no longer provisioned",
+  );
   await q.query(
     "INSERT INTO workflow_revisions(tenant_id,workflow_id,revision,schema_version,definition,digest,authority," +
       " authority_user_id,created_by) VALUES($1,$2,$3,1,$4,$5,$6,$7,$8)",
@@ -382,7 +407,7 @@ export async function saveDraft(
       json(definition),
       definitionDigest(definition),
       row.authority,
-      row.authority_user_id ?? null,
+      authorityUserId,
       actor.user_id,
     ],
   );
@@ -482,6 +507,8 @@ async function syncScheduleState(
   const dbNow = (await one(q, "SELECT now() AS now"))?.now as Date;
   const keep: string[] = [];
   if (scheduled.length && trigger.type === "schedule") {
+    // An interval trigger carries no `at` (the DSL forbids one) and has no previous
+    // firing to measure from, so its base is the instant the schedule is published.
     const next = nextOccurrence({
       kind: trigger.kind,
       at: trigger.at,
@@ -490,7 +517,7 @@ async function syncScheduleState(
       timezone: trigger.timezone,
       missed_policy: trigger.missed_policy,
       after: dbNow,
-      from: null,
+      from: trigger.kind === "interval" ? dbNow : null,
     });
     const spec = scheduled[0];
     await q.query(
@@ -672,7 +699,11 @@ export async function triggerManualRun(
   // waiting keep executing against their pinned revision, because cancelling an
   // arbitrary mid-step execution would leave the run evidence ambiguous and could
   // not undo an external action that had already been committed.
-  assert(row.status === "enabled", 409, "Enable the workflow before running it");
+  assert(
+    row.status === "enabled",
+    409,
+    "Enable the workflow before running it",
+  );
   const definition = await revisionDefinition(
     q,
     actor.tenant_id,
@@ -1063,7 +1094,11 @@ export async function engineTick(
         " OR NOT EXISTS (SELECT 1 FROM workflow_runs other WHERE other.tenant_id=$1" +
         " AND other.workflow_id=r.workflow_id AND other.status='running' AND other.id<>r.id))" +
         " ORDER BY r.next_attempt_at,r.id LIMIT $2 FOR UPDATE SKIP LOCKED",
-      [tenant, WORKFLOW_LIMITS.max_runs_per_tick, WORKFLOW_LIMITS.max_concurrent_runs_per_tenant],
+      [
+        tenant,
+        WORKFLOW_LIMITS.max_runs_per_tick,
+        WORKFLOW_LIMITS.max_concurrent_runs_per_tenant,
+      ],
     )
   ).rows;
   let succeeded = 0;
@@ -1092,10 +1127,14 @@ export async function engineTick(
  * is truncated. Anything larger is dropped rather than truncated into the run's
  * trigger context.
  */
-function boundedEventPayload(value: unknown): Record<string, string | number | boolean> {
+function boundedEventPayload(
+  value: unknown,
+): Record<string, string | number | boolean> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const output: Record<string, string | number | boolean> = {};
-  for (const [key, raw] of Object.entries(value as Record<string, unknown>).slice(0, 16)) {
+  for (const [key, raw] of Object.entries(
+    value as Record<string, unknown>,
+  ).slice(0, 16)) {
     if (!/^[a-zA-Z0-9_.-]{1,40}$/.test(key)) continue;
     if (typeof raw === "string") output[key] = raw.slice(0, 120);
     else if (typeof raw === "number" && Number.isFinite(raw)) output[key] = raw;
@@ -1109,7 +1148,10 @@ function boundedEventPayload(value: unknown): Record<string, string | number | b
  * WORKFLOW_LIMITS.step_timeout_seconds fails as a retryable timeout instead of
  * holding the run's lease and the tenant transaction indefinitely.
  */
-async function withStepTimeout<T>(work: Promise<T>, seconds: number): Promise<T> {
+async function withStepTimeout<T>(
+  work: Promise<T>,
+  seconds: number,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -1117,7 +1159,9 @@ async function withStepTimeout<T>(work: Promise<T>, seconds: number): Promise<T>
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () =>
-            reject(new HttpError(504, "Workflow step exceeded its time ceiling")),
+            reject(
+              new HttpError(504, "Workflow step exceeded its time ceiling"),
+            ),
           Math.max(1, seconds) * 1000,
         );
       }),
@@ -1227,6 +1271,177 @@ function classifyActionFailure(error: unknown): {
   return { category: classified.category, retryable: classified.retryable };
 }
 
+/** The capabilities an owner/admin may grant to the tenant automation identity. */
+export const AUTOMATION_SERVICE_CAPABILITIES = [
+  "notification.create",
+  "record.create",
+  "record.update",
+  "webhook.emit",
+  "connector.action",
+  "workflow.delay",
+];
+
+/**
+ * Resolves the authority a workflow will store. A service-principal workflow needs
+ * an owner/admin and an already provisioned tenant automation identity, so a
+ * workflow author can never nominate an arbitrary user (least of all an owner) as
+ * its own execution authority.
+ */
+async function resolveStoredAuthority(
+  q: Query,
+  actor: Actor,
+  requested: unknown,
+): Promise<{ authority: string; authority_user_id: string | null }> {
+  if (
+    requested === undefined ||
+    requested === null ||
+    requested === "delegated_user"
+  )
+    return { authority: "delegated_user", authority_user_id: null };
+  assert(
+    requested === "service_principal",
+    400,
+    "Workflow authority must be delegated_user or service_principal",
+  );
+  assert(
+    isTenantAdministrator(actor),
+    403,
+    "Administrator access required for a service principal workflow",
+  );
+  const principal = await one(
+    q,
+    "SELECT user_id FROM tenant_automation_principals WHERE tenant_id=$1",
+    [actor.tenant_id],
+  );
+  assert(
+    principal,
+    409,
+    "Provision the tenant automation identity before creating a service principal workflow",
+  );
+  return {
+    authority: "service_principal",
+    authority_user_id: principal.user_id,
+  };
+}
+
+/** Reads the tenant automation identity, or reports that none is provisioned. */
+export async function getServicePrincipal(
+  q: Query,
+  actor: Actor,
+): Promise<any> {
+  const row = await one(
+    q,
+    "SELECT p.user_id,p.capabilities,p.created_at,u.name,u.email" +
+      " FROM tenant_automation_principals p JOIN users u ON u.id=p.user_id" +
+      " WHERE p.tenant_id=$1",
+    [actor.tenant_id],
+  );
+  return {
+    configured: !!row,
+    user_id: row?.user_id || null,
+    name: row?.name || null,
+    email: row?.email || null,
+    capabilities: row ? [...row.capabilities].sort() : [],
+    created_at: row?.created_at || null,
+    available_capabilities: AUTOMATION_SERVICE_CAPABILITIES,
+  };
+}
+
+/**
+ * Provisions the tenant automation identity and its capability allowlist. Admin
+ * only. The identity is a real user row flagged `is_service` with a plain member
+ * membership, so every Workspace permission check it triggers is an ordinary
+ * member check: it can never hold owner or admin authority.
+ */
+export async function provisionServicePrincipal(
+  q: Query,
+  actor: Actor,
+  input: { capabilities: unknown },
+): Promise<any> {
+  assert(
+    isTenantAdministrator(actor),
+    403,
+    "Administrator access required to provision the automation identity",
+  );
+  assert(
+    Array.isArray(input.capabilities),
+    400,
+    "Capabilities must be an array",
+  );
+  const capabilities = [...new Set(input.capabilities.map(String))].sort();
+  for (const capability of capabilities)
+    assert(
+      AUTOMATION_SERVICE_CAPABILITIES.includes(capability),
+      400,
+      `Unknown automation capability: ${capability}`,
+    );
+  const existing = await one(
+    q,
+    "SELECT user_id FROM tenant_automation_principals WHERE tenant_id=$1",
+    [actor.tenant_id],
+  );
+  let userId = existing?.user_id as string | undefined;
+  if (!userId) {
+    userId = randomUUID();
+    await q.query(
+      "INSERT INTO users(id,email,name,is_service) VALUES($1,$2,$3,true)",
+      [
+        userId,
+        `automation-${actor.tenant_id}@workspace.internal`,
+        "Tenant automation",
+      ],
+    );
+    await q.query(
+      "INSERT INTO memberships(tenant_id,user_id,role,active) VALUES($1,$2,'member',true)" +
+        " ON CONFLICT(tenant_id,user_id) DO UPDATE SET active=true,role='member'",
+      [actor.tenant_id, userId],
+    );
+  } else {
+    await q.query(
+      "UPDATE memberships SET active=true,role='member' WHERE tenant_id=$1 AND user_id=$2",
+      [actor.tenant_id, userId],
+    );
+  }
+  await q.query(
+    "INSERT INTO tenant_automation_principals(tenant_id,user_id,capabilities,created_by)" +
+      " VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id) DO UPDATE SET capabilities=EXCLUDED.capabilities," +
+      " user_id=EXCLUDED.user_id,updated_at=now()",
+    [actor.tenant_id, userId, capabilities, actor.user_id],
+  );
+  await audit(
+    q,
+    actor.tenant_id,
+    actor.user_id,
+    "workflow.service_principal_provisioned",
+    null,
+  );
+  return getServicePrincipal(q, actor);
+}
+
+/** Removes the allowlist. The identity remains but no workflow can execute under it. */
+export async function deprovisionServicePrincipal(
+  q: Query,
+  actor: Actor,
+): Promise<{ removed: number }> {
+  assert(
+    isTenantAdministrator(actor),
+    403,
+    "Administrator access required to remove the automation identity",
+  );
+  const result = await q.query(
+    "DELETE FROM tenant_automation_principals WHERE tenant_id=$1",
+    [actor.tenant_id],
+  );
+  await audit(
+    q,
+    actor.tenant_id,
+    actor.user_id,
+    "workflow.service_principal_deprovisioned",
+    null,
+  );
+  return { removed: result.rowCount || 0 };
+}
+
 function declaredCapabilities(definition: WorkflowDefinition): string[] {
   const capabilities = new Set<string>();
   for (const action of definition.actions) {
@@ -1252,8 +1467,19 @@ async function resolveAuthority(
   definition: WorkflowDefinition,
 ): Promise<{ authority: RunAuthority; actor: Actor } | null> {
   const isService = workflow.authority === "service_principal";
+  // The service identity is chosen by an owner/admin in
+  // `tenant_automation_principals`, never by the workflow author: a workflow cannot
+  // nominate an arbitrary user (least of all an owner) as its own authority.
+  const principal = isService
+    ? await one(
+        q,
+        "SELECT user_id,capabilities FROM tenant_automation_principals WHERE tenant_id=$1",
+        [tenant],
+      )
+    : null;
+  if (isService && !principal) return null;
   const authorityUserId: string | null = isService
-    ? revision.authority_user_id
+    ? principal.user_id
     : workflow.owner_user_id;
   if (!authorityUserId) return null;
   const membership = await one(
@@ -1279,7 +1505,16 @@ async function resolveAuthority(
     scopes: null,
     expires_at: new Date(Date.now() + 60000),
   };
-  const capabilities = declaredCapabilities(definition);
+  // A service principal's authority is exactly the operator-provisioned allowlist,
+  // intersected with what this revision actually uses. A delegated user run carries
+  // its owner's Workspace permissions instead, so the list is informational there.
+  const declared = declaredCapabilities(definition);
+  const granted = Array.isArray(principal?.capabilities)
+    ? (principal!.capabilities as string[])
+    : [];
+  const capabilities = isService
+    ? declared.filter((capability) => granted.includes(capability))
+    : declared;
   const authority: RunAuthority = isService
     ? { kind: "service_principal", user_id: authorityUserId, capabilities }
     : { kind: "delegated_user", user_id: authorityUserId, capabilities };
@@ -1383,6 +1618,43 @@ async function executeRun(
       (previous.status === "succeeded" || previous.status === "skipped")
     )
       continue;
+    // A step that asked to wait completes here, on the first tick at or after its
+    // own deadline. Re-running it instead would re-arm the wait forever and no
+    // later step could ever run.
+    if (previous && previous.status === "waiting") {
+      const until = Number(
+        Date.parse(String(previous.retry_state?.waiting_until || "")),
+      );
+      if (Number.isFinite(until) && until > clock(deps).getTime()) {
+        // The deadline has not passed. Restore the waiting state and stop, so an
+        // early claim (a recovered lease, a forced retry) cannot re-arm the wait
+        // with a fresh deadline or add a spurious attempt.
+        await q.query(
+          "UPDATE workflow_runs SET status='waiting',next_attempt_at=$3," +
+            " lease_token=NULL,lease_expires_at=NULL WHERE tenant_id=$1 AND id=$2",
+          [tenant, run.id, new Date(until)],
+        );
+        return "waiting";
+      }
+      if (Number.isFinite(until)) {
+        await recordStep(
+          q,
+          tenant,
+          run.id,
+          step,
+          "succeeded",
+          Number(previous.attempt),
+          { ...(previous.result || {}), resumed: true },
+          null,
+          {},
+        );
+        await q.query(
+          "UPDATE workflow_runs SET current_step=$3 WHERE tenant_id=$1 AND id=$2",
+          [tenant, run.id, step.seq],
+        );
+        continue;
+      }
+    }
 
     if (step.step_type === "trigger") {
       assertNonSecret({ trigger_type: run.trigger_type });
@@ -1466,6 +1738,19 @@ async function executeRun(
     const definitionAction = actionFor(step.operation);
     await recordStep(q, tenant, run.id, step, "running", attempt, {}, null, {});
     try {
+      // The service-principal allowlist is enforced HERE, at the one place every
+      // step passes through, so no action can bypass it, and INSIDE the step's own
+      // try block so the refusal is classified and recorded as a step failure
+      // rather than escaping the engine. A delegated user run is bounded by that
+      // user's live Workspace permissions instead.
+      assert(
+        resolved.authority.kind !== "service_principal" ||
+          resolved.authority.capabilities.includes(
+            definitionAction.service_capability,
+          ),
+        403,
+        `Service principal is not authorised for ${definitionAction.service_capability}`,
+      );
       const outcome = await withStepTimeout(
         definitionAction.run({
           q,

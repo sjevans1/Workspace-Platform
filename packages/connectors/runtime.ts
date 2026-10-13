@@ -147,7 +147,10 @@ export function publicConnection(
     capabilities_requested: [...(row.capabilities_requested || [])],
     capabilities_granted: [...(row.capabilities_granted || [])],
     capabilities_available: [...definition.capabilities],
-    config: sanitizeCredentialMetadata(row.config) as unknown as Record<string, unknown>,
+    config: sanitizeCredentialMetadata(row.config) as unknown as Record<
+      string,
+      unknown
+    >,
     created_at: row.created_at,
     updated_at: row.updated_at,
     connected_at: row.connected_at,
@@ -204,12 +207,21 @@ export async function createConnection(
     `Provider ${definition.key} does not support ${input.ownership} ownership`,
   );
   if (input.ownership === "tenant")
-    assert(isTenantAdministrator(actor), 403, "Administrator access required to create a shared connection");
+    assert(
+      isTenantAdministrator(actor),
+      403,
+      "Administrator access required to create a shared connection",
+    );
   const label = String(input.label || "").trim();
-  assert(label.length >= 1 && label.length <= 120, 400, "Connection label must contain 1-120 characters");
-  const requested = input.capabilities === undefined
-    ? defaultCapabilities(definition)
-    : normalizeCapabilities(input.capabilities);
+  assert(
+    label.length >= 1 && label.length <= 120,
+    400,
+    "Connection label must contain 1-120 characters",
+  );
+  const requested =
+    input.capabilities === undefined
+      ? defaultCapabilities(definition)
+      : normalizeCapabilities(input.capabilities);
   for (const capability of requested)
     assert(
       definition.capabilities.includes(capability),
@@ -218,9 +230,19 @@ export async function createConnection(
     );
 
   const total = Number(
-    (await one(q, "SELECT count(*)::int AS c FROM connector_connections WHERE tenant_id=$1", [actor.tenant_id]))?.c || 0,
+    (
+      await one(
+        q,
+        "SELECT count(*)::int AS c FROM connector_connections WHERE tenant_id=$1",
+        [actor.tenant_id],
+      )
+    )?.c || 0,
   );
-  assert(total < CONNECTOR_LIMITS.max_connections_per_tenant, 409, "Connection limit reached for this workspace");
+  assert(
+    total < CONNECTOR_LIMITS.max_connections_per_tenant,
+    409,
+    "Connection limit reached for this workspace",
+  );
   if (input.ownership === "user") {
     const mine = Number(
       (
@@ -231,11 +253,16 @@ export async function createConnection(
         )
       )?.c || 0,
     );
-    assert(mine < CONNECTOR_LIMITS.max_user_connections_per_user, 409, "Delegated connection limit reached");
+    assert(
+      mine < CONNECTOR_LIMITS.max_user_connections_per_user,
+      409,
+      "Delegated connection limit reached",
+    );
   }
   const config = sanitizeCredentialMetadata(input.config);
   assert(
-    Buffer.byteLength(JSON.stringify(config)) <= CONNECTOR_LIMITS.max_config_bytes,
+    Buffer.byteLength(JSON.stringify(config)) <=
+      CONNECTOR_LIMITS.max_config_bytes,
     400,
     "Connection configuration is too large",
   );
@@ -262,12 +289,23 @@ export async function createConnection(
       " VALUES($1,$2,$3)",
     [actor.tenant_id, id, definition.default_poll_interval_seconds],
   );
-  await audit(q, actor.tenant_id, actor.user_id, "connector.connection_created", id);
-  const row = await one(q, "SELECT * FROM connector_connections WHERE id=$1", [id]);
+  await audit(
+    q,
+    actor.tenant_id,
+    actor.user_id,
+    "connector.connection_created",
+    id,
+  );
+  const row = await one(q, "SELECT * FROM connector_connections WHERE id=$1", [
+    id,
+  ]);
   return publicConnection(row);
 }
 
-export async function listConnections(q: Query, actor: Actor): Promise<PublicConnection[]> {
+export async function listConnections(
+  q: Query,
+  actor: Actor,
+): Promise<PublicConnection[]> {
   const rows = (
     await q.query(
       "SELECT * FROM connector_connections WHERE tenant_id=$1 ORDER BY created_at DESC,id",
@@ -291,7 +329,9 @@ async function loadConnection(
   id: string,
 ): Promise<any> {
   assert(/^[0-9a-f-]{36}$/i.test(id), 400, "Invalid connection id");
-  const row = await one(q, "SELECT * FROM connector_connections WHERE id=$1", [id]);
+  const row = await one(q, "SELECT * FROM connector_connections WHERE id=$1", [
+    id,
+  ]);
   // A connection the caller may not see reports as absent, never as forbidden.
   assert(row, 404, "Connection not found");
   assert(canReadConnection(actor, row), 404, "Connection not found");
@@ -306,7 +346,9 @@ export async function getConnection(
   const row = await loadConnection(q, actor, id);
   return publicConnection(
     row,
-    canManageConnection(actor, row) ? await credentialsFor(q, actor.tenant_id, row.id) : [],
+    canManageConnection(actor, row)
+      ? await credentialsFor(q, actor.tenant_id, row.id)
+      : [],
   );
 }
 
@@ -331,11 +373,19 @@ export async function connectConnection(
 ): Promise<PublicConnection> {
   const row = await loadConnection(q, actor, id);
   requireManage(actor, row);
-  assert(row.status !== "revoked", 409, "A revoked connection cannot be reconnected");
+  assert(
+    row.status !== "revoked",
+    409,
+    "A revoked connection cannot be reconnected",
+  );
   const definition = providerDefinition(row.provider_key);
   const kind = definition.credential_kinds[0];
   const secret = String(input.secret || "");
-  assert(secret.length >= 16 && secret.length <= 4096, 400, "Connection secret must contain 16-4096 characters");
+  assert(
+    secret.length >= 16 && secret.length <= 4096,
+    400,
+    "Connection secret must contain 16-4096 characters",
+  );
   const assigned = await putCredential(q, actor.tenant_id, id, kind, secret, {
     ...(input.metadata || {}),
     ...(definition.webhook ? { token_digest: tokenDigest(secret) } : {}),
@@ -355,7 +405,13 @@ export async function connectConnection(
     [actor.tenant_id, id],
   );
   await audit(q, actor.tenant_id, actor.user_id, "connector.connected", id);
-  await audit(q, actor.tenant_id, actor.user_id, "connector.capabilities_granted", id);
+  await audit(
+    q,
+    actor.tenant_id,
+    actor.user_id,
+    "connector.capabilities_granted",
+    id,
+  );
   void assigned;
   return getConnection(q, actor, id);
 }
@@ -368,7 +424,11 @@ export async function setConnectionEnabled(
 ): Promise<PublicConnection> {
   const row = await loadConnection(q, actor, id);
   requireManage(actor, row);
-  assert(row.status !== "revoked", 409, "A revoked connection cannot be enabled");
+  assert(
+    row.status !== "revoked",
+    409,
+    "A revoked connection cannot be enabled",
+  );
   assert(
     enabled ? row.status !== "pending" : true,
     409,
@@ -386,7 +446,13 @@ export async function setConnectionEnabled(
         " WHERE tenant_id=$1 AND connection_id=$2 AND status='idle'",
       [actor.tenant_id, id],
     );
-  await audit(q, actor.tenant_id, actor.user_id, enabled ? "connector.enabled" : "connector.disabled", id);
+  await audit(
+    q,
+    actor.tenant_id,
+    actor.user_id,
+    enabled ? "connector.enabled" : "connector.disabled",
+    id,
+  );
   return getConnection(q, actor, id);
 }
 
@@ -422,11 +488,19 @@ export async function rotateConnectionCredential(
 ): Promise<PublicConnection> {
   const row = await loadConnection(q, actor, id);
   requireManage(actor, row);
-  assert(row.status !== "revoked", 409, "A revoked connection cannot be rotated");
+  assert(
+    row.status !== "revoked",
+    409,
+    "A revoked connection cannot be rotated",
+  );
   const definition = providerDefinition(row.provider_key);
   const kind = definition.credential_kinds[0];
   const secret = String(input.secret || "");
-  assert(secret.length >= 16 && secret.length <= 4096, 400, "Connection secret must contain 16-4096 characters");
+  assert(
+    secret.length >= 16 && secret.length <= 4096,
+    400,
+    "Connection secret must contain 16-4096 characters",
+  );
   await putCredential(q, actor.tenant_id, id, kind, secret, {
     ...(input.metadata || {}),
     ...(definition.webhook ? { token_digest: tokenDigest(secret) } : {}),
@@ -437,7 +511,13 @@ export async function rotateConnectionCredential(
       " status=CASE WHEN status='attention_required' THEN 'connected' ELSE status END WHERE id=$1",
     [id],
   );
-  await audit(q, actor.tenant_id, actor.user_id, "connector.credential_rotated", id);
+  await audit(
+    q,
+    actor.tenant_id,
+    actor.user_id,
+    "connector.credential_rotated",
+    id,
+  );
   return getConnection(q, actor, id);
 }
 
@@ -450,17 +530,39 @@ export async function testConnection(
   q: Query,
   actor: Actor,
   id: string,
-): Promise<{ ok: boolean; category: FailureCategory | null; detail: string | null; status: ConnectionStatus }> {
+): Promise<{
+  ok: boolean;
+  category: FailureCategory | null;
+  detail: string | null;
+  status: ConnectionStatus;
+}> {
   const row = await loadConnection(q, actor, id);
   requireManage(actor, row);
-  assert(row.status !== "revoked", 409, "A revoked connection cannot be tested");
+  assert(
+    row.status !== "revoked",
+    409,
+    "A revoked connection cannot be tested",
+  );
   const definition = providerDefinition(row.provider_key);
   if (!definition.health_check || !adapterImplemented(row.provider_key)) {
-    return { ok: false, category: "permanent", detail: "Provider adapter is not implemented", status: row.status };
+    return {
+      ok: false,
+      category: "permanent",
+      detail: "Provider adapter is not implemented",
+      status: row.status,
+    };
   }
   const hooks = adapterFor(row.provider_key);
-  await audit(q, actor.tenant_id, actor.user_id, "connector.health_checked", id);
-  const result = await hooks.health({ config: (row.config || {}) as Record<string, unknown> });
+  await audit(
+    q,
+    actor.tenant_id,
+    actor.user_id,
+    "connector.health_checked",
+    id,
+  );
+  const result = await hooks.health({
+    config: (row.config || {}) as Record<string, unknown>,
+  });
   if (result.ok) {
     await q.query(
       "UPDATE connector_connections SET updated_at=now()," +
@@ -468,12 +570,28 @@ export async function testConnection(
         " attention_reason=NULL WHERE id=$1",
       [id],
     );
-    return { ok: true, category: null, detail: null, status: "connected" as ConnectionStatus };
+    return {
+      ok: true,
+      category: null,
+      detail: null,
+      status: "connected" as ConnectionStatus,
+    };
   }
   const failure = classifyProviderFailure({ kind: "protocol" });
   const category = result.category || failure.category;
-  await applyConnectionAttention(q, actor.tenant_id, id, category, result.detail || "Provider health check failed");
-  return { ok: false, category, detail: result.detail || null, status: "attention_required" };
+  await applyConnectionAttention(
+    q,
+    actor.tenant_id,
+    id,
+    category,
+    result.detail || "Provider health check failed",
+  );
+  return {
+    ok: false,
+    category,
+    detail: result.detail || null,
+    status: "attention_required",
+  };
 }
 
 async function applyConnectionAttention(
@@ -533,7 +651,12 @@ export async function claimDueSync(
       "UPDATE connector_sync_state SET status='running',lease_token=$3," +
         " lease_expires_at=now()+($4 || ' seconds')::interval,last_attempt_at=now()," +
         " attempts=attempts+1,updated_at=now() WHERE tenant_id=$1 AND connection_id=$2",
-      [tenant, candidate.connection_id, leaseToken, CONNECTOR_LIMITS.sync_lease_seconds],
+      [
+        tenant,
+        candidate.connection_id,
+        leaseToken,
+        CONNECTOR_LIMITS.sync_lease_seconds,
+      ],
     );
     claims.push({
       connection_id: candidate.connection_id,
@@ -563,7 +686,13 @@ export async function completeSync(
       " consecutive_failures=0,last_success_at=now(),next_attempt_at=$5,lease_token=NULL,lease_expires_at=NULL," +
       " last_error_category=NULL,last_error_summary=NULL,updated_at=now()" +
       " WHERE tenant_id=$1 AND connection_id=$2 AND status='running' AND lease_token=$3",
-    [tenant, claim.connection_id, claim.lease_token, outcome.next_cursor, outcome.next_at],
+    [
+      tenant,
+      claim.connection_id,
+      claim.lease_token,
+      outcome.next_cursor,
+      outcome.next_at,
+    ],
   );
   await q.query(
     "UPDATE connector_connections SET last_sync_at=now(),last_success_at=now(),updated_at=now()" +
@@ -581,16 +710,18 @@ export async function failSync(
   nextAttemptAt: Date,
 ): Promise<{ category: FailureCategory; attention: boolean }> {
   const classified = classifyProviderFailure(failure);
-  const failures = Number(
-    (
-      await one(
-        q,
-        "SELECT consecutive_failures FROM connector_sync_state WHERE tenant_id=$1 AND connection_id=$2",
-        [tenant, claim.connection_id],
-      )
-    )?.consecutive_failures || 0,
-  ) + 1;
-  const exhausted = !isRetryableCategory(classified.category) ||
+  const failures =
+    Number(
+      (
+        await one(
+          q,
+          "SELECT consecutive_failures FROM connector_sync_state WHERE tenant_id=$1 AND connection_id=$2",
+          [tenant, claim.connection_id],
+        )
+      )?.consecutive_failures || 0,
+    ) + 1;
+  const exhausted =
+    !isRetryableCategory(classified.category) ||
     failures >= RETRY_POLICY.attention_after_failures;
   await q.query(
     "UPDATE connector_sync_state SET status=$4,consecutive_failures=$5,lease_token=NULL,lease_expires_at=NULL," +
@@ -608,7 +739,13 @@ export async function failSync(
     ],
   );
   if (classified.connection_status)
-    await applyConnectionAttention(q, tenant, claim.connection_id, classified.category, classified.summary);
+    await applyConnectionAttention(
+      q,
+      tenant,
+      claim.connection_id,
+      classified.category,
+      classified.summary,
+    );
   else
     await q.query(
       "UPDATE connector_connections SET last_error_at=now(),last_error_category=$3,updated_at=now()" +
@@ -680,8 +817,23 @@ export async function recordConnectorEvent(
 }
 
 export type IngressResult =
-  | { accepted: true; connection_id: string; event_id: string; duplicate: boolean; event_type: string; tenant_id: string }
-  | { accepted: false; reason: "unknown_connection" | "invalid_signature" | "not_normalizable" | "rejected_event" | "disabled" };
+  | {
+      accepted: true;
+      connection_id: string;
+      event_id: string;
+      duplicate: boolean;
+      event_type: string;
+      tenant_id: string;
+    }
+  | {
+      accepted: false;
+      reason:
+        | "unknown_connection"
+        | "invalid_signature"
+        | "not_normalizable"
+        | "rejected_event"
+        | "disabled";
+    };
 
 /**
  * The generic ingress contract. A provider request is untrusted until the adapter
@@ -727,10 +879,15 @@ export async function ingestProviderEvent(
     body: input.body,
     secret,
   });
-  if (!verification.verified) return { accepted: false, reason: "invalid_signature" };
+  if (!verification.verified)
+    return { accepted: false, reason: "invalid_signature" };
   let normalized: NormalizedEvent | null = null;
   try {
-    normalized = hooks.normalizeInbound({ headers: input.headers, body: input.body, secret: "" });
+    normalized = hooks.normalizeInbound({
+      headers: input.headers,
+      body: input.body,
+      secret: "",
+    });
   } catch {
     return { accepted: false, reason: "not_normalizable" };
   }
@@ -739,7 +896,14 @@ export async function ingestProviderEvent(
   // The definer lookup already proved the token digest; the adapter's own check is
   // the second, provider-specific step. Only now does a tenant context exist.
   const recorded = await db.tenant(resolved.tenant_id, (q) =>
-    recordConnectorEvent(q, resolved.tenant_id, resolved.connection_id, resolved.provider_key, normalized!, "verified"),
+    recordConnectorEvent(
+      q,
+      resolved.tenant_id,
+      resolved.connection_id,
+      resolved.provider_key,
+      normalized!,
+      "verified",
+    ),
   );
   return {
     accepted: true,
@@ -772,12 +936,19 @@ export async function pendingConnectorEvents(
         " provider_occurred_at,normalized_resource_refs,payload_ref" +
         " FROM connector_events WHERE tenant_id=$1 AND verification='verified' AND dispatch_state='pending'" +
         " ORDER BY received_at,id LIMIT $2 FOR UPDATE SKIP LOCKED",
-      [tenant, Math.max(1, Math.min(limit, CONNECTOR_LIMITS.event_dispatch_batch))],
+      [
+        tenant,
+        Math.max(1, Math.min(limit, CONNECTOR_LIMITS.event_dispatch_batch)),
+      ],
     )
   ).rows;
 }
 
-export async function markEventDispatched(q: Query, tenant: string, id: string): Promise<void> {
+export async function markEventDispatched(
+  q: Query,
+  tenant: string,
+  id: string,
+): Promise<void> {
   await q.query(
     "UPDATE connector_events SET dispatch_state='dispatched',processed_at=now()" +
       " WHERE tenant_id=$1 AND id=$2 AND verification='verified'",
@@ -786,8 +957,12 @@ export async function markEventDispatched(q: Query, tenant: string, id: string):
 }
 
 /** The connector half of the operator metrics surface. */
-export async function connectorMetrics(db: Database): Promise<Record<string, number>> {
-  const row = await db.system((q) => one(q, "SELECT * FROM workspace_connector_health()"));
+export async function connectorMetrics(
+  db: Database,
+): Promise<Record<string, number>> {
+  const row = await db.system((q) =>
+    one(q, "SELECT * FROM workspace_connector_health()"),
+  );
   return {
     connections: Number(row?.connections || 0),
     attention_required: Number(row?.attention_required || 0),

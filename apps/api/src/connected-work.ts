@@ -55,9 +55,12 @@ import {
   engineTick,
   getRunDetail,
   getWorkflowDetail,
+  deprovisionServicePrincipal,
   dispatchConnectorEvent,
+  getServicePrincipal,
   listRuns,
   listWorkflows,
+  provisionServicePrincipal,
   pruneRuns,
   retryRun,
   saveDraft,
@@ -346,6 +349,7 @@ export function connectedWorkRoutes(
         name: z.string().min(1).max(200),
         description: z.string().max(2000).optional(),
         definition: z.any(),
+        authority: z.enum(["delegated_user", "service_principal"]).optional(),
       })
       .parse(r.body);
     const created = await createWorkflow(q, a, input);
@@ -421,6 +425,37 @@ export function connectedWorkRoutes(
   });
 
   route("GET", "/automations/metrics", "Read workflow counters", async () => workflowMetrics(db));
+
+  route(
+    "GET",
+    "/automations/service-principal",
+    "Read the tenant automation identity",
+    async (q, a) => {
+      humanSession(a);
+      return { service_principal: await getServicePrincipal(q, a) };
+    },
+  );
+
+  route(
+    "POST",
+    "/automations/service-principal",
+    "Provision the tenant automation identity and its capability allowlist",
+    async (q, a, r) => {
+      humanSession(a);
+      const input = z.object({ capabilities: z.array(z.string()).max(16) }).parse(r.body ?? {});
+      return { service_principal: await provisionServicePrincipal(q, a, input) };
+    },
+  );
+
+  route(
+    "DELETE",
+    "/automations/service-principal",
+    "Remove the tenant automation identity allowlist",
+    async (q, a) => {
+      humanSession(a);
+      return deprovisionServicePrincipal(q, a);
+    },
+  );
 
   route(
     "POST",

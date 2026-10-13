@@ -206,7 +206,11 @@ export default function Connections({ me }: { me: any }) {
       setNote({
         id: connection.id,
         bad: false,
-        text: `Sync processed ${r.processed ?? 0} event(s). Next sync ${
+        // The request queue is what this endpoint touches: it never invokes the
+        // provider inline, so the note says so rather than implying work happened.
+        text: `Sync queued; the worker performs it. Events processed inline: ${
+          r.processed ?? 0
+        }. Next attempt ${
           r.next_at ? new Date(r.next_at).toLocaleString() : "not scheduled"
         }.`,
       });

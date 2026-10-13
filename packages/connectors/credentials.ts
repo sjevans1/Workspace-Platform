@@ -15,7 +15,13 @@
  *  - `metadata`: non-secret descriptors only, through an allowlist, so support and
  *    status surfaces can describe a credential without ever carrying its value.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import { assert } from "../contracts/index.ts";
 import type { Query } from "../database/index.ts";
 import { one } from "../database/index.ts";
@@ -33,38 +39,62 @@ function key(): Buffer {
 }
 
 /** The AAD binds a credential ciphertext to exactly one tenant, connection and kind. */
-export function credentialAad(tenant: string, connection: string, kind: CredentialKind): string {
-  assert(UUID.test(tenant) && UUID.test(connection), 500, "Credential scope must be identified");
+export function credentialAad(
+  tenant: string,
+  connection: string,
+  kind: CredentialKind,
+): string {
+  assert(
+    UUID.test(tenant) && UUID.test(connection),
+    500,
+    "Credential scope must be identified",
+  );
   return `${tenant}:${connection}:${kind}:v1`;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function sealCredential(aad: string, secret: string): string {
-  assert(typeof secret === "string" && secret.length > 0 && secret.length <= 16384, 400, "Credential material is required");
+  assert(
+    typeof secret === "string" && secret.length > 0 && secret.length <= 16384,
+    400,
+    "Credential material is required",
+  );
   const iv = randomBytes(12),
     cipher = createCipheriv("aes-256-gcm", key(), iv);
   cipher.setAAD(Buffer.from(aad, "utf8"));
   const data = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
-  return [iv, cipher.getAuthTag(), data].map((part) => part.toString("base64url")).join(".");
+  return [iv, cipher.getAuthTag(), data]
+    .map((part) => part.toString("base64url"))
+    .join(".");
 }
 
 export function openCredential(aad: string, envelope: string): string {
-  assert(typeof envelope === "string" && envelope.split(".").length === 3, 500, "Credential envelope is malformed");
-  const [iv, tag, data] = envelope.split(".").map((part) => Buffer.from(part, "base64url"));
+  assert(
+    typeof envelope === "string" && envelope.split(".").length === 3,
+    500,
+    "Credential envelope is malformed",
+  );
+  const [iv, tag, data] = envelope
+    .split(".")
+    .map((part) => Buffer.from(part, "base64url"));
   const decipher = createDecipheriv("aes-256-gcm", key(), iv);
   decipher.setAAD(Buffer.from(aad, "utf8"));
   decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString(
+    "utf8",
+  );
 }
 
 /** An irreversible digest of an ingress token; safe to hold in non-secret metadata. */
 export function tokenDigest(token: string): string {
-  return createHash("sha256").update(`connector-ingress:${token}`).digest("hex");
+  return createHash("sha256")
+    .update(`connector-ingress:${token}`)
+    .digest("hex");
 }
 
 /**
- * The only metadata keys that may be persisted or surfaced. Everything else — a
- * raw token, a refresh token, an authorization header — is dropped rather than
+ * The only metadata keys that may be persisted or surfaced. Everything else (a
+ * raw token, a refresh token, an authorization header) is dropped rather than
  * stored, so a future adapter cannot accidentally widen the secret surface.
  */
 export const CREDENTIAL_METADATA_KEYS = [
@@ -89,7 +119,9 @@ export function sanitizeCredentialMetadata(value: unknown): CredentialMetadata {
     const raw = input[key];
     if (raw === undefined || raw === null) continue;
     if (Array.isArray(raw)) {
-      output[key] = raw.filter((item) => typeof item === "string").slice(0, 32) as string[];
+      output[key] = raw
+        .filter((item) => typeof item === "string")
+        .slice(0, 32) as string[];
       continue;
     }
     if (typeof raw === "string") output[key] = raw.slice(0, 512);
@@ -135,7 +167,11 @@ export async function putCredential(
   secret: string,
   metadata: CredentialMetadata = {},
 ): Promise<CredentialRecord> {
-  assert(CREDENTIAL_KINDS.includes(kind), 400, `Unknown credential kind: ${kind}`);
+  assert(
+    CREDENTIAL_KINDS.includes(kind),
+    400,
+    `Unknown credential kind: ${kind}`,
+  );
   const aad = credentialAad(tenant, connection, kind);
   const previous = await one(
     q,
@@ -178,7 +214,11 @@ export async function putCredential(
       previous ? new Date() : null,
     ],
   );
-  const stored = await one(q, "SELECT * FROM connector_credentials WHERE id=$1", [id]);
+  const stored = await one(
+    q,
+    "SELECT * FROM connector_credentials WHERE id=$1",
+    [id],
+  );
   return publicCredential(stored);
 }
 
@@ -198,7 +238,10 @@ export async function readCredential(
   if (!row) return null;
   return {
     id: row.id,
-    secret: openCredential(credentialAad(tenant, connection, kind), row.secret_encrypted),
+    secret: openCredential(
+      credentialAad(tenant, connection, kind),
+      row.secret_encrypted,
+    ),
     key_version: Number(row.key_version),
   };
 }
