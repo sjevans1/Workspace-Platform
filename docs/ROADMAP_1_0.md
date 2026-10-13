@@ -1,6 +1,6 @@
 # OpenJM Workspace — Standalone 1.0 delivery roadmap
 
-> **Authoritative release checkpoint — 2026-10-12:** W01–W26 and OCP-1/OCP-2 are accepted. The fixed remaining path is **W27 [#210] -> manual NVDA [#211] -> W28 [#212] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older execution sequences below are retained as historical evidence and must not be used to restart accepted waves.
+> **Authoritative release checkpoint — revised 2026-10-12:** W01–W27 and OCP-1/OCP-2 are accepted. By explicit product decision, Connected Work and deterministic workflows are promoted into core 1.0 scope. The remaining path is **W29 Connected Work [#218] -> W30 Deterministic Workflows [#219] -> manual NVDA [#211] -> W28 final RC [#212] -> Workspace 1.0 tag/handover**. The accepted `d9f269e...` build remains the UAT baseline while W29/W30 are implemented. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older execution sequences below are historical evidence and must not be used to restart accepted waves.
 
 
 **Current execution baseline:** 2026-10-06, `main` after merged W17 PR #158 (`6b7f60f422723ec19e8a5006f3033ab082d7e8b9`).  
@@ -14,7 +14,7 @@
 
 **Mandatory isolation:** Workspace remains its own repository, containers/processes, PostgreSQL database, storage, credentials, authorization and deployment. Do not modify `OpenJM-Enterprise-AI`; no mandatory dependencies on it. An optional, off-by-default integration may consume Workspace's versioned permission-aware APIs/events, with revocation and reconciliation, but AI outages may not affect normal Workspace use.
 
-**Not 1.0 blockers unless a release review explicitly changes scope:** full offline-first multi-device sync, horizontally scaled multi-writer Yjs, enterprise SAML/SCIM variants beyond implemented baseline, arbitrary workflow automation, retained malware quarantine/CDR, every Notion block/view type, sophisticated per-customer customizations, a native mobile app, or an operational live OpenJM Intelligence connection. See section 8.
+**Not 1.0 blockers unless a release review explicitly changes scope:** full offline-first multi-device sync, horizontally scaled multi-writer Yjs, enterprise SAML/SCIM variants beyond implemented baseline, retained malware quarantine/CDR, every Notion block/view type, sophisticated per-customer customizations, a native mobile app, or an operational live OpenJM Intelligence connection. **Scope was explicitly changed on 2026-10-12 for W29 Connected Work and W30 deterministic workflows only; those are now 1.0 blockers.** See section 8.
 
 ## 2. Verified starting point — do not rebuild
 
