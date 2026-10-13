@@ -1,69 +1,87 @@
 # Workspace 1.0 — final release gates
 
-**Authoritative checkpoint:** 2026-10-12  
-**Reconciled baseline:** `main@017a1882669822cf40a07ab42aeddd7f9575375b`
+**Authoritative checkpoint:** 2026-10-12 — scope rebaseline  
+**Accepted baseline main:** `d9f269e864ab217aca9fde910dfe1fabf3b53b65`
 
-This file is the concise release-state source of truth after Wave X and OCP closure. Older planning sections in the roadmap and delivery-wave documents are retained as history, not as instructions to restart accepted work.
+This file is the concise release-state source of truth after Shane explicitly promoted the previously discussed Connected Work and deterministic automation capabilities into the Workspace 1.0 build. Older statements that W29/W30 are post-1.0 are historical and no longer authoritative.
 
-## Accepted product scope
+## Accepted baseline
 
-- W01–W26 are accepted for the Workspace 1.0 feature/product scope through the X5 closeout.
-- X5 exact-head release acceptance completed on `3ec344931f0745af0b05c850c0c02ed6e2ec7ed4` with FULL run `38178739224` green.
-- OCP-1 and OCP-2 are accepted and issue #198 is closed.
-- OCP-2B final accepted candidate `b52c49ad68f6b4a29b73e75eb927e2879b044aa2` passed FULL run `38237353310`; PR #209 merged to `main@017a1882669822cf40a07ab42aeddd7f9575375b`.
-- Post-merge main verification run `38240845145` passed FAST + backend; deployment was correctly skipped for the push tier.
-- SMTP is not a Workspace 1.0 blocker: W04 intentionally ships mail-free admin-assisted recovery.
-- W29 Connected Work and W30 Native Automation & Agent Runtime are post-1.0 and must not enter the release blocker list.
+- W01–W28 engineering/release work remains accepted baseline evidence.
+- W27 final FULL `38319965439` passed on exact head `2d26dc83810549b68964c637e640dc8ed621cc72`.
+- PR #214 merged W27 as `main@d9f269e864ab217aca9fde910dfe1fabf3b53b65`.
+- Post-merge main verification `38323160547` passed.
+- W27 #210 and shipped-image sub-gate #112 are closed.
+- Existing W28/UAT host work may continue as preview/baseline evidence, but the accepted baseline SHA is no longer the final 1.0 tag candidate once W29/W30 are implemented.
 
-## Remaining release path
+Workspace must remain independently deployable with:
+- no mandatory OpenJM Enterprise AI dependency;
+- no mandatory LLM;
+- no mandatory email/calendar/SaaS account;
+- optional connectors off by default;
+- native deterministic workflows usable without AI.
 
-The fixed sequence is:
+## Revised remaining release path
 
-`release reconciliation -> W27 (#210) -> manual NVDA (#211) -> W28 (#212) -> Workspace 1.0 tag/handover`
+The fixed sequence is now:
 
-### W27 — security, privacy and commercial distribution (#210)
+`W29 Connected Work (#215) -> W30 Deterministic Workflows (#216) -> final NVDA (#211) -> W31 final requalification/tag (#217) -> Workspace 1.0 handover`
 
-Final governance and hardening only. Do not reopen accepted product functionality unless review finds a genuine release-blocking defect.
+### W29 — Connected Work (#215)
 
-Required areas:
-- threat-model/adversarial review;
-- dependency/image/SBOM/vulnerability policy;
-- secrets and key-rotation operations;
-- privacy/retention configuration;
-- license/notices/corresponding-source obligations;
-- public-repository secret/private-data check;
-- trusted TLS/Secure-cookie/WSS and fleet transport review;
-- standalone operation with OCP unavailable or disabled.
+First-class governed optional integrations:
+- shared connector control plane;
+- Google Workspace and Microsoft 365 provider adapters;
+- external calendar integration distinct from native database calendar views;
+- mailbox/email integration distinct from mandatory Workspace system SMTP;
+- encrypted credentials/tokens, least-privilege scopes, sync cursors, retry/idempotency, health and audit;
+- link/capture calendar events and email threads/messages into Workspace objects;
+- explicit or policy-approved outbound calendar/email actions;
+- Workspace remains fully functional with all connectors disabled.
 
-OCP hardening carried from #198 is explicitly bounded inside #210. Existing W27a issue #112 remains the full shipped-image SBOM/vulnerability-policy evidence lane. CI-H1 #183 is already implemented and closed; W27 must not rebuild it.
+Later WhatsApp/Telegram/Discord/standards-based adapters may reuse the contract but are not silently required for W29 closure unless separately promoted.
+
+### W30 — Native deterministic workflows (#216)
+
+Native trigger -> condition -> action automation:
+- event/manual/scheduled/date-relative/W29 triggers;
+- safe deterministic conditions;
+- native Workspace actions;
+- W29 calendar/email actions;
+- approvals for sensitive/external actions;
+- deterministic timezone/DST scheduling;
+- idempotency, retry/backoff, dead-letter, pause/resume and loop prevention;
+- permission re-check at run time;
+- versioned definitions and immutable run evidence;
+- visual workflow builder, templates and run history;
+- no LLM/agent dependency.
+
+Future autonomous/LLM agent capabilities are outside this deterministic 1.0 requirement unless explicitly promoted later.
 
 ### Manual accessibility — NVDA (#211)
 
-X5 carried exactly one human-only evidence item: manual NVDA review. Automated Playwright, keyboard, WebKit/Chromium/Firefox, viewport and visual gates must not be represented as this manual proof.
+The human-only NVDA gate must run against the **completed W29/W30 surface**, not merely the earlier pre-W29 UAT build. Automated Playwright/accessibility coverage cannot substitute for this evidence.
 
-If the manual pass finds a blocker, make only the bounded remediation required and requalify normally.
+### W31 — final 1.0 requalification and tag (#217)
 
-### W28 — independent-host RC and 1.0 tag (#212)
-
-After W27 and #211 close:
-- clean customer-like host;
-- fresh install and setup;
-- auth/onboarding/recovery;
-- two-user authoring;
-- database workflows;
-- comments/notifications;
-- import/export;
-- attachment/AV path;
-- encrypted backup + isolated restore;
-- upgrade/preflight/rollback smoke;
+After W29, W30 and final NVDA:
+- freeze the final exact release SHA;
+- re-run complete CI-3L FULL acceptance;
+- prove W27 security/image/supply-chain gates still pass;
+- fresh independent-host install;
+- prove standalone operation with connectors disabled;
+- record real-provider Google/Microsoft connector acceptance separately and securely;
+- validate workflow schedule/action/approval execution;
+- backup/restore with connector metadata and workflow definitions/state;
 - trusted HTTPS/Secure cookies/WSS;
-- health/operations;
-- optional OCP connectivity plus proof Workspace functions without it;
-- changelog, support matrix, runbooks and release artifacts;
-- exact release SHA, FULL CI, main verification and explicit sign-off.
+- final accessibility/browser/visual/capacity acceptance;
+- changelog/support matrix/runbooks/license/source package;
+- explicit Shane release approval;
+- post-merge main verification;
+- Workspace 1.0 tag and handover.
 
 ## No-scope-expansion rule
 
-No new product feature enters 1.0 after this checkpoint unless it is required to correct a release-blocking defect discovered by W27, manual accessibility review or W28 independent-host acceptance.
+The 1.0 scope expansion is limited to the explicitly promoted W29/W30 requirements recorded in #215 and #216. Do not use this rebaseline to pull unrelated post-1.0 ideas into the release.
 
-W29/W30 and other post-1.0 ideas stay deferred.
+Any additional capability requires an explicit scope decision before implementation.
