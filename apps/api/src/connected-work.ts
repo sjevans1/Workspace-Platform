@@ -28,12 +28,14 @@ import {
   CAPABILITY_VOCABULARY_VERSION,
   CONNECTOR_CAPABILITIES,
   CONNECTOR_LIMITS,
+  connectorMetricsForTenant,
   createConnection,
   credentialsFor,
   declaredProviders,
   getConnection,
   ingestProviderEvent,
   isCapability,
+  isTenantAdministrator,
   listConnections,
   normalizeCapabilities,
   providerCatalog,
@@ -69,7 +71,7 @@ import {
   triggerManualRun,
   validateDraft,
   WORKFLOW_LIMITS,
-  workflowMetrics,
+  workflowMetricsForTenant,
   CONDITION_OPERATORS,
   type ConnectorActionPort,
 } from "../../../packages/automation/index.ts";
@@ -86,6 +88,18 @@ export type ConnectedWorkRoute = (
 /** Connector management and automation authoring are human-session features. */
 function humanSession(a: Actor): void {
   assert(!a.scopes, 403, "Connector management requires a signed-in session");
+}
+
+/**
+ * Tenant operational counters and the tenant automation identity are owner/admin
+ * surfaces. A plain member's own connections and workflows stay untouched.
+ */
+function operationalMetrics(a: Actor): void {
+  assert(
+    isTenantAdministrator(a),
+    403,
+    "Administrator access required for workspace operational metrics",
+  );
 }
 
 const UUID = z.string().uuid();
@@ -172,10 +186,14 @@ async function recentEvents(q: Query, tenant: string, connectionId: string) {
   ).rows;
 }
 
-export function connectedWorkRoutes(
-  route: ConnectedWorkRoute,
-  db: Database,
-): void {
+/**
+ * Every route here runs inside `db.tenant(actor.tenant_id, ...)`, supplied by the
+ * app builder's `route` helper, so tenant context and FORCE RLS are already active
+ * and no route needs the pool directly. The only place that does is the
+ * unauthenticated ingress registration below, which resolves its tenant through a
+ * SECURITY DEFINER lookup.
+ */
+export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
   route("GET", "/connectors/catalog", "List connector providers and capabilities", async () => {
     const providers = providerCatalog().map((definition) => ({
       ...definition,
@@ -320,16 +338,20 @@ export function connectedWorkRoutes(
     return { credentials: await credentialsFor(q, a.tenant_id, id) };
   });
 
-  route("GET", "/connectors/metrics", "Read connector fleet counters", async () => {
-    const row = await db.system((q) => one(q, "SELECT * FROM workspace_connector_health()"));
-    return {
-      connections: Number(row?.connections || 0),
-      attention_required: Number(row?.attention_required || 0),
-      sync_failures: Number(row?.sync_failures || 0),
-      events_received: Number(row?.events_received || 0),
-      events_duplicate: Number(row?.events_duplicate || 0),
-    };
-  });
+  route(
+    "GET",
+    "/connectors/metrics",
+    "Read this workspace's connector counters",
+    async (q, a) => {
+      humanSession(a);
+      operationalMetrics(a);
+      // Tenant-scoped, computed inside the caller's own transaction under FORCE RLS.
+      // The deployment-wide aggregate is a platform surface and is deliberately NOT
+      // reachable here: a customer must not be able to infer another tenant's
+      // connector activity from these counters.
+      return connectorMetricsForTenant(q, a.tenant_id);
+    },
+  );
 
   route("GET", "/automations/catalog", "List triggers, actions and condition operators", async () => ({
     triggers: triggerCatalog(),
@@ -424,14 +446,26 @@ export function connectedWorkRoutes(
     return { run: await retryRun(q, a, UUID.parse(r.params.id)) };
   });
 
-  route("GET", "/automations/metrics", "Read workflow counters", async () => workflowMetrics(db));
+  route(
+    "GET",
+    "/automations/metrics",
+    "Read this workspace's workflow counters",
+    async (q, a) => {
+      humanSession(a);
+      operationalMetrics(a);
+      return workflowMetricsForTenant(q, a.tenant_id);
+    },
+  );
 
   route(
     "GET",
     "/automations/service-principal",
     "Read the tenant automation identity",
     async (q, a) => {
+      // A normal member has no need for the tenant automation identity's
+      // configuration or capability allowlist.
       humanSession(a);
+      operationalMetrics(a);
       return { service_principal: await getServicePrincipal(q, a) };
     },
   );

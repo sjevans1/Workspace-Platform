@@ -956,6 +956,36 @@ export async function markEventDispatched(
   );
 }
 
+/**
+ * The CUSTOMER-facing connector counters, computed inside the caller's tenant
+ * transaction so FORCE RLS applies. `connectorMetrics` below is the separate
+ * platform/operator surface: it aggregates the whole deployment through a
+ * SECURITY DEFINER count function and must never be reachable from a tenant route,
+ * because a customer must not be able to infer another tenant's connector activity.
+ */
+export async function connectorMetricsForTenant(
+  q: Query,
+  tenant: string,
+): Promise<Record<string, number>> {
+  const row = await one(
+    q,
+    "SELECT" +
+      " (SELECT count(*)::int FROM connector_connections WHERE tenant_id=$1) AS connections," +
+      " (SELECT count(*)::int FROM connector_connections WHERE tenant_id=$1 AND status='attention_required') AS attention_required," +
+      " (SELECT count(*)::int FROM connector_sync_state WHERE tenant_id=$1 AND status IN ('failed','attention')) AS sync_failures," +
+      " (SELECT count(*)::int FROM connector_events WHERE tenant_id=$1) AS events_received," +
+      " (SELECT COALESCE(SUM(duplicate_count),0)::int FROM connector_events WHERE tenant_id=$1) AS events_duplicate",
+    [tenant],
+  );
+  return {
+    connections: Number(row?.connections || 0),
+    attention_required: Number(row?.attention_required || 0),
+    sync_failures: Number(row?.sync_failures || 0),
+    events_received: Number(row?.events_received || 0),
+    events_duplicate: Number(row?.events_duplicate || 0),
+  };
+}
+
 /** The connector half of the operator metrics surface. */
 export async function connectorMetrics(
   db: Database,

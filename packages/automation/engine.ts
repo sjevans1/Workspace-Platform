@@ -105,13 +105,37 @@ async function loadWorkflow(q: Query, actor: Actor, id: string): Promise<any> {
   return row;
 }
 
+/**
+ * The 1.0 workflow visibility rule, applied identically to reading, running and
+ * managing a workflow: a workflow belongs to its owner, and a tenant owner/admin
+ * governs every workflow in the tenant. Until deliberate workflow sharing or
+ * trigger ACLs exist, nobody else may observe or trigger it, and the refusal is the
+ * SAME non-enumerating 404 the tenant boundary produces, because a 403 would
+ * confirm that an unreadable workflow exists.
+ *
+ * This matters most for triggering: a workflow can execute under a tenant
+ * automation service principal, which is more privileged than the person pressing
+ * Run, so Run may never be broader than visibility.
+ */
+function canReachWorkflow(
+  actor: Pick<Actor, "role" | "user_id">,
+  workflow: { owner_user_id?: string | null },
+): boolean {
+  return (
+    isTenantAdministrator(actor) || workflow.owner_user_id === actor.user_id
+  );
+}
+
+function assertWorkflowVisible(
+  actor: Pick<Actor, "role" | "user_id">,
+  workflow: { owner_user_id?: string | null },
+): void {
+  assert(canReachWorkflow(actor, workflow), 404, "Workflow not found");
+}
+
 function assertManage(actor: Actor, workflow: any): void {
   assert(workflow.tenant_id === actor.tenant_id, 404, "Workflow not found");
-  assert(
-    workflow.owner_user_id === actor.user_id || isTenantAdministrator(actor),
-    403,
-    "Only the workflow owner or an administrator can change this workflow",
-  );
+  assertWorkflowVisible(actor, workflow);
 }
 
 async function assertManagesWorkflow(
@@ -295,10 +319,14 @@ export async function createWorkflow(
 }
 
 export async function listWorkflows(q: Query, actor: Actor): Promise<any[]> {
+  // A member sees only workflows they own; an owner/admin governs the tenant.
+  const admin = isTenantAdministrator(actor);
   const rows = (
     await q.query(
-      "SELECT * FROM workflow_definitions WHERE tenant_id=$1 ORDER BY created_at DESC,id",
-      [actor.tenant_id],
+      "SELECT * FROM workflow_definitions WHERE tenant_id=$1" +
+        (admin ? "" : " AND owner_user_id=$2") +
+        " ORDER BY created_at DESC,id",
+      admin ? [actor.tenant_id] : [actor.tenant_id, actor.user_id],
     )
   ).rows;
   const output: any[] = [];
@@ -333,6 +361,7 @@ export async function getWorkflowDetail(
   plan: PlannedStep[];
 }> {
   const row = await loadWorkflow(q, actor, id);
+  assertWorkflowVisible(actor, row);
   const draftDefinition = await revisionDefinition(
     q,
     actor.tenant_id,
@@ -694,6 +723,10 @@ export async function triggerManualRun(
   input: { idempotency_key?: string },
 ): Promise<any> {
   const row = await loadWorkflow(q, actor, id);
+  // Triggering is not broader than reading: a member may press Run on their own
+  // workflow only, never on a colleague's and never on a tenant service-principal
+  // workflow, whose execution authority exceeds theirs.
+  assertWorkflowVisible(actor, row);
   assert(row.published_revision, 409, "Enable the workflow before running it");
   // A disabled workflow must not create NEW runs. Runs already queued, running or
   // waiting keep executing against their pinned revision, because cancelling an
@@ -745,10 +778,24 @@ export async function listRuns(
   input: { workflow_id?: string; limit?: number },
 ): Promise<any[]> {
   const limit = Math.max(1, Math.min(Number(input.limit) || 50, 200));
+  const admin = isTenantAdministrator(actor);
   const params: any[] = [actor.tenant_id];
   let where = "r.tenant_id=$1";
+  if (!admin) {
+    params.push(actor.user_id);
+    where += ` AND d.owner_user_id=$${params.length}`;
+  }
   if (input.workflow_id) {
     assert(UUID_RE.test(input.workflow_id), 400, "Invalid workflow id");
+    // A run listing filtered by a workflow the caller cannot reach answers the same
+    // way a direct read does: as if no such workflow existed.
+    const target = await one(
+      q,
+      "SELECT owner_user_id FROM workflow_definitions WHERE tenant_id=$1 AND id=$2",
+      [actor.tenant_id, input.workflow_id],
+    );
+    assert(target, 404, "Workflow not found");
+    assertWorkflowVisible(actor, target!);
     params.push(input.workflow_id);
     where += ` AND r.workflow_id=$${params.length}`;
   }
@@ -762,6 +809,24 @@ export async function listRuns(
     )
   ).rows;
   return rows.map(runSummary);
+}
+
+/**
+ * A run is exactly as reachable as the workflow it belongs to, so run history and
+ * step evidence answer with the same non-enumerating 404 for a foreign workflow.
+ */
+async function assertRunVisible(
+  q: Query,
+  actor: Actor,
+  run: any,
+): Promise<void> {
+  const workflow = await one(
+    q,
+    "SELECT owner_user_id FROM workflow_definitions WHERE tenant_id=$1 AND id=$2",
+    [actor.tenant_id, run.workflow_id],
+  );
+  assert(workflow, 404, "Run not found");
+  assertWorkflowVisible(actor, workflow!);
 }
 
 async function loadRun(q: Query, actor: Actor, id: string): Promise<any> {
@@ -783,6 +848,7 @@ export async function getRunDetail(
   id: string,
 ): Promise<{ run: any; steps: any[] }> {
   const run = await loadRun(q, actor, id);
+  await assertRunVisible(q, actor, run);
   const steps = (
     await q.query(
       "SELECT * FROM workflow_run_steps WHERE tenant_id=$1 AND run_id=$2 ORDER BY seq,attempt",
@@ -1904,6 +1970,43 @@ export async function pruneRuns(
     deleted += overflow.rowCount || 0;
   }
   return { deleted };
+}
+
+/**
+ * The CUSTOMER-facing workflow counters, computed inside the caller's tenant
+ * transaction so FORCE RLS applies. `workflowMetrics` below is the separate
+ * platform/operator surface: it aggregates the whole deployment through a
+ * SECURITY DEFINER count function and must never be reachable from a tenant route,
+ * because a customer must not be able to infer another tenant's activity.
+ */
+export async function workflowMetricsForTenant(
+  q: Query,
+  tenant: string,
+): Promise<Record<string, number>> {
+  const row = await one(
+    q,
+    "SELECT" +
+      " (SELECT count(*)::int FROM workflow_definitions WHERE tenant_id=$1 AND status='enabled') AS workflows_enabled," +
+      " (SELECT count(*)::int FROM workflow_runs WHERE tenant_id=$1) AS runs_started," +
+      " (SELECT count(*)::int FROM workflow_runs WHERE tenant_id=$1 AND status='succeeded') AS runs_succeeded," +
+      " (SELECT count(*)::int FROM workflow_runs WHERE tenant_id=$1 AND status='failed') AS runs_failed," +
+      " (SELECT count(*)::int FROM workflow_runs WHERE tenant_id=$1 AND status IN ('queued','running','waiting')) AS runs_queued," +
+      " (SELECT count(*)::int FROM workflow_runs WHERE tenant_id=$1 AND status='dead_letter') AS runs_dead_letter," +
+      " (SELECT COALESCE(SUM(attempt),0)::int FROM workflow_run_steps WHERE tenant_id=$1) AS retries," +
+      " (SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (completed_at - started_at))),0)::float FROM workflow_runs" +
+      "   WHERE tenant_id=$1 AND completed_at IS NOT NULL AND started_at IS NOT NULL) AS execution_latency_seconds",
+    [tenant],
+  );
+  return {
+    workflows_enabled: Number(row?.workflows_enabled || 0),
+    runs_started: Number(row?.runs_started || 0),
+    runs_succeeded: Number(row?.runs_succeeded || 0),
+    runs_failed: Number(row?.runs_failed || 0),
+    runs_queued: Number(row?.runs_queued || 0),
+    runs_dead_letter: Number(row?.runs_dead_letter || 0),
+    retries: Number(row?.retries || 0),
+    execution_latency_seconds: Number(row?.execution_latency_seconds || 0),
+  };
 }
 
 export async function workflowMetrics(

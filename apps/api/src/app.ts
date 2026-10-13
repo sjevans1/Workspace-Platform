@@ -2738,7 +2738,7 @@ export async function buildApp(
   // registrations stay in their own module rather than enlarging this file, and the
   // provider ingress endpoint is registered separately because, unlike every other
   // route here, it carries no session.
-  connectedWorkRoutes(route, db);
+  connectedWorkRoutes(route);
   registerConnectorIngress(app, db);
   await registerScim(app, db);
   app.addHook("onClose", async () => {

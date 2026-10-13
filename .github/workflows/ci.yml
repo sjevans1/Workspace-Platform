@@ -157,10 +157,12 @@ jobs:
     # W24-R collaboration capacity run, the isolated restore drill, the
     # malware/storage checks, accessibility across three engines and three
     # viewports, the Wave X X0 engine/viewport harness, the X2 visual regression
-    # check and trusted TLS, which together exceed the previous allowance on a
-    # hosted runner. This raises only the CI wall-clock budget; no product or
-    # security limit changes.
-    timeout-minutes: 60
+    # check, the blocked-then-replenished sign-in budget waits, the W29-A/W30-A
+    # Connected Work and Automations browser lane and trusted TLS, which together
+    # exceed the previous allowance on a hosted runner. This raises only the CI
+    # wall-clock budget; no product or security limit changes and no gate is
+    # skipped or weakened.
+    timeout-minutes: 70
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -571,6 +573,36 @@ jobs:
           # Runs after the replenished sign-in budget because it authenticates.
           npx playwright test --config=playwright.harness.config.ts
           node scripts/e2e-determinism.mjs
+      - name: Wait for auth rate-limit budget before Connected Work
+        run: |
+          # W29-A/W30-A: the Connected Work lane signs in, and the deployed
+          # sign-in route keeps its own strict production budget that the
+          # preceding authenticating steps exhaust. Non-mutating: it checks the
+          # shared general window and API liveness only, never the sign-in route.
+          bash scripts/ci/wait-for-auth-budget.sh
+      - name: Verify Connected Work and Automations browser workflow
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # W29-A/W30-A: the Connected Work browser lane is a BLOCKING gate on the
+          # real deployment, not only a local one. It drives Settings >
+          # Connections (empty state, synthetic connection lifecycle, secret
+          # non-exposure, disable/re-enable/revoke, inbound event list) and
+          # Settings > Automations (empty state, author, validate, enable, run,
+          # history, step detail, a failing action and the disabled refusal)
+          # against the same already-initialised acceptance tenant the deployed
+          # browser workflow uses, so no second stack is created. No
+          # continue-on-error, no retries, no quarantine: a failure here fails
+          # the deployment job, and traces/screenshots land in
+          # test-results/connected-work, uploaded as their own artifact below.
+          npx playwright test --config=playwright.connected-work.config.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: connected-work-results
+          path: |
+            test-results/connected-work
       - name: Verify trusted HTTPS, secure cookies and WSS
         run: |
           docker compose down
