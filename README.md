@@ -78,6 +78,8 @@ npm run test:e2e
 The tests use isolated PGlite instances by default. Set `TEST_DATABASE_URL` to an administrative PostgreSQL connection to run them against native PostgreSQL; each test suite creates and drops its own temporary database. CI exercises native PostgreSQL, two browser sessions, and the Docker deployment.
 
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)
+- [Connected Work connector platform](docs/CONNECTED_WORK_ARCHITECTURE.md)
+- [Deterministic automation engine](docs/AUTOMATION_ARCHITECTURE.md)
 - [Identity and enterprise SSO](docs/IDENTITY.md)
 - [SCIM directory lifecycle](docs/SCIM.md)
 - [API and Intelligence integration](docs/INTEGRATION.md)

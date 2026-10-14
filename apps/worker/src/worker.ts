@@ -17,6 +17,8 @@ import { createAntivirus, type Antivirus } from "../../../packages/security/anti
 import { exportPortableTree } from "../../api/src/portable-export.ts";
 import { importPortableArchive } from "../../api/src/portable-import.ts";
 import { markdownToBlocks } from "../../../packages/editor/server.ts";
+import { connectorTick, automationTick, workspaceEventTick } from "./connected-work.ts";
+import { connectorActionPortFor } from "../../api/src/connected-work.ts";
 /** Internal signal: a durable export observed a cooperative cancellation request. */
 class ExportCancelled extends Error {}
 export function webhookUrl(text: string) {
@@ -90,6 +92,10 @@ export async function tick(
   try {
   for (const { id: tenant } of tenants.rows) {
     await db.tenant(tenant, async (q) => {
+      // W30-A: accepted workspace events feed the deterministic engine inside this
+      // same transaction, BEFORE the dispatcher below marks them dispatched, so a
+      // rolled-back transaction leaves neither the marker nor a workflow run.
+      await workspaceEventTick(q, tenant, { connectorPort: connectorActionPortFor(q) });
       for (const e of (
         await q.query(
           "SELECT * FROM event_outbox WHERE dispatched_at IS NULL ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED",
@@ -682,6 +688,11 @@ export async function tick(
         }
       }
     });
+    // W29-A / W30-A bound per-tenant phases: bounded claim, provider I/O with no
+    // transaction held, then a short outcome commit. Reuses this worker and its
+    // leasing idioms rather than introducing a second queue.
+    await connectorTick(db, tenant);
+    await automationTick(db, tenant);
   }
   } finally {
     if (closeStorage) storage.close?.();

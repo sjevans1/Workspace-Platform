@@ -157,10 +157,12 @@ jobs:
     # W24-R collaboration capacity run, the isolated restore drill, the
     # malware/storage checks, accessibility across three engines and three
     # viewports, the Wave X X0 engine/viewport harness, the X2 visual regression
-    # check and trusted TLS, which together exceed the previous allowance on a
-    # hosted runner. This raises only the CI wall-clock budget; no product or
-    # security limit changes.
-    timeout-minutes: 60
+    # check, the blocked-then-replenished sign-in budget waits, the W29-A/W30-A
+    # Connected Work and Automations browser lane and trusted TLS, which together
+    # exceed the previous allowance on a hosted runner. This raises only the CI
+    # wall-clock budget; no product or security limit changes and no gate is
+    # skipped or weakened.
+    timeout-minutes: 70
     env:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
@@ -571,6 +573,69 @@ jobs:
           # Runs after the replenished sign-in budget because it authenticates.
           npx playwright test --config=playwright.harness.config.ts
           node scripts/e2e-determinism.mjs
+      - name: Wait for auth rate-limit budget before Connected Work
+        run: |
+          # W29-A/W30-A readiness, part 1 of 2: NETWORK and API readiness.
+          # The Connected Work lane signs in, and the deployed sign-in route
+          # keeps its own strict production budget that the preceding
+          # authenticating steps exhaust. Non-mutating: it checks the shared
+          # general window and API liveness only, never the sign-in route: any
+          # request to that route, valid or invalid, consumes one of its
+          # 10-per-5-minutes production attempts.
+          #
+          # This check reads the NETWORK-keyed limiter, because the route it
+          # uses is unauthenticated. It therefore cannot see the budget of the
+          # authenticated principal the lane itself uses (the API keys
+          # authenticated GET /api/v1/* reads as principal:<tenant>:<user>).
+          # Part 2, immediately below, proves that budget.
+          bash scripts/ci/wait-for-auth-budget.sh
+      - name: Wait for authenticated principal read budget before Connected Work
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          PRINCIPAL_BUDGET_STATE: e2e/.auth/session.json
+        run: |
+          # W29-A/W30-A readiness, part 2 of 2: AUTHENTICATED-PRINCIPAL read
+          # budget. The API keys authenticated GET /api/v1/* reads (excluding
+          # /auth/ and /setup) as principal:<tenant>:<user>, so the network check
+          # above says nothing about the budget this lane's own reads consume.
+          # The deterministic engine/viewport harness that runs immediately
+          # before this step signs in as the SAME acceptance principal, so it
+          # spends the same bucket: in FULL run 38473169389 the network check
+          # reported 271 remaining and the lane's first authenticated read was
+          # already HTTP 429, which rendered the Connections error branch instead
+          # of the empty state the lane asserts.
+          #
+          # The helper reuses the harness's own Playwright storage state
+          # (e2e/.auth/session.json), issues read-only authenticated GET
+          # /api/v1/me probes, reads the real x-ratelimit-* headers, honours the
+          # server-directed Retry-After on a 429, waits for the real limiter
+          # window to replenish rather than sleeping a fixed guess, and fails
+          # closed when the budget cannot be proven. It submits no sign-in
+          # request and changes no production limit.
+          node scripts/ci/wait-for-principal-budget.mjs
+      - name: Verify Connected Work and Automations browser workflow
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: |
+          export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+          # W29-A/W30-A: the Connected Work browser lane is a BLOCKING gate on the
+          # real deployment, not only a local one. It drives Settings >
+          # Connections (empty state, synthetic connection lifecycle, secret
+          # non-exposure, disable/re-enable/revoke, inbound event list) and
+          # Settings > Automations (empty state, author, validate, enable, run,
+          # history, step detail, a failing action and the disabled refusal)
+          # against the same already-initialised acceptance tenant the deployed
+          # browser workflow uses, so no second stack is created. No
+          # continue-on-error, no retries, no quarantine: a failure here fails
+          # the deployment job, and traces/screenshots land in
+          # test-results/connected-work, uploaded as their own artifact below.
+          npx playwright test --config=playwright.connected-work.config.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: connected-work-results
+          path: |
+            test-results/connected-work
       - name: Verify trusted HTTPS, secure cookies and WSS
         run: |
           docker compose down

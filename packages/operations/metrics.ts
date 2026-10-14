@@ -59,6 +59,12 @@ export type MetricsSnapshot = {
   >;
   http: HttpMetricSnapshot[];
   antivirus?: Record<"clean" | "infected" | "error", number>;
+  // W29-A / W30-A: bounded, count-only deployment-wide connector and workflow
+  // counters. Composed from SECURITY DEFINER count functions because the connector
+  // and workflow tables are FORCE ROW LEVEL SECURITY: a tenant-less aggregate would
+  // otherwise report an empty fleet. Never rows, ids, tenants or payloads.
+  connectors?: Record<string, number>;
+  workflows?: Record<string, number>;
 };
 
 const label = (value: string) =>
@@ -154,6 +160,24 @@ export function renderPrometheusMetrics(snapshot: MetricsSnapshot) {
         labels,
       ),
     );
+  }
+
+  if (snapshot.connectors) {
+    lines.push(
+      "# HELP workspace_connector_count Deployment-wide connector counters.",
+      "# TYPE workspace_connector_count gauge",
+    );
+    for (const [metric, value] of Object.entries(snapshot.connectors).sort())
+      lines.push(sample(`workspace_connector_${metric}`, value));
+  }
+
+  if (snapshot.workflows) {
+    lines.push(
+      "# HELP workspace_workflow_count Deployment-wide workflow counters.",
+      "# TYPE workspace_workflow_count gauge",
+    );
+    for (const [metric, value] of Object.entries(snapshot.workflows).sort())
+      lines.push(sample(`workspace_workflow_${metric}`, value));
   }
 
   return `${lines.join("\n")}\n`;
