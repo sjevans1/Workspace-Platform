@@ -575,11 +575,44 @@ jobs:
           node scripts/e2e-determinism.mjs
       - name: Wait for auth rate-limit budget before Connected Work
         run: |
-          # W29-A/W30-A: the Connected Work lane signs in, and the deployed
-          # sign-in route keeps its own strict production budget that the
-          # preceding authenticating steps exhaust. Non-mutating: it checks the
-          # shared general window and API liveness only, never the sign-in route.
+          # W29-A/W30-A readiness, part 1 of 2: NETWORK and API readiness.
+          # The Connected Work lane signs in, and the deployed sign-in route
+          # keeps its own strict production budget that the preceding
+          # authenticating steps exhaust. Non-mutating: it checks the shared
+          # general window and API liveness only, never the sign-in route: any
+          # request to that route, valid or invalid, consumes one of its
+          # 10-per-5-minutes production attempts.
+          #
+          # This check reads the NETWORK-keyed limiter, because the route it
+          # uses is unauthenticated. It therefore cannot see the budget of the
+          # authenticated principal the lane itself uses (the API keys
+          # authenticated GET /api/v1/* reads as principal:<tenant>:<user>).
+          # Part 2, immediately below, proves that budget.
           bash scripts/ci/wait-for-auth-budget.sh
+      - name: Wait for authenticated principal read budget before Connected Work
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          PRINCIPAL_BUDGET_STATE: e2e/.auth/session.json
+        run: |
+          # W29-A/W30-A readiness, part 2 of 2: AUTHENTICATED-PRINCIPAL read
+          # budget. The API keys authenticated GET /api/v1/* reads (excluding
+          # /auth/ and /setup) as principal:<tenant>:<user>, so the network check
+          # above says nothing about the budget this lane's own reads consume.
+          # The deterministic engine/viewport harness that runs immediately
+          # before this step signs in as the SAME acceptance principal, so it
+          # spends the same bucket: in FULL run 38473169389 the network check
+          # reported 271 remaining and the lane's first authenticated read was
+          # already HTTP 429, which rendered the Connections error branch instead
+          # of the empty state the lane asserts.
+          #
+          # The helper reuses the harness's own Playwright storage state
+          # (e2e/.auth/session.json), issues read-only authenticated GET
+          # /api/v1/me probes, reads the real x-ratelimit-* headers, honours the
+          # server-directed Retry-After on a 429, waits for the real limiter
+          # window to replenish rather than sleeping a fixed guess, and fails
+          # closed when the budget cannot be proven. It submits no sign-in
+          # request and changes no production limit.
+          node scripts/ci/wait-for-principal-budget.mjs
       - name: Verify Connected Work and Automations browser workflow
         env:
           E2E_BASE_URL: http://localhost:8080
