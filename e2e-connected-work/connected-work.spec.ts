@@ -269,7 +269,7 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
   const oauthRow = page.locator(".integration-row").filter({ hasText: oauthLabel }).first();
   await expect(oauthRow.locator(".tag")).toHaveText("connected");
   await oauthRow.getByRole("button", { name: "View access" }).click();
-  await expect(oauthRow.locator(".oauth-detail")).toContainText("Approved permissions");
+  await expect(oauthRow.locator(".oauth-detail")).toContainText("Permissions granted");
   await expect(oauthRow.locator(".oauth-detail")).toContainText(
     "Token values are never shown",
   );

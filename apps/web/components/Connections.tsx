@@ -787,19 +787,23 @@ export default function Connections({ me }: { me: any }) {
                 )}
                 {["connected", "attention_required", "disabled"].includes(
                   c.status,
-                ) && (
-                  <button
-                    className="button"
-                    disabled={busy === c.id}
-                    onClick={() => {
-                      setActive(c);
-                      setModal("rotate");
-                    }}
-                  >
-                    <RotateCw size={15} />
-                    Rotate credential
-                  </button>
-                )}
+                ) &&
+                  // W29-P0/A3: an OAuth connection is authorized at the provider, so
+                  // a manual secret rotation would be a dead control. The working
+                  // path for it is Reconnect, below.
+                  !oauth.some((entry) => entry.provider_key === c.provider_key) && (
+                    <button
+                      className="button"
+                      disabled={busy === c.id}
+                      onClick={() => {
+                        setActive(c);
+                        setModal("rotate");
+                      }}
+                    >
+                      <RotateCw size={15} />
+                      Rotate credential
+                    </button>
+                  )}
                 {c.status !== "revoked" && c.status !== "pending" && (
                   <button
                     className="button"
@@ -880,33 +884,64 @@ export default function Connections({ me }: { me: any }) {
               {oauthStatus[c.id] && (
                 <div className="oauth-detail" role="status">
                   <p className="muted small-text">
-                    Authorization: {String(oauthStatus[c.id].state)}
-                    {oauthStatus[c.id].failure_category
-                      ? ` (${String(oauthStatus[c.id].failure_category)})`
-                      : ""}
+                    Account access:{" "}
+                    {c.status === "connected"
+                      ? "active"
+                      : c.status === "attention_required"
+                        ? "Reconnect required"
+                        : c.status === "disabled"
+                          ? "paused by an administrator"
+                          : label(c.status)}
                   </p>
                   <p className="muted small-text">
-                    Approved permissions:{" "}
+                    Permissions granted:{" "}
                     {c.capabilities_granted.length
-                      ? c.capabilities_granted.join(", ")
+                      ? c.capabilities_granted
+                          .map(
+                            (capability) =>
+                              oauth
+                                .find(
+                                  (entry) =>
+                                    entry.provider_key === c.provider_key,
+                                )
+                                ?.scopes.find(
+                                  (scope) => scope.capability === capability,
+                                )?.label ?? label(capability),
+                          )
+                          .join(", ")
                       : "none yet"}
                   </p>
-                  {(oauthStatus[c.id].grant || []).length ? (
+                  <p className="muted small-text">
+                    Last authorized:{" "}
+                    {oauthStatus[c.id].issued_at
+                      ? String(oauthStatus[c.id].issued_at).slice(0, 16).replace("T", " ")
+                      : "not reported"}
+                    . Token values are never shown.
+                  </p>
+                  <details className="advanced">
+                    <summary>Advanced diagnostics</summary>
                     <p className="muted small-text">
-                      Stored credentials:{" "}
-                      {(oauthStatus[c.id].grant || [])
-                        .map(
-                          (entry: any) =>
-                            `${entry.kind} (version ${entry.key_version}${
-                              entry.expires_at
-                                ? `, expires ${String(entry.expires_at).slice(0, 10)}`
-                                : ""
-                            })`,
-                        )
-                        .join(", ")}
-                      . Token values are never shown.
+                      Authorization record: {String(oauthStatus[c.id].state)}
+                      {oauthStatus[c.id].failure_category
+                        ? ` (${String(oauthStatus[c.id].failure_category)})`
+                        : ""}
                     </p>
-                  ) : null}
+                    <p className="muted small-text">
+                      Stored credential records:{" "}
+                      {(oauthStatus[c.id].grant || []).length
+                        ? (oauthStatus[c.id].grant || [])
+                            .map(
+                              (entry: any) =>
+                                `${entry.kind} v${entry.key_version}${
+                                  entry.expires_at
+                                    ? ` expires ${String(entry.expires_at).slice(0, 10)}`
+                                    : ""
+                                }`,
+                            )
+                            .join(", ")
+                        : "none"}
+                    </p>
+                  </details>
                 </div>
               )}
             </div>

@@ -802,21 +802,32 @@ test("A3: client_secret_basic is implemented, not merely declared", async () => 
     method: "S256",
     behaviour: "approve",
   });
+  const seen: { authorization?: string; form?: Record<string, string> } = {};
   const withBasic = await exchangeAuthorizationCode({
     descriptor: { ...fixture, client_auth: "client_secret_basic" },
     code: issued.code,
     verifier: pkce.verifier,
-    transport: async (input) =>
-      transport({
-        ...input,
-        descriptor: fixture,
-        headers: {
-          ...(input.headers ?? {}),
-          authorization: `Basic ${Buffer.from("workspace-acceptance-client:acceptance-test-client-secret").toString("base64")}`,
-        },
-      }),
+    // The transport INSPECTS what the substrate actually sent, rather than
+    // supplying the credential itself, so this cannot pass on a missing header.
+    transport: async (input) => {
+      seen.authorization = input.headers?.authorization;
+      // A copy: the fixture normalizes Basic into its own form view.
+      seen.form = { ...input.form };
+      return transport({ ...input, descriptor: fixture });
+    },
   });
   assert.equal(withBasic.ok, true, JSON.stringify(withBasic));
+  const header = seen.authorization ?? "";
+  assert.ok(header.startsWith("Basic "), `the substrate sent a Basic header (${header.slice(0, 6)})`);
+  assert.equal(
+    Buffer.from(header.slice(6), "base64").toString("utf8"),
+    "workspace-acceptance-client:acceptance-test-client-secret",
+    "the header carries the registered client identity",
+  );
+  assert.ok(
+    !("client_secret" in (seen.form ?? {})),
+    "a Basic descriptor never puts the secret in the form body",
+  );
   void basic;
 });
 
@@ -835,24 +846,55 @@ test("A3: OAuth material is redacted from any diagnostic", () => {
   assert.ok(redactOAuthMaterial("test-refresh-12345678-abcd").includes("[redacted]"));
 });
 
-test("A3: the worker refresh phase rotates a live grant and escalates a dead one", async () => {
+test("A3: the worker refreshes only when a grant is due, and never churns a healthy one", async () => {
   const { oauthRefreshTick } = await import("../apps/worker/src/connected-work.ts");
-  const live = await createConnection("Worker refresh mailbox", "tenant");
-  const liveStart = await startAuthorization(live);
-  await callback(await approveAtProvider(liveStart.json().authorization.authorization_url));
-  const before = await db.tenant(tenant, (q) =>
-    q.query("SELECT key_version FROM connector_credentials WHERE connection_id=$1 AND kind='oauth_refresh' AND revoked_at IS NULL", [live]),
-  );
-  const tick = await oauthRefreshTick(db, tenant, { now: new Date() });
-  assert.ok(tick.refreshed >= 1, JSON.stringify(tick));
-  const after = await db.tenant(tenant, (q) =>
-    q.query("SELECT key_version FROM connector_credentials WHERE connection_id=$1 AND kind='oauth_refresh' AND revoked_at IS NULL", [live]),
-  );
-  assert.ok(
-    Number(after.rows[0].key_version) > Number(before.rows[0].key_version),
-    "the worker rotated the refresh credential",
-  );
+  const connection = await createConnection("Worker cadence mailbox", "tenant");
+  const started = await startAuthorization(connection);
+  await callback(await approveAtProvider(started.json().authorization.authorization_url));
+  const version = async () =>
+    Number(
+      (
+        await db.tenant(tenant, (q) =>
+          q.query("SELECT key_version FROM connector_credentials WHERE connection_id=$1 AND kind='oauth_refresh' AND revoked_at IS NULL", [connection]),
+        )
+      ).rows[0].key_version,
+    );
+  const before = await version();
 
+  // A healthy grant with an hour left is NOT refreshed, however often the tick runs.
+  for (let index = 0; index < 3; index += 1) {
+    const tick = await oauthRefreshTick(db, tenant, { now: new Date() });
+    assert.equal(tick.refreshed, 0, JSON.stringify(tick));
+    assert.equal(tick.attention, 0, JSON.stringify(tick));
+  }
+  assert.equal(await version(), before, "no token churn while the grant is healthy");
+
+  // At due time (the stored expiry is inside the refresh window) it refreshes ONCE
+  // and the new access expiry is what the due predicate reads next.
+  await db.tenant(tenant, (q) =>
+    q.query(
+      "UPDATE connector_credentials SET metadata=metadata || jsonb_build_object('expires_at', to_jsonb((now()-interval '1 minute')::text))" +
+        " WHERE connection_id=$1 AND kind='oauth_access'",
+      [connection],
+    ),
+  );
+  const due = await oauthRefreshTick(db, tenant, { now: new Date() });
+  assert.equal(due.refreshed, 1, JSON.stringify(due));
+  assert.ok((await version()) > before, "the due grant rotated");
+  const metadata = await db.tenant(tenant, (q) =>
+    q.query("SELECT metadata FROM connector_credentials WHERE connection_id=$1 AND kind='oauth_access' AND revoked_at IS NULL", [connection]),
+  );
+  const expiry = String((metadata.rows[0].metadata as Record<string, unknown>).expires_at ?? "");
+  assert.ok(Date.parse(expiry) > Date.now(), `the refreshed grant carries a future expiry (${expiry})`);
+  const after = await oauthRefreshTick(db, tenant, { now: new Date() });
+  assert.equal(after.refreshed, 0, "the refreshed grant is healthy again");
+});
+
+test("A3: a rejected grant escalates, and an in-flight crash is never blindly retried", async () => {
+  const { oauthRefreshTick } = await import("../apps/worker/src/connected-work.ts");
+  const { claimRefresh: claim, markRefreshIoStarted } = await import(
+    "../packages/connectors/index.ts"
+  );
   // A grant the provider rejects needs a human, not a retry loop.
   const dead = await createConnection("Worker dead mailbox", "tenant");
   const deadStart = await startAuthorization(dead);
@@ -862,10 +904,16 @@ test("A3: the worker refresh phase rotates a live grant and escalates a dead one
     "not-a-valid-refresh-token",
   );
   await db.tenant(tenant, (q) =>
-    q.query("UPDATE connector_credentials SET secret_encrypted=$2 WHERE connection_id=$1 AND kind='oauth_refresh'", [
-      dead,
-      deadSecret,
-    ]),
+    q.query(
+      "UPDATE connector_credentials SET secret_encrypted=$2, metadata=metadata || jsonb_build_object('expires_at', to_jsonb((now()-interval '1 minute')::text)) WHERE connection_id=$1 AND kind='oauth_refresh'",
+      [dead, deadSecret],
+    ),
+  );
+  await db.tenant(tenant, (q) =>
+    q.query(
+      "UPDATE connector_credentials SET metadata=metadata || jsonb_build_object('expires_at', to_jsonb((now()-interval '1 minute')::text)) WHERE connection_id=$1 AND kind='oauth_access'",
+      [dead],
+    ),
   );
   const deadTick = await oauthRefreshTick(db, tenant, { now: new Date() });
   assert.ok(deadTick.attention >= 1, JSON.stringify(deadTick));
@@ -873,4 +921,93 @@ test("A3: the worker refresh phase rotates a live grant and escalates a dead one
     q.query("SELECT status,attention_reason FROM connector_connections WHERE id=$1", [dead]),
   );
   assert.equal(row.rows[0].status, "attention_required");
+
+  // A worker that crashed AFTER starting provider I/O leaves a lease that must not
+  // be reclaimed: the provider may already have rotated the token.
+  const crashed = await createConnection("Worker crash mailbox", "tenant");
+  const crashedStart = await startAuthorization(crashed);
+  await callback(await approveAtProvider(crashedStart.json().authorization.authorization_url));
+  const crashClaim = await db.tenant(tenant, (q) =>
+    claim(q, { tenant, connection_id: crashed, credential_version: 1 }),
+  );
+  assert.ok(crashClaim);
+  const marked = await db.tenant(tenant, (q) =>
+    markRefreshIoStarted(q, { tenant, claim: crashClaim! }),
+  );
+  assert.equal(marked, true);
+  // The lease expires while the worker is gone.
+  await db.tenant(tenant, (q) =>
+    q.query("UPDATE connector_oauth_refresh_claims SET expires_at=now()-interval '1 minute' WHERE id=$1", [crashClaim!.id]),
+  );
+  await db.tenant(tenant, (q) =>
+    q.query(
+      "UPDATE connector_credentials SET metadata=metadata || jsonb_build_object('expires_at', to_jsonb((now()-interval '1 minute')::text)) WHERE connection_id=$1 AND kind='oauth_access'",
+      [crashed],
+    ),
+  );
+  const crashTick = await oauthRefreshTick(db, tenant, { now: new Date() });
+  assert.equal(crashTick.refreshed, 0, "an in-flight crash is never blindly retried");
+  const crashRow = await db.tenant(tenant, (q) =>
+    q.query("SELECT status,attention_reason FROM connector_connections WHERE id=$1", [crashed]),
+  );
+  assert.equal(crashRow.rows[0].status, "attention_required");
+  assert.equal(crashRow.rows[0].attention_reason, "refresh_unknown_outcome");
+});
+
+test("A3: a reclaimed worker cannot overwrite the newer outcome", async () => {
+  const { claimRefresh: claim, markRefreshIoStarted, failRefresh } = await import(
+    "../packages/connectors/index.ts"
+  );
+  const connection = await createConnection("Worker fence mailbox", "tenant");
+  const started = await startAuthorization(connection);
+  await callback(await approveAtProvider(started.json().authorization.authorization_url));
+  const first = await db.tenant(tenant, (q) =>
+    claim(q, { tenant, connection_id: connection, credential_version: 1 }),
+  );
+  assert.ok(first);
+  await db.tenant(tenant, (q) => markRefreshIoStarted(q, { tenant, claim: first! }));
+  // The lease expires and a second worker reclaims it.
+  await db.tenant(tenant, (q) =>
+    q.query("UPDATE connector_oauth_refresh_claims SET expires_at=now()-interval '1 minute' WHERE id=$1", [first!.id]),
+  );
+  const second = await db.tenant(tenant, (q) =>
+    claim(q, { tenant, connection_id: connection, credential_version: 1 }),
+  );
+  assert.equal(second, null, "an in-flight claim is settled, not reclaimed");
+  // The crash boundary already settled the claim and asked for a human: an in-flight
+  // refresh is never silently retried.
+  const settled = await db.tenant(tenant, (q) =>
+    q.query("SELECT status,state,failure_category FROM connector_oauth_refresh_claims WHERE id=$1", [first!.id]),
+  );
+  assert.equal(settled.rows[0].status, "failed");
+  assert.equal(settled.rows[0].state, "settled");
+  assert.equal(settled.rows[0].failure_category, "refresh_unknown_outcome");
+  const escalated = await db.tenant(tenant, (q) =>
+    q.query("SELECT status,attention_reason FROM connector_connections WHERE id=$1", [connection]),
+  );
+  assert.equal(escalated.rows[0].status, "attention_required");
+  assert.equal(escalated.rows[0].attention_reason, "refresh_unknown_outcome");
+
+  // The stale worker's late failure cannot overwrite that outcome.
+  await db.tenant(tenant, (q) =>
+    failRefresh(q, {
+      tenant,
+      claim: { ...first!, claim_token: first!.claim_token },
+      category: "provider_unreachable",
+      attention: false,
+    }),
+  );
+  const row = await db.tenant(tenant, (q) =>
+    q.query("SELECT status,attention_reason FROM connector_connections WHERE id=$1", [connection]),
+  );
+  assert.equal(row.rows[0].status, "attention_required");
+  assert.equal(
+    row.rows[0].attention_reason,
+    "refresh_unknown_outcome",
+    "the stale worker's category never replaces the settled outcome",
+  );
+  const claimRow = await db.tenant(tenant, (q) =>
+    q.query("SELECT failure_category FROM connector_oauth_refresh_claims WHERE id=$1", [first!.id]),
+  );
+  assert.equal(claimRow.rows[0].failure_category, "refresh_unknown_outcome");
 });

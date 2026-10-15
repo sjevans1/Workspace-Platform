@@ -713,6 +713,9 @@ export async function buildApp(
         ...(integrationOpenApi[`${method} ${p}`] || {}),
       },
       config: { rateLimit: options.rateLimit },
+      ...(options.log
+        ? { logLevel: options.log.level as "silent" | "warn" | "info" }
+        : {}),
       preHandler: auth,
       handler: async (req, reply) => {
         const r = req as Request;

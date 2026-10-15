@@ -132,7 +132,15 @@ export type ConnectedWorkSeamRoute = (
   p: string,
   summary: string,
   h: (seam: TenantSeam, a: Actor, r: any, reply: any) => Promise<any>,
-  options: { rateLimit: { max: number; timeWindow: string } },
+  options: {
+    rateLimit: { max: number; timeWindow: string };
+    /**
+     * W29-P0/A3: the route's own log level. The OAuth callback sets `silent`, because
+     * a request log line for it would contain the authorization code and the state in
+     * the URL; the handler logs a bounded, non-secret outcome instead.
+     */
+    log?: { level: string };
+  },
 ) => void;
 
 /**
@@ -517,23 +525,33 @@ export function connectedWorkRoutes(
     async (seam, a, r) => {
       humanSession(a);
       const id = connectionParam(r);
-      // The LOCAL denial commits first, in its own short transaction: it is
-      // authoritative and never waits for a provider.
-      const connection = await seam.run((q) => revokeConnection(q, a, id));
+      // The provider grant is captured INSIDE the same short transaction that
+      // commits the local denial, before the credential is invalidated: reading it
+      // afterwards can only ever find nothing. It lives in bounded server memory and
+      // is never returned, logged or audited.
+      const { connection, providerGrant } = await seam.run(async (q) => {
+        const existing = await getConnection(q, a, id);
+        assert(
+          canManageConnection(a, existing as any),
+          403,
+          "You cannot revoke this connection",
+        );
+        const stored = oauthDescriptorFor(String(existing.provider_key))
+          ? await activeCredential(q, a.tenant_id, id, "oauth_refresh")
+          : null;
+        const revoked = await revokeConnection(q, a, id);
+        return { connection: revoked, providerGrant: stored?.secret ?? null };
+      });
       const descriptor = oauthDescriptorFor(String(connection.provider_key));
-      if (descriptor) {
+      if (descriptor && providerGrant) {
         // Best effort, AFTER the commit and with no tenant transaction held: a
         // provider that is slow or unreachable can neither delay nor undo the local
         // denial, and a revoked connection is never refreshed back to connected.
-        const stored = await seam.run((q) =>
-          activeCredential(q, a.tenant_id, id, "oauth_refresh"),
-        );
-        if (stored)
-          await revokeProviderGrant({
-            descriptor,
-            refresh_token: stored.secret,
-            transport: oauthTransportFor(descriptor),
-          }).catch(() => undefined);
+        await revokeProviderGrant({
+          descriptor,
+          refresh_token: providerGrant,
+          transport: oauthTransportFor(descriptor),
+        }).catch(() => undefined);
       }
       return { connection };
     },
@@ -767,6 +785,16 @@ export function connectedWorkRoutes(
     async (seam, a, r, reply) => {
       humanSession(a);
       const query = (r.query ?? {}) as Record<string, unknown>;
+      // A bounded, non-secret outcome line: the category only, never the code, the
+      // state, the verifier, a token or the provider's error text.
+      const note = (outcome: string, category?: string | null) =>
+        console.info(
+          JSON.stringify({
+            event: "connector.oauth_callback",
+            outcome,
+            category: category ?? null,
+          }),
+        );
       const appUrl = String(process.env.APP_URL || "").replace(/\/$/, "") || "";
       const clean = (outcome: string, connection?: string | null) =>
         `${appUrl}/?oauth=${outcome}${connection ? `&connection=${connection}` : ""}`;
@@ -806,11 +834,13 @@ export function connectedWorkRoutes(
           session_token: seam.session_token,
         }),
       );
-      if (!consumed.ok)
+      if (!consumed.ok) {
+        note("refused", consumed.category);
         return reply.redirect(
           clean(consumed.category === "provider_denied" ? "denied" : "error"),
           303,
         );
+      }
 
       const attempt = consumed.consumed.attempt;
       const descriptor = oauthDescriptorFor(attempt.provider_key);
@@ -877,9 +907,12 @@ export function connectedWorkRoutes(
           .catch(() => undefined);
         return reply.redirect(clean("error", attempt.connection_id), 303);
       }
+      note("connected");
       return reply.redirect(clean("connected", attempt.connection_id), 303);
     },
-    { rateLimit: { max: 60, timeWindow: "5 minutes" } },
+    // Raw request logging is silenced for this route: its URL carries the code and
+    // the state. The handler's own bounded outcome line is the log record.
+    { rateLimit: { max: 60, timeWindow: "5 minutes" }, log: { level: "silent" } },
   );
 
   /** The safe, non-secret OAuth status of one connection. */

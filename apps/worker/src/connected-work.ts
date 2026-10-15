@@ -30,11 +30,14 @@ import {
   failRefresh,
   failSync,
   oauthDescriptorFor,
+  markRefreshIoStarted,
   oauthRegistry,
   recordConnectorEvent,
+  refreshDue,
   refreshGrant,
   testOAuthTransport,
   type FailureCategory,
+  type CredentialMetadata,
   type SyncClaim,
 } from "../../../packages/connectors/index.ts";
 import {
@@ -96,16 +99,19 @@ export async function oauthRefreshTick(
   db: Database,
   tenant: string,
   options: { now?: Date; limit?: number } = {},
-): Promise<{ due: number; refreshed: number; attention: number }> {
+): Promise<{ due: number; refreshed: number; attention: number; skipped: number }> {
   const now = options.now ?? new Date();
   const keys = [...oauthRegistry().descriptors.keys()];
-  if (!keys.length) return { due: 0, refreshed: 0, attention: 0 };
+  if (!keys.length) return { due: 0, refreshed: 0, attention: 0, skipped: 0 };
+  // The ACCESS credential's metadata decides eligibility: a healthy token with time
+  // left is never refreshed, however often the worker ticks.
   const candidates = await db.tenant(tenant, (q) =>
     q.query(
-      "SELECT c.id,c.provider_key,rc.key_version AS refresh_version,rc.metadata AS access_metadata," +
-        " (SELECT COALESCE(MAX(key_version),0) FROM connector_credentials WHERE tenant_id=c.tenant_id AND connection_id=c.id AND kind='oauth_access' AND revoked_at IS NULL) AS access_version" +
+      "SELECT c.id,c.provider_key,rc.key_version AS refresh_version,ac.metadata AS access_metadata," +
+        " COALESCE(ac.key_version,0) AS access_version" +
         " FROM connector_connections c" +
         " JOIN connector_credentials rc ON rc.tenant_id=c.tenant_id AND rc.connection_id=c.id AND rc.kind='oauth_refresh' AND rc.revoked_at IS NULL" +
+        " LEFT JOIN connector_credentials ac ON ac.tenant_id=c.tenant_id AND ac.connection_id=c.id AND ac.kind='oauth_access' AND ac.revoked_at IS NULL" +
         " WHERE c.tenant_id=$1 AND c.status='connected' AND c.enabled AND c.provider_key = ANY($2::text[])" +
         " ORDER BY c.id LIMIT $3",
       [tenant, keys, Math.max(1, Math.min(options.limit ?? 20, 50))],
@@ -113,14 +119,22 @@ export async function oauthRefreshTick(
   );
   let refreshed = 0;
   let attention = 0;
+  let skipped = 0;
   for (const row of candidates.rows as {
     id: string;
     provider_key: string;
     refresh_version: number;
     access_version: number;
+    access_metadata: CredentialMetadata | null;
   }[]) {
     const descriptor = oauthDescriptorFor(row.provider_key);
     if (!descriptor) continue;
+    // Due-driven cadence: a token with more than the refresh window left is left
+    // alone, so repeated ticks make no outbound calls at all.
+    if (!refreshDue(row.access_metadata, now)) {
+      skipped += 1;
+      continue;
+    }
     // Claim the lease in a short transaction.
     const claim = await db.tenant(tenant, (q) =>
       claimRefresh(q, {
@@ -136,6 +150,13 @@ export async function oauthRefreshTick(
       activeCredential(q, tenant, row.id, "oauth_refresh"),
     );
     if (!stored) continue;
+    // The durable pre-I/O boundary: after this point the claim is not safely
+    // retryable, so a crash here becomes attention/reconnect rather than a blind
+    // replay of a token the provider may already have rotated.
+    const marked = await db.tenant(tenant, (q) =>
+      markRefreshIoStarted(q, { tenant, claim, now }),
+    );
+    if (!marked) continue;
     const result = await refreshGrant({
       descriptor,
       refresh_token: stored.secret,
@@ -174,16 +195,40 @@ export async function oauthRefreshTick(
     if (committed.attention) attention += 1;
     else refreshed += 1;
   }
-  return { due: candidates.rows.length, refreshed, attention };
+  return { due: candidates.rows.length, refreshed, attention, skipped };
 }
 
 export async function connectorTick(
   db: Database,
   tenant: string,
-): Promise<{ claimed: number; succeeded: number; failed: number; events: number }> {
+): Promise<{
+  claimed: number;
+  succeeded: number;
+  failed: number;
+  events: number;
+  refresh: { due: number; refreshed: number; attention: number; skipped: number };
+}> {
   // The refresh phase runs before sync, so a grant that is about to expire is
-  // rotated before an adapter tries to use it.
-  await oauthRefreshTick(db, tenant).catch(() => undefined);
+  // rotated before an adapter tries to use it. Its outcome is reported rather than
+  // swallowed, so a continuous failure is visible instead of silent.
+  let refresh: Awaited<ReturnType<typeof oauthRefreshTick>> = {
+    due: 0,
+    refreshed: 0,
+    attention: 0,
+    skipped: 0,
+  };
+  try {
+    refresh = await oauthRefreshTick(db, tenant);
+  } catch (error) {
+    // Bounded and non-secret: the category only, never a token or a provider body.
+    console.warn(
+      JSON.stringify({
+        event: "connector.oauth_refresh_failed",
+        tenant: tenant.slice(0, 8),
+        category: (error as { category?: string }).category ?? "unexpected",
+      }),
+    );
+  }
   const claims: SyncClaim[] = await db.tenant(tenant, (q) => claimDueSync(q, tenant));
   let succeeded = 0,
     failed = 0,
@@ -224,7 +269,7 @@ export async function connectorTick(
       failed += 1;
     }
   }
-  return { claimed: claims.length, succeeded, failed, events };
+  return { claimed: claims.length, succeeded, failed, events, refresh };
 }
 
 /**

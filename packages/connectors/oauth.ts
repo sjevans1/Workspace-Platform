@@ -64,6 +64,8 @@ export const OAUTH_LIMITS = Object.freeze({
   refresh_lease_ms: 2 * 60 * 1000,
   /** Bounded refresh attempts before the connection needs a human again. */
   max_refresh_attempts: 5,
+  /** How long before expiry a grant becomes due for a refresh. */
+  refresh_window_ms: 5 * 60 * 1000,
   max_state_length: 200,
   max_token_bytes: 16 * 1024,
 });
@@ -228,14 +230,23 @@ export async function startAuthorizationAttempt(
   // request is intersected with the connection's approved set, so an authorization
   // attempt can never widen what the connection is allowed to use.
   const approved = new Set(input.connection.capabilities_requested ?? []);
-  const capabilities = input.requested_capabilities
-    .filter((capability) => approved.has(capability))
-    .slice(0, 16);
+  const requestedCapabilities = input.requested_capabilities.slice(0, 16);
   assert(
-    capabilities.length > 0,
+    requestedCapabilities.length > 0,
     400,
     "Choose at least one capability this connection was created with",
   );
+  // A mixed list is REFUSED rather than quietly trimmed: an administrator must not
+  // be told a selection was accepted when part of it was dropped.
+  const unapproved = requestedCapabilities.filter(
+    (capability) => !approved.has(capability),
+  );
+  assert(
+    unapproved.length === 0,
+    400,
+    `This connection was not created with: ${unapproved.slice(0, 4).join(", ")}`,
+  );
+  const capabilities = requestedCapabilities;
   const requested = input.descriptor.scopes
     .filter(
       (entry) =>
@@ -784,6 +795,7 @@ export async function revokeProviderGrant(input: {
 
 export type RefreshClaimRow = {
   id: string;
+  state: string;
   tenant_id: string;
   connection_id: string;
   credential_version: number;
@@ -819,9 +831,25 @@ export async function claimRefresh(
   )) as RefreshClaimRow | undefined;
   if (existing) {
     if (new Date(existing.expires_at).getTime() > now.getTime()) return null;
+    // An expired lease that HAD started provider I/O is not safely retryable: the
+    // provider may have rotated the token. It is settled honestly and the connection
+    // asks for a human instead of replaying a possibly-invalidated token.
+    if (existing.state === "in_flight") {
+      await q.query(
+        "UPDATE connector_oauth_refresh_claims SET status='failed',state='settled',failure_category='refresh_unknown_outcome',completed_at=now(),updated_at=now()" +
+          " WHERE tenant_id=$1 AND id=$2 AND status='claimed' AND claim_token=$3",
+        [input.tenant, existing.id, existing.claim_token],
+      );
+      await q.query(
+        "UPDATE connector_connections SET status='attention_required',attention_reason='refresh_unknown_outcome',last_error_at=now(),last_error_category='refresh_unknown_outcome',updated_at=now()" +
+          " WHERE tenant_id=$1 AND id=$2 AND status<>'revoked'",
+        [input.tenant, input.connection_id],
+      );
+      return null;
+    }
     const reclaimed = await q.query(
       "UPDATE connector_oauth_refresh_claims SET claim_token=$3,expires_at=$4,attempts=attempts+1,claimed_at=now(),updated_at=now()" +
-        " WHERE tenant_id=$1 AND id=$2 AND status='claimed' AND claim_token=$5 AND expires_at<=$4 RETURNING id",
+        " WHERE tenant_id=$1 AND id=$2 AND status='claimed' AND state='claimed' AND claim_token=$5 AND expires_at<=$4 RETURNING id",
       [input.tenant, existing.id, lease, expiresAt, existing.claim_token],
     );
     if (!reclaimed.rowCount) return null;
@@ -840,10 +868,33 @@ export async function claimRefresh(
     credential_version: input.credential_version,
     claim_token: lease,
     status: "claimed",
+    state: "claimed",
     attempts: 1,
     failure_category: null,
     expires_at: expiresAt.toISOString(),
   };
+}
+
+/**
+ * Records that provider I/O is about to start. This is the durable boundary that
+ * makes crash recovery honest: after this point a reclaimed lease is not retried.
+ */
+export async function markRefreshIoStarted(
+  q: Query,
+  input: { tenant: string; claim: RefreshClaimRow; now?: Date },
+): Promise<boolean> {
+  const now = input.now ?? new Date();
+  const marked = await q.query(
+    "UPDATE connector_oauth_refresh_claims SET state='in_flight',io_started_at=now(),expires_at=$3,updated_at=now()" +
+      " WHERE tenant_id=$1 AND id=$2 AND status='claimed' AND state='claimed' AND claim_token=$4 RETURNING id",
+    [
+      input.tenant,
+      input.claim.id,
+      new Date(now.getTime() + OAUTH_LIMITS.refresh_lease_ms),
+      input.claim.claim_token,
+    ],
+  );
+  return Boolean(marked.rowCount);
 }
 
 /**
@@ -865,7 +916,7 @@ export async function completeRefresh(
   const now = input.now ?? new Date();
   const claim = (await one(
     q,
-    "SELECT * FROM connector_oauth_refresh_claims WHERE tenant_id=$1 AND id=$2",
+    "SELECT * FROM connector_oauth_refresh_claims WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
     [input.tenant, input.claim.id],
   )) as RefreshClaimRow | undefined;
   assert(
@@ -875,7 +926,7 @@ export async function completeRefresh(
   );
   const connection = (await one(
     q,
-    "SELECT status,enabled FROM connector_connections WHERE tenant_id=$1 AND id=$2",
+    "SELECT status,enabled FROM connector_connections WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
     [input.tenant, input.claim.connection_id],
   )) as { status: string; enabled: boolean } | undefined;
   assert(connection, 404, "Connection not found");
@@ -936,8 +987,9 @@ export async function completeRefresh(
     return { rotated: false, attention: "refresh_unknown_outcome" as const };
   }
   await q.query(
-    "UPDATE connector_oauth_refresh_claims SET status='completed',completed_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2",
-    [input.tenant, input.claim.id],
+    "UPDATE connector_oauth_refresh_claims SET status='completed',state='settled',completed_at=now(),updated_at=now()" +
+      " WHERE tenant_id=$1 AND id=$2 AND claim_token=$3",
+    [input.tenant, input.claim.id, input.claim.claim_token],
   );
   await q.query(
     "UPDATE connector_connections SET last_success_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2",
@@ -959,11 +1011,14 @@ export async function failRefresh(
 ): Promise<void> {
   // Fenced by the claim token: a worker whose lease was reclaimed can no longer
   // write a failure over the newer claimant's claim.
-  await q.query(
-    "UPDATE connector_oauth_refresh_claims SET status='failed',failure_category=$3,completed_at=now(),updated_at=now()" +
+  const settled = await q.query(
+    "UPDATE connector_oauth_refresh_claims SET status='failed',state='settled',failure_category=$3,completed_at=now(),updated_at=now()" +
       " WHERE tenant_id=$1 AND id=$2 AND status='claimed' AND claim_token=$4",
     [input.tenant, input.claim.id, input.category, input.claim.claim_token],
   );
+  // A worker whose lease was reclaimed must not escalate the connection over the
+  // newer claimant's outcome: without the fence, nothing else is written.
+  if (!settled.rowCount) return;
   if (!input.attention) return;
   await q.query(
     "UPDATE connector_connections SET status='attention_required',attention_reason=$3,last_error_at=now(),last_error_category=$3,updated_at=now()" +
@@ -1041,6 +1096,26 @@ export async function oauthStatusFor(
     requested_capabilities: row.requested_capabilities ?? [],
     redirect_uri_registered: true,
   };
+}
+
+/**
+ * W29-P0/A3 (correction): is this grant DUE for a refresh?
+ *
+ * A healthy token with an hour left is never refreshed: repeated worker ticks must
+ * not churn tokens, spend provider quota or risk invalidation. A grant is due when
+ * its stored expiry is inside the refresh window, or when the expiry is unknown
+ * (which is refreshed once, and then carries a real expiry).
+ */
+export function refreshDue(
+  metadata: CredentialMetadata | null,
+  now = new Date(),
+  windowMs = OAUTH_LIMITS.refresh_window_ms,
+): boolean {
+  const value = metadata?.expires_at;
+  if (typeof value !== "string") return true;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return true;
+  return at - now.getTime() <= windowMs;
 }
 
 /** True when the connection's stored grant metadata marks it expired. */
