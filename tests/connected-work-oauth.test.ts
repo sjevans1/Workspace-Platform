@@ -97,7 +97,7 @@ async function approveAtProvider(authorizationUrl: string): Promise<string> {
   const url = new URL(authorizationUrl);
   const page = await app.inject({
     method: "GET",
-    url: `/oauth-test/authorize${url.search}`,
+    url: `/api/v1/oauth-test/authorize${url.search}`,
   });
   assert.equal(page.statusCode, 200, page.body);
   const hidden: Record<string, string> = {};
@@ -105,7 +105,7 @@ async function approveAtProvider(authorizationUrl: string): Promise<string> {
     hidden[match[1]] = match[2];
   const approved = await app.inject({
     method: "POST",
-    url: "/oauth-test/approve",
+    url: "/api/v1/oauth-test/approve",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({ ...hidden, decision: "approve" }).toString(),
   });
@@ -115,13 +115,13 @@ async function approveAtProvider(authorizationUrl: string): Promise<string> {
 
 async function denyAtProvider(authorizationUrl: string): Promise<string> {
   const url = new URL(authorizationUrl);
-  const page = await app.inject({ method: "GET", url: `/oauth-test/authorize${url.search}` });
+  const page = await app.inject({ method: "GET", url: `/api/v1/oauth-test/authorize${url.search}` });
   const hidden: Record<string, string> = {};
   for (const match of page.body.matchAll(/name="([a-z_]+)" value="([^"]*)"/g))
     hidden[match[1]] = match[2];
   const denied = await app.inject({
     method: "POST",
-    url: "/oauth-test/approve",
+    url: "/api/v1/oauth-test/approve",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({ ...hidden, decision: "deny" }).toString(),
   });
@@ -449,7 +449,7 @@ test("A3: an insufficient grant never promotes a connection to connected", async
     "message.send",
   ]);
   const url = new URL(started.json().authorization.authorization_url);
-  const page = await app.inject({ method: "GET", url: `/oauth-test/authorize${url.search}` });
+  const page = await app.inject({ method: "GET", url: `/api/v1/oauth-test/authorize${url.search}` });
   const hidden: Record<string, string> = {};
   for (const match of page.body.matchAll(/name="([a-z_]+)" value="([^"]*)"/g))
     hidden[match[1]] = match[2];
@@ -457,7 +457,7 @@ test("A3: an insufficient grant never promotes a connection to connected", async
   hidden.scope = "profile.read messages.read";
   const approved = await app.inject({
     method: "POST",
-    url: "/oauth-test/approve",
+    url: "/api/v1/oauth-test/approve",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({ ...hidden, decision: "approve" }).toString(),
   });
@@ -482,12 +482,12 @@ test("A3: the provider refuses a wrong PKCE verifier and an unregistered redirec
   // A tampered authorization request is refused by the provider itself.
   const bad = await app.inject({
     method: "GET",
-    url: `/oauth-test/authorize${url.search.replace(/client_id=[^&]*/, "client_id=someone-else")}`,
+    url: `/api/v1/oauth-test/authorize${url.search.replace(/client_id=[^&]*/, "client_id=someone-else")}`,
   });
   assert.equal(bad.statusCode, 400);
   const badRedirect = await app.inject({
     method: "GET",
-    url: `/oauth-test/authorize${url.search.replace(/redirect_uri=[^&]*/, "redirect_uri=https%3A%2F%2Fevil.example.test%2Fsteal")}`,
+    url: `/api/v1/oauth-test/authorize${url.search.replace(/redirect_uri=[^&]*/, "redirect_uri=https%3A%2F%2Fevil.example.test%2Fsteal")}`,
   });
   assert.equal(badRedirect.statusCode, 400);
 
