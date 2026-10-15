@@ -119,7 +119,7 @@ customer administrator is told that operator approval is required instead.
 
 The read-only operator surface and the client-administrator endpoint-readiness
 journey both evaluate destinations through this same module, so a diagnostic
-answer and a real connection attempt can never disagree. See
+answer and a real connection attempt within the same scope can never disagree. See
 `docs/CONNECTED_WORK_UX.md` for the role journeys and the API contract.
 
 ### The three surfaces
@@ -128,7 +128,7 @@ answer and a real connection attempt can never disagree. See
 | ------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
 | Client endpoint readiness | `POST /api/v1/connectors/endpoints/preflight`  | owner/admin, re-read live inside a short tenant transaction; human session; CSRF; 30/min per client | the deployment that will connect | none: DNS + policy only |
 | Operator posture          | `GET /egress` (fleet API)                      | operator bearer token, read budget                                                  | **Fleet-local**           | none                    |
-| Operator diagnostic       | `GET /egress/diagnostic?host&port` (fleet API) | operator bearer token, read budget, audited as `egress.diagnostic`                  | **Fleet-local**           | none                    |
+| Operator diagnostic       | `GET /egress/diagnostic?host&port` (fleet API) | operator bearer token, read budget, audited as `egress.diagnostic` with normalized metadata only | **Fleet-local**           | none                    |
 
 Every answer declares its scope (`deployment` or `fleet_local`) and carries the note
 that explains it. The Fleet service evaluates its own configuration and resolver, so
@@ -136,6 +136,11 @@ its answers are a reference for operators and NOT a statement about any customer
 deployment: a Ready answer there does not prove a customer deployment would permit
 the destination. A trusted per-deployment policy-identity channel is a separately
 gated requirement before real-provider activation and is not implemented here.
+
+The diagnostic's audit record never contains the operator's input: the stored detail
+is the state, the numeric port and the non-reversible destination digest, so a
+credential-shaped or otherwise untrusted hostname cannot reach a persistent record or
+the console's recent-diagnostics list.
 
 Preflight holds no tenant transaction across network work: the route opens none, the
 handler re-reads the caller's live membership and role inside a short tenant

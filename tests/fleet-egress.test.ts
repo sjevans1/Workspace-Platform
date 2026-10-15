@@ -13,6 +13,7 @@ import {
   fleetConfig,
 } from "../apps/fleet/src/fleet.ts";
 import { setEgressResolverForTesting } from "../packages/connectors/egress-runtime.ts";
+import { renderEgress } from "../apps/fleet-web/src/render.ts";
 
 const TOKEN = "fleet-operator-token-0123456789";
 const PUBLIC_IP = "93.184.216.34";
@@ -128,24 +129,67 @@ test("A2 operator egress: the diagnostic answers with the shared vocabulary", as
   assert.equal(emptyPort.json().readiness.state, "unsupported_port");
 });
 
-test("A2 operator egress: every diagnostic is audited with a bounded, non-secret detail", async () => {
+test("A2 operator egress: a diagnostic is audited with normalized metadata, not the input", async () => {
   setEgressResolverForTesting(async () => [{ address: "10.4.5.6", family: 4 }]);
-  await diagnostic("mail.internal.example", 993);
+  const answer = await diagnostic("mail.internal.example", 993);
   const rows = await pool.query(
     "SELECT action,deployment_id,detail FROM fleet_audit WHERE action='egress.diagnostic' ORDER BY created_at DESC LIMIT 1",
   );
   assert.equal(rows.rows.length, 1);
   assert.equal(rows.rows[0].deployment_id, null);
   const detail = String(rows.rows[0].detail);
-  assert.match(
+  // State, numeric port and the non-reversible digest: no hostname, no address.
+  assert.match(detail, /^private_requires_approval 993 [0-9a-f]{32}$/);
+  assert.equal(
     detail,
-    /^private_requires_approval mail\.internal\.example:993$/,
+    `private_requires_approval 993 ${answer.json().readiness.destination_digest}`,
   );
-  assert.ok(
-    !/10\.4\.5\.6/.test(detail),
-    "the audit detail carries no raw address",
-  );
+  assert.ok(!/mail\.internal\.example/.test(detail), "the hostname is not persisted");
+  assert.ok(!/10\.4\.5\.6/.test(detail), "the audit detail carries no raw address");
   assert.ok(detail.length <= 64);
+});
+
+test("A2 operator egress: a secret-shaped hostname never reaches the audit, the response or the console", async () => {
+  // The operator-supplied hostname is UNTRUSTED TEXT. A credential-shaped value must
+  // not survive into a persistent record or a rendered page, even though the
+  // evaluator refuses it as an invalid destination.
+  const secret = "FAKE-SECRET-0123456789abcdef";
+  const hostile = `password=${secret}.reset.eyJhbGciOiJIUzI1NiJ9`;
+  setEgressResolverForTesting(async () => [{ address: PUBLIC_IP, family: 4 }]);
+  const response = await diagnostic(hostile, 993);
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().readiness.state, "invalid_destination");
+
+  const rows = await pool.query(
+    "SELECT detail FROM fleet_audit WHERE action='egress.diagnostic' ORDER BY created_at DESC LIMIT 1",
+  );
+  const detail = String(rows.rows[0].detail);
+  assert.match(detail, /^invalid_destination 993 [0-9a-f]{32}$/);
+
+  // The console read path renders exactly this record.
+  const posture = (await operator("/egress")).json().posture;
+  const markup = renderEgress({
+    posture,
+    diagnostics: [{ created_at: new Date().toISOString(), detail }],
+    query: { host: "", port: "443" },
+    result: response.json().readiness,
+  });
+
+  for (const fragment of [secret, "password", "reset", "eyJ", hostile.slice(0, 20)]) {
+    assert.ok(
+      !detail.includes(fragment),
+      `the audit detail leaked untrusted input: ${fragment}`,
+    );
+    assert.ok(
+      !response.body.includes(fragment),
+      `the response leaked untrusted input: ${fragment}`,
+    );
+    assert.ok(
+      !markup.includes(fragment),
+      `the console page leaked untrusted input: ${fragment}`,
+    );
+  }
+  assert.ok(markup.includes(detail), "the console shows the normalized record");
 });
 
 test("A2 operator egress: the plane is read-only", async () => {

@@ -136,6 +136,21 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
   const readinessResult = readiness.getByRole("status");
   await expect(readinessResult).toContainText("Not a valid public hostname");
   await expect(readinessResult).toContainText("no endpoint contact");
+  // Re-review: a verdict belongs to the inputs it came from. Editing the host
+  // clears it, so a previous answer can never appear to describe the new value.
+  await readiness.getByLabel("Host").fill("mail.internal.example");
+  await expect(readiness.getByRole("status")).toHaveCount(0);
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness
+    .getByRole("button", { name: "Check network readiness" })
+    .click();
+  await expect(readiness.getByRole("status")).toContainText(
+    "Not a valid public hostname",
+  );
+  // Changing the use case clears it too, and the port list follows the use case.
+  await readiness.getByLabel("Use case").selectOption("https");
+  await expect(readiness.getByRole("status")).toHaveCount(0);
+  await expect(readiness.getByLabel("Port")).toHaveValue("443");
   // Selecting a provider or typing a host never mutates anything: the check is a
   // read-only question, and the connection below still does not exist.
   await expect(page.locator(".integration-row").filter({ hasText: label })).toHaveCount(0);

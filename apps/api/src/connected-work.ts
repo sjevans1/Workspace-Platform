@@ -21,9 +21,11 @@ import { one } from "../../../packages/database/index.ts";
 import { randomUUID } from "node:crypto";
 import type { Actor } from "../../../packages/auth/index.ts";
 import {
+  CREDENTIAL_METADATA_KEYS,
   EGRESS_PREFLIGHT_PORTS,
   PREFLIGHT_USE_CASES,
   adapterFor,
+  buildConnectionConfig,
   adapterImplemented,
   canManageConnection,
   CAPABILITY_CATEGORY,
@@ -109,6 +111,23 @@ export type ConnectedWorkSeamRoute = (
   h: (seam: TenantSeam, a: Actor, r: any) => Promise<any>,
   options: { rateLimit: { max: number; timeWindow: string } },
 ) => void;
+
+/**
+ * W29-P0/A2: the authoritative validation for a connection configuration. The guided
+ * form uses the same builder in the browser; this is where a value is accepted, so a
+ * request built by anything else is held to exactly the same contract and nothing is
+ * silently dropped.
+ */
+function validateConnectionConfig(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const built = buildConnectionConfig({
+    advanced_json: JSON.stringify(config ?? {}),
+    allowed_keys: CREDENTIAL_METADATA_KEYS,
+  });
+  assert(built.ok, 400, built.ok ? "" : built.error);
+  return built.ok ? built.config : {};
+}
 
 /** The live membership and role check, re-read from the database. */
 async function assertActiveAdministrator(
@@ -234,6 +253,9 @@ export function connectedWorkRoutes(
         key,
         category: CAPABILITY_CATEGORY[key],
       })),
+      // The keys a connection configuration may actually carry: anything else would
+      // be dropped by persistence, so the guided form refuses it instead.
+      config_keys: [...CREDENTIAL_METADATA_KEYS],
       limits: {
         max_connections_per_tenant: CONNECTOR_LIMITS.max_connections_per_tenant,
         max_user_connections_per_user: CONNECTOR_LIMITS.max_user_connections_per_user,
@@ -257,7 +279,10 @@ export function connectedWorkRoutes(
         provider_key: input.provider_key,
         label: input.label,
         ownership: input.ownership,
-        config: input.config,
+        // The typed endpoint keys a guided form supplies are validated here, with
+        // the same canonicalization a real destination must pass: a value the
+        // browser pre-check accepted can never be stored unchecked.
+        config: input.config ? validateConnectionConfig(input.config) : undefined,
         capabilities: input.capabilities,
       });
       return { connection };

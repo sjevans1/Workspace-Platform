@@ -817,13 +817,16 @@ export function buildFleetService(
     return { id, state: target };
   });
 
-  // ---- outbound provider egress (read-only operator plane) ----
-  // The deployment's effective egress posture, and a guarded diagnostic that answers
-  // "would this destination be allowed?" with the SAME evaluator and resolver contract
-  // a real provider connection uses, so the two planes can never disagree. Neither
-  // route opens a socket to the destination: a blocked endpoint is not contacted to
-  // produce its denial. Both consume the operator read budget, and the diagnostic is
-  // audited with a bounded, non-secret detail.
+  // ---- outbound provider egress (read-only operator plane, Fleet-local) ----
+  // The Fleet process's own egress posture, and a guarded diagnostic that answers
+  // "would this destination be allowed under Fleet's policy?" with the SAME evaluator
+  // a real provider connection uses. The SCOPE differs from a customer deployment's:
+  // Fleet has its own configuration and resolver, so an answer here is not a statement
+  // about any customer deployment (per-deployment diagnosis is a separately gated
+  // requirement, tracked in issue #234). Neither route opens a socket to the
+  // destination: a blocked endpoint is not contacted to produce its denial. Both
+  // consume the operator read budget, and the diagnostic is audited with normalized,
+  // non-secret metadata only.
   app.get("/egress", async (r, reply) => {
     if (!(await operator(r, reply))) return;
     return { posture: egressPosture(egressPolicy(), "fleet_local") };
@@ -842,10 +845,19 @@ export function buildFleetService(
       allowed_ports: [...EGRESS_PREFLIGHT_PORTS],
       scope: "fleet_local",
     });
-    // State first, so a bounded truncation always keeps the outcome readable. The
-    // detail carries no raw address and never the policy body; an audit failure must
-    // not break the read.
-    await fleetAudit(pool, "egress.diagnostic", null, `${readiness.state} ${host}:${Number.isFinite(port) ? port : 0}`);
+    // The audit detail is NORMALIZED METADATA ONLY: the state, the numeric port and
+    // the non-reversible destination digest. The operator-supplied hostname is
+    // untrusted text (it can carry credential-shaped labels, and it is refused by
+    // the evaluator only after being seen), so it never reaches a persistent record.
+    // An audit failure must not break the read.
+    await fleetAudit(
+      pool,
+      "egress.diagnostic",
+      null,
+      // state + numeric port + digest, which is at most 64 characters for every
+      // state in the vocabulary, so nothing is ever truncated away.
+      `${readiness.state} ${readiness.port} ${readiness.destination_digest}`,
+    );
     return { readiness };
   });
 

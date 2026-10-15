@@ -110,15 +110,19 @@ one of the built-in providers.
    cannot be used as a port scanner, and a blocked destination is not contacted to
    produce its message. It also runs outside any tenant database transaction, and
    both the resolution and the whole check are bounded, so a slow resolver can never
-   occupy a pool connection.
+   occupy a pool connection. A verdict is shown only for the inputs it was produced
+   from: editing the host, port or use case clears it, and a failed check clears it,
+   so a previous answer can never appear to describe newly typed values.
 4. If the answer is `private_requires_approval`, the screen explains that an OpenJM
    operator must approve internal destinations and that a workspace administrator
    cannot grant itself private reach.
 5. Creating a connection is a guided flow, not a JSON form: the provider choice
-   drives the fields shown (ownership, capabilities, and endpoint host/port when the
-   provider needs an endpoint; the acceptance provider says plainly that it needs
-   none). Raw provider JSON exists only under an explicit **Advanced configuration
-   (JSON)** disclosure.
+   drives the fields shown (ownership and capabilities), and the acceptance provider
+   says plainly that it needs no endpoint configuration. Raw provider JSON exists
+   only under an explicit **Advanced configuration (JSON)** disclosure, which names
+   the configuration keys this deployment actually stores and refuses any other key
+   rather than dropping it. Endpoint settings are **not available in this release**:
+   no provider accepts them yet, and no control is offered that would discard them.
 6. Connecting, disabling, enabling, rotating and revoking are deliberate operations:
    - selecting a use case or typing a host never mutates anything;
    - disable/enable and revoke open a review dialog that names the connection, the
@@ -246,4 +250,7 @@ through the governed transport. Every answer also carries its `scope` and
 - Per-deployment effective-policy diagnosis from the console is **not implemented**:
   it needs a trusted, deployment-scoped policy-identity channel from each Workspace
   deployment (count-only, no tenant content), gated separately before any
-  real-provider activation. The operator surface is Fleet-local until then.
+  real-provider activation and tracked in **issue #234**. The operator surface is
+  Fleet-local until then.
+- Endpoint configuration on a connection is not available in this release, so the
+  guided form offers no endpoint controls at all.

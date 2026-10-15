@@ -10,6 +10,7 @@ import {
   Trash,
 } from "lucide-react";
 import { api, run, notify } from "../lib/api";
+import { buildConnectionConfig } from "../../../packages/connectors/connection-config.ts";
 import { Modal, Field, Empty } from "./common";
 
 type Provider = {
@@ -111,6 +112,9 @@ export default function Connections({ me }: { me: any }) {
   const admin = ["owner", "admin"].includes(me.user.role);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [declared, setDeclared] = useState<{ key: string }[]>([]);
+  // The configuration keys this deployment actually stores (published by the
+  // catalog), so the guided form refuses anything else instead of dropping it.
+  const [configKeys, setConfigKeys] = useState<string[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -165,6 +169,7 @@ export default function Connections({ me }: { me: any }) {
       ]);
       setProviders(catalog.providers || []);
       setDeclared(catalog.declared || []);
+      setConfigKeys(catalog.config_keys || []);
       setConnections(list.connections || []);
       setError("");
     } catch (e) {
@@ -202,16 +207,17 @@ export default function Connections({ me }: { me: any }) {
       return;
     }
     const capabilities = data.getAll("capabilities").map(String);
-    const configText = String(data.get("config") || "").trim();
-    let config: Record<string, unknown> | undefined;
-    if (configText) {
-      try {
-        config = JSON.parse(configText);
-      } catch {
-        notify("Configuration must be valid JSON.");
-        return;
-      }
+    // Typed endpoint fields and the Advanced JSON are bound through one builder, so
+    // nothing an administrator types is discarded and a conflict is refused.
+    const built = buildConnectionConfig({
+      advanced_json: data.get("config") as string | null,
+      allowed_keys: configKeys,
+    });
+    if (!built.ok) {
+      notify(built.error);
+      return;
     }
+    const config = Object.keys(built.config).length ? built.config : undefined;
     const created = await api("/connectors/connections", "POST", {
       provider_key: key,
       label: String(data.get("label") || "").trim(),
@@ -293,9 +299,14 @@ export default function Connections({ me }: { me: any }) {
   }
 
   /**
-   * The readiness check asks the server whether this host and port could be
-   * reached. The answer comes from the deployment's egress policy, so the same
-   * question answered in the fleet console gives the same result.
+   * The readiness check asks THIS deployment whether this host and port could be
+   * reached, under this deployment's own egress policy. The fleet console answers a
+   * different question: it evaluates the Fleet service process's own policy, so its
+   * answer is a reference, never this deployment's verdict.
+   *
+   * A verdict is only ever shown for the inputs it was produced from: any edit to
+   * the host, port or use case clears it, and a failed check clears it too, so a
+   * previous "Ready" can never sit under newly typed values.
    */
   async function checkReadiness(form: HTMLFormElement) {
     const data = new FormData(form);
@@ -303,6 +314,7 @@ export default function Connections({ me }: { me: any }) {
     const port = Number(data.get("port"));
     setReadinessTarget(`${host}:${port}`);
     setReadinessBusy(true);
+    setReadiness(null);
     try {
       const result = await api("/connectors/endpoints/preflight", "POST", {
         host,
@@ -310,6 +322,10 @@ export default function Connections({ me }: { me: any }) {
         use_case: useCase,
       });
       setReadiness(result.readiness);
+    } catch (error) {
+      // The failure is reported by the caller; no previous verdict may remain.
+      setReadiness(null);
+      throw error;
     } finally {
       setReadinessBusy(false);
     }
@@ -403,7 +419,11 @@ export default function Connections({ me }: { me: any }) {
               <select
                 name="use_case"
                 value={useCase}
-                onChange={(e) => setUseCase(e.target.value)}
+                onChange={(e) => {
+                  // A verdict belongs to the inputs it came from.
+                  setUseCase(e.target.value);
+                  setReadiness(null);
+                }}
               >
                 {USE_CASES.map((entry) => (
                   <option key={entry.key} value={entry.key}>
@@ -420,10 +440,16 @@ export default function Connections({ me }: { me: any }) {
                 required
                 placeholder="mail.example.com"
                 autoComplete="off"
+                onChange={() => setReadiness(null)}
               />
             </Field>
             <Field label="Port">
-              <select name="port" key={useCase} defaultValue={String(USE_CASES.find((entry) => entry.key === useCase)?.ports[0])}>
+              <select
+                name="port"
+                key={useCase}
+                defaultValue={String(USE_CASES.find((entry) => entry.key === useCase)?.ports[0])}
+                onChange={() => setReadiness(null)}
+              >
                 {(USE_CASES.find((entry) => entry.key === useCase)?.ports || []).map(
                   (port) => (
                     <option key={port} value={String(port)}>
@@ -820,37 +846,27 @@ export default function Connections({ me }: { me: any }) {
                 </fieldset>
                 <div className="guided-config">
                   <p className="muted small-text">
-                    {selected.endpoint_required === false
-                      ? "This provider needs no endpoint configuration: it is the acceptance test provider, and its credential is supplied on the next step."
-                      : "Enter the endpoint this provider connects to. Use Endpoint readiness above to check it first."}
+                    {selected.endpoint_required === true
+                      ? "This provider needs an endpoint, and endpoint configuration is not available in this release: use Endpoint readiness above to check the destination, and the provider becomes connectable when endpoint settings are supported."
+                      : "This provider needs no endpoint configuration: it is the acceptance test provider, and its credential is supplied on the next step."}
                   </p>
-                  {selected.endpoint_required !== false && (
-                    <div className="form-grid">
-                      <Field label="Endpoint host">
-                        <input
-                          name="config_host"
-                          placeholder="mail.example.com"
-                          autoComplete="off"
-                        />
-                      </Field>
-                      <Field label="Endpoint port">
-                        <input
-                          name="config_port"
-                          inputMode="numeric"
-                          placeholder="993"
-                          autoComplete="off"
-                        />
-                      </Field>
-                    </div>
-                  )}
                   <details className="advanced">
                     <summary>Advanced configuration (JSON)</summary>
+                    <p className="muted small-text">
+                      Stored keys for this deployment:{" "}
+                      {configKeys.length ? configKeys.join(", ") : "none"}. Any
+                      other key is refused rather than ignored.
+                    </p>
                     <Field label="Provider configuration">
                       <textarea
                         name="config"
                         rows={3}
                         spellCheck={false}
-                        placeholder='{"mailbox":"inbox"}'
+                        placeholder={
+                          configKeys.length
+                            ? `{"${configKeys[0]}":"value"}`
+                            : "{}"
+                        }
                       />
                     </Field>
                   </details>

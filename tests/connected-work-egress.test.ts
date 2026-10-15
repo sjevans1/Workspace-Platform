@@ -498,3 +498,65 @@ test("A2 preflight: authorization is re-read live, not taken from the session", 
   );
   assert.equal(deactivated.json?.readiness, undefined);
 });
+
+// ---------------------------------------------------------------------------
+// The guided connection form's typed endpoint values (re-review, residual 2a).
+// ---------------------------------------------------------------------------
+
+test("A2 config: the API stores supported configuration and refuses unsupported keys", async () => {
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/v1/connectors/connections",
+    remoteAddress: "198.51.100.201",
+    headers: {
+      cookie: owner.cookie,
+      "x-csrf-token": owner.csrf,
+      "content-type": "application/json",
+    },
+    payload: {
+      provider_key: "synthetic-test",
+      label: "Guided configuration",
+      ownership: "tenant",
+      config: { label: "inbox", scopes: ["mail.read"] },
+    },
+  });
+  assert.equal(created.statusCode, 200, created.body);
+  const row = await db.tenant(tenant, (q) =>
+    q.query("SELECT config FROM connector_connections WHERE id=$1", [
+      created.json().connection.id,
+    ]),
+  );
+  const stored = row.rows[0].config as Record<string, unknown>;
+  assert.equal(stored.label, "inbox");
+  assert.deepEqual(stored.scopes, ["mail.read"]);
+
+  // A key this deployment does not store is a refusal that names it, so a guided
+  // form can never submit a value that persistence would silently drop.
+  const refused = await app.inject({
+    method: "POST",
+    url: "/api/v1/connectors/connections",
+    remoteAddress: "198.51.100.202",
+    headers: {
+      cookie: owner.cookie,
+      "x-csrf-token": owner.csrf,
+      "content-type": "application/json",
+    },
+    payload: {
+      provider_key: "synthetic-test",
+      label: "Guided configuration bad",
+      ownership: "tenant",
+      config: { mailbox: "inbox" },
+    },
+  });
+  assert.equal(refused.statusCode, 400, refused.body);
+  assert.match(String(refused.json()?.error || ""), /mailbox/);
+
+  // And the catalog publishes exactly the keys a configuration may carry.
+  const catalog = await app.inject({
+    method: "GET",
+    url: "/api/v1/connectors/catalog",
+    headers: { cookie: owner.cookie },
+  });
+  assert.ok(Array.isArray(catalog.json().config_keys));
+  assert.ok(catalog.json().config_keys.includes("label"));
+});

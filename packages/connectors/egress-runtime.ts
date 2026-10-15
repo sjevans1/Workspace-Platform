@@ -1,11 +1,17 @@
 /**
  * W29-P0/A2: the shared egress readiness runtime.
  *
- * One implementation answers "would this destination be allowed?" for both planes:
- * the customer endpoint-readiness check in a workspace and the operator diagnostic
- * in the fleet console. A diagnostic answer and a real connection attempt can
- * therefore never disagree, because they evaluate the same policy with the same
- * resolver contract.
+ * ONE evaluator, TWO scopes. The customer endpoint-readiness check runs inside the
+ * deployment that will make the connection, so its answer is that deployment's
+ * effective policy. The operator diagnostic runs in the Fleet service process, whose
+ * configuration and resolver are its own, so its answer is Fleet-local and is NOT a
+ * statement about any customer deployment: the same host can be `ready` in one and
+ * `blocked` in the other. Every answer therefore declares its scope explicitly
+ * (`EgressScope`), and per-deployment operator diagnosis is a separately gated
+ * requirement (issue #234).
+ *
+ * Within one scope, a diagnostic answer and a real connection attempt cannot
+ * disagree: both evaluate the same policy with the same resolver contract.
  *
  * Preflight is DNS + policy ONLY. It never opens a socket to the destination, so it
  * cannot be used as an SSRF or port-scanning oracle and a blocked endpoint is never
