@@ -40,6 +40,7 @@ import { assert, json } from "../contracts/index.ts";
 import type { Database, Query } from "../database/index.ts";
 import { one } from "../database/index.ts";
 import {
+  FAILURE_CATEGORIES,
   RETRY_POLICY,
   classifyProviderFailure,
   isRetryableCategory,
@@ -539,8 +540,22 @@ export async function commitExternalEffectOutcome(
     return "stale";
 
   if (outcome.ok) {
-    const result = boundedEffectResult(outcome.result || {});
-    const reference = providerReferenceOf(outcome.result || {});
+    // A successful external effect must never be stranded by evidence the runtime
+    // refuses to persist: references are normalized to a safe form above, and any
+    // remaining rejection falls back to a bounded redacted result.
+    let result: Record<string, unknown>;
+    try {
+      result = boundedEffectResult(outcome.result || {}, claim.provider_key);
+    } catch {
+      result = {
+        redacted: true,
+        note: "provider result withheld: it contained credential-shaped evidence",
+      };
+    }
+    const reference = providerReferenceOf(
+      outcome.result || {},
+      claim.provider_key,
+    );
     await q.query(
       "UPDATE workflow_external_effects SET status='succeeded',result=$3,provider_reference=$4," +
         " error_category=NULL,error_summary=NULL,lease_token=NULL,lease_expires_at=NULL," +
@@ -603,23 +618,50 @@ export async function commitExternalEffectOutcome(
 }
 
 /** The provider-side idempotency/transaction reference an adapter may echo. */
+const CREDENTIAL_LABEL =
+  /password|passwd|secret|token|bearer|authorization|api[_-]?key|credential/i;
+const BARE_IDENTIFIER = /^[A-Za-z0-9._-]{1,120}$/;
+
+/**
+ * W29-P0/A1: a provider reference is provider-supplied text and is treated as an
+ * opaque, provider-validated identifier. Nothing here can make an outcome commit
+ * fail: every rejected or unshaped value has a safe digest form.
+ */
 export function providerReferenceOf(
   result: Record<string, unknown>,
+  providerKey?: string,
 ): string | null {
   const value =
     (result.provider_reference as unknown) ??
     (result.idempotency_reference as unknown) ??
     (result.message_id as unknown);
   if (typeof value !== "string") return null;
-  // A provider reference is provider-supplied text. Only a conservative
-  // identifier shape is persisted, so an adapter cannot smuggle a token, a URL
-  // with userinfo or message content into durable evidence through this field.
-  const bounded = value.slice(0, 200);
-  return /^[A-Za-z0-9._:@/+=-]{1,200}$/.test(bounded) ? bounded : null;
+  const bounded = value.trim().slice(0, 200);
+  if (!bounded) return null;
+  const digest = () =>
+    `sha256:${createHash("sha256").update(bounded).digest("hex").slice(0, 32)}`;
+  // Never persist anything URL/userinfo/query-shaped or credential-labelled: a
+  // permissive character allowlist cannot prove a string is safe.
+  if (
+    /:\/\//.test(bounded) ||
+    bounded.includes("@") ||
+    /[?#&=]/.test(bounded) ||
+    CREDENTIAL_LABEL.test(bounded)
+  )
+    return digest();
+  // The provider's OWN declared contract (`<provider_key>:<opaque id>`) is kept
+  // verbatim; everything else is reduced to a stable, non-reversible digest so
+  // the evidence stays correlatable without storing what the provider sent.
+  if (providerKey && bounded.startsWith(`${providerKey}:`)) {
+    const rest = bounded.slice(providerKey.length + 1);
+    return BARE_IDENTIFIER.test(rest) ? bounded : digest();
+  }
+  return digest();
 }
 
 function boundedEffectResult(
   value: Record<string, unknown>,
+  providerKey?: string,
 ): Record<string, unknown> {
   const serialized = json(value);
   assert(
@@ -637,7 +679,7 @@ function boundedEffectResult(
     "message_id",
   ]) {
     if (!(key in parsed)) continue;
-    const sanitized = providerReferenceOf({ [key]: parsed[key] });
+    const sanitized = providerReferenceOf({ [key]: parsed[key] }, providerKey);
     if (sanitized === null) delete parsed[key];
     else parsed[key] = sanitized;
   }
@@ -669,12 +711,17 @@ export function assertNonSecretEvidence(value: unknown): void {
  */
 export function effectFailureSummary(category: FailureCategory): string {
   const summaries: Record<string, string> = {
+    // A retryable failure does NOT prove the action was never accepted: an
+    // idempotent provider whose response timed out can be retried safely under the
+    // same key without that meaning the first attempt was rejected. Only an
+    // adapter's `delivery_state: "not_sent"` establishes non-delivery, so these
+    // summaries claim only what the category proves.
     transient:
-      "The provider call failed transiently before the action was accepted",
+      "The provider call did not complete and the action was not confirmed",
     rate_limited:
-      "The provider rate limited the request before the action was accepted",
+      "The provider rate limited the request and the action was not confirmed",
     provider_unavailable:
-      "The provider was unavailable before the action was accepted",
+      "The provider was unavailable and the action was not confirmed",
     credential_expired: "The provider rejected the credential",
     permission_revoked: "The provider rejected the permission",
     permanent: "The provider rejected the request",
@@ -712,7 +759,13 @@ function classifyEffectError(error: unknown): {
     return { category: "transient", retryable: true };
   const explicit = (error as { details?: { category?: string } })?.details
     ?.category;
-  if (explicit && explicit !== "outcome_unknown")
+  // Runtime allowlist, never a cast: an adapter must not be able to persist an
+  // arbitrary string (for example `password=Secret123`) as an error category.
+  if (
+    typeof explicit === "string" &&
+    explicit !== "outcome_unknown" &&
+    FAILURE_CATEGORIES.includes(explicit as FailureCategory)
+  )
     return {
       category: explicit as FailureCategory,
       retryable: isRetryableCategory(explicit as FailureCategory),
@@ -842,7 +895,11 @@ export async function effectAuthorityRefusal(
       ) => Promise<ConnectionActionFacts | null>)
     | undefined = undefined,
   options: { lock?: boolean } = {},
-): Promise<{ category: FailureCategory; summary: string } | null> {
+): Promise<{
+  category: FailureCategory;
+  summary: string;
+  cancelled?: boolean;
+} | null> {
   // W29-P0/A1: as the FINAL pre-I/O eligibility check this runs with `lock`, so
   // the run, connection, membership and automation-principal rows are locked for
   // the duration of the boundary transaction: a cancel or revocation that commits
@@ -851,12 +908,31 @@ export async function effectAuthorityRefusal(
   const lock = options.lock === true;
   const run = await one(
     q,
-    "SELECT authority FROM workflow_runs WHERE tenant_id=$1 AND id=$2" +
+    "SELECT authority,status FROM workflow_runs WHERE tenant_id=$1 AND id=$2" +
       (lock ? " FOR UPDATE" : ""),
     [tenant, claim.run_id],
   );
   if (!run)
     return { category: "not_found", summary: "The run no longer exists" };
+  if (lock) {
+    // The LOCKED read is authoritative for the run's status: `deriveEffectRequest`
+    // read it earlier without a lock, so a cancellation that committed between
+    // those two reads would otherwise be missed. A `FOR UPDATE` read re-fetches
+    // the latest committed row version, so this check sees it.
+    if (String(run.status) === "cancelled")
+      return {
+        category: "authorization_revoked",
+        summary: "The run was cancelled before the provider call",
+        cancelled: true,
+      };
+    if (!["queued", "running", "waiting"].includes(String(run.status)))
+      return {
+        category: "authorization_revoked",
+        summary:
+          "The run is no longer active, so no new external effect may start",
+        cancelled: true,
+      };
+  }
   const membership = await one(
     q,
     "SELECT role FROM memberships WHERE tenant_id=$1 AND user_id=$2 AND active" +
@@ -967,12 +1043,13 @@ export async function prepareExternalEffectIo(
     await refuseExternalEffectBeforeIo(q, tenant, claim, {
       category: denial.category,
       summary: denial.summary,
+      cancelled: denial.cancelled === true,
     });
     return {
       ok: false,
       category: denial.category,
       summary: denial.summary,
-      cancelled: false,
+      cancelled: denial.cancelled === true,
     };
   }
   const marked = await markExternalEffectIoStarted(q, tenant, claim);

@@ -10,7 +10,7 @@
  * permission or bypass a capability check.
  */
 import { createHash } from "node:crypto";
-import type { Capability } from "./registry.ts";
+import { SYNTHETIC_PROVIDER_KEY, type Capability } from "./registry.ts";
 
 export type AdapterFailureCategory =
   | "transient"
@@ -47,7 +47,11 @@ export type AdapterHooks = {
   normalizeInbound(input: InboundRequest): NormalizedEvent | null;
   health(input: {
     config: Record<string, unknown>;
-  }): Promise<{ ok: boolean; category?: AdapterFailureCategory; detail?: string }>;
+  }): Promise<{
+    ok: boolean;
+    category?: AdapterFailureCategory;
+    detail?: string;
+  }>;
   /** Bounded incremental sync. Cursor is opaque to the caller. */
   sync(input: {
     cursor: string | null;
@@ -92,23 +96,33 @@ const boundedText = (value: unknown, max: number): string | null => {
  * executes one declared action. It performs no network I/O.
  */
 export const SYNTHETIC_HOOKS: AdapterHooks = {
-  capabilities: ["connection.health", "connection.sync", "message.receive", "message.send"],
+  capabilities: [
+    "connection.health",
+    "connection.sync",
+    "message.receive",
+    "message.send",
+  ],
   verifyInbound({ headers, secret }) {
     const presented = headerOf(headers, "x-connector-token");
-    if (!secret || !presented) return { verified: false, reason: "missing_signature" };
+    if (!secret || !presented)
+      return { verified: false, reason: "missing_signature" };
     // Constant-shape comparison; the caller passes the decrypted secret and the
     // adapter never records either value.
     const left = Buffer.from(presented),
       right = Buffer.from(secret);
     const matches = left.length === right.length && left.equals(right);
-    return matches ? { verified: true } : { verified: false, reason: "invalid_signature" };
+    return matches
+      ? { verified: true }
+      : { verified: false, reason: "invalid_signature" };
   },
   normalizeInbound({ body }) {
     const value = (body ?? {}) as Record<string, unknown>;
     const eventType = boundedText(value.event_type, 120);
     const providerEventId = boundedText(value.provider_event_id, 256);
     if (!eventType || !providerEventId)
-      throw new Error("Synthetic event requires event_type and provider_event_id");
+      throw new Error(
+        "Synthetic event requires event_type and provider_event_id",
+      );
     const dedupeKey = boundedText(value.dedupe_key, 256) ?? providerEventId;
     const refs = Array.isArray(value.resource_refs) ? value.resource_refs : [];
     return {
@@ -116,15 +130,20 @@ export const SYNTHETIC_HOOKS: AdapterHooks = {
       provider_event_id: providerEventId,
       dedupe_key: dedupeKey,
       occurred_at:
-        typeof value.occurred_at === "string" && !Number.isNaN(Date.parse(value.occurred_at))
+        typeof value.occurred_at === "string" &&
+        !Number.isNaN(Date.parse(value.occurred_at))
           ? new Date(value.occurred_at).toISOString()
           : null,
       resource_refs: refs
         .filter((item) => item && typeof item === "object")
         .slice(0, 16) as Record<string, unknown>[],
       payload_ref: {
-        ...(typeof value.summary === "string" ? { summary: value.summary.slice(0, 400) } : {}),
-        ...(typeof value.priority === "string" ? { priority: value.priority.slice(0, 40) } : {}),
+        ...(typeof value.summary === "string"
+          ? { summary: value.summary.slice(0, 400) }
+          : {}),
+        ...(typeof value.priority === "string"
+          ? { priority: value.priority.slice(0, 40) }
+          : {}),
         synthetic: true,
       },
     };
@@ -151,12 +170,16 @@ export const SYNTHETIC_HOOKS: AdapterHooks = {
     return { events, next_cursor: String(from + size) };
   },
   async action({ action, payload, effect }) {
-    if (action !== "synthetic.record") throw new Error(`Unsupported synthetic action: ${action}`);
+    if (action !== "synthetic.record")
+      throw new Error(`Unsupported synthetic action: ${action}`);
     // The provider reference is a deterministic function of the effect's
     // idempotency key, so a re-send after a reclaimed lease reports the SAME
     // provider-side operation instead of a second one.
+    // W29-P0/A1: the reference carries the provider's OWN key as its prefix, which
+    // is the contract the runtime accepts verbatim; every other provider value is
+    // reduced to a safe digest before it reaches durable evidence.
     const reference = effect
-      ? `synthetic:${createHash("sha256").update(effect.idempotency_key).digest("hex").slice(0, 32)}`
+      ? `${SYNTHETIC_PROVIDER_KEY}:${createHash("sha256").update(effect.idempotency_key).digest("hex").slice(0, 32)}`
       : null;
     return {
       synthetic: true,
@@ -173,7 +196,9 @@ export const SYNTHETIC_HOOKS: AdapterHooks = {
  * never reached the provider. The runtime treats every other failure as
  * potentially delivered, which is what stops a blind retry from sending twice.
  */
-export function notSent(message: string): Error & { delivery_state: "not_sent" } {
+export function notSent(
+  message: string,
+): Error & { delivery_state: "not_sent" } {
   const error = new Error(message) as Error & { delivery_state: "not_sent" };
   error.delivery_state = "not_sent";
   return error;

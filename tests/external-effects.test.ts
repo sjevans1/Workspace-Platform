@@ -311,7 +311,7 @@ function fakeProvider(
     else ledger.operations.add(input.effect.idempotency_key);
     return {
       recorded: true,
-      provider_reference: `fake:${input.effect.idempotency_key.slice(0, 16)}`,
+      provider_reference: `${SYNTHETIC_PROVIDER_KEY}:${input.effect.idempotency_key.slice(0, 16)}`,
     };
   };
   return { ledger, invokeProvider };
@@ -651,7 +651,10 @@ test("A1: a reclaimed lease re-sends safely when the provider has an idempotency
   );
   const finalRow = await effectRow(tenant, runId);
   assert.equal(finalRow.status, "succeeded");
-  assert.match(String(finalRow.provider_reference), /^fake:/);
+  assert.match(
+    String(finalRow.provider_reference),
+    new RegExp(`^${SYNTHETIC_PROVIDER_KEY}:`),
+  );
 });
 
 test("A1: a stale worker cannot overwrite a newer claimant's outcome", async () => {
@@ -675,7 +678,10 @@ test("A1: a stale worker cannot overwrite a newer claimant's outcome", async () 
   const staleCommit = await db.tenant(tenant, (q) =>
     commitExternalEffectOutcome(q, tenant, stale, {
       ok: true,
-      result: { recorded: true, provider_reference: "stale-worker" },
+      result: {
+        recorded: true,
+        provider_reference: `${SYNTHETIC_PROVIDER_KEY}:stale-worker`,
+      },
     }),
   );
   assert.equal(staleCommit, "stale", "a reclaimed lease may not write");
@@ -687,12 +693,18 @@ test("A1: a stale worker cannot overwrite a newer claimant's outcome", async () 
   const freshCommit = await db.tenant(tenant, (q) =>
     commitExternalEffectOutcome(q, tenant, fresh, {
       ok: true,
-      result: { recorded: true, provider_reference: "fresh-worker" },
+      result: {
+        recorded: true,
+        provider_reference: `${SYNTHETIC_PROVIDER_KEY}:fresh-worker`,
+      },
     }),
   );
   assert.equal(freshCommit, "succeeded");
   const committed = await effectRow(tenant, runId);
-  assert.equal(committed.provider_reference, "fresh-worker");
+  assert.equal(
+    committed.provider_reference,
+    `${SYNTHETIC_PROVIDER_KEY}:fresh-worker`,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1007,7 +1019,7 @@ test("A1: run and step history stays understandable for a provider action", asyn
   assert.equal(evidence.provider_key, SYNTHETIC_PROVIDER_KEY);
   assert.equal(evidence.action, "synthetic.record");
   assert.equal(evidence.capability, "message.send");
-  assert.match(String(evidence.provider_reference), /^synthetic:/);
+  assert.match(String(evidence.provider_reference), /^synthetic-test:/);
   const effect = await effectRow(tenant, runId);
   assert.equal(effect.status, "succeeded");
   assert.equal(effect.attempt, 1);

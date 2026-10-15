@@ -30,6 +30,8 @@ import {
   claimDueExternalEffects,
   commitExternalEffectOutcome,
   createWorkflow,
+  deriveEffectRequest,
+  effectAuthorityRefusal,
   effectFailureSummary,
   enableWorkflow,
   engineTick,
@@ -37,6 +39,7 @@ import {
   getRunDetail,
   parseWorkflowDefinition,
   prepareExternalEffectIo,
+  refuseExternalEffectBeforeIo,
   triggerManualRun,
   type ConnectorActionPort,
   type EngineDeps,
@@ -294,7 +297,7 @@ function fakeProvider(
     else ledger.operations.add(input.effect.idempotency_key);
     return {
       recorded: true,
-      provider_reference: `fake:${input.effect.idempotency_key.slice(0, 16)}`,
+      provider_reference: `${SYNTHETIC_PROVIDER_KEY}:${input.effect.idempotency_key.slice(0, 16)}`,
     };
   };
   return { ledger, invokeProvider };
@@ -581,10 +584,14 @@ test("A1: a hostile provider reference is not persisted", async () => {
   });
   const effect = await effectRow(tenant, runId);
   assert.equal(effect.status, "succeeded");
-  assert.equal(
-    effect.provider_reference,
-    null,
-    "only a conservative identifier shape is persisted",
+  assert.ok(
+    effect.provider_reference === null ||
+      /^sha256:[0-9a-f]{32}$/.test(String(effect.provider_reference)),
+    `a URL-shaped reference is never stored verbatim (got ${effect.provider_reference})`,
+  );
+  assert.ok(
+    !JSON.stringify(effect).includes("password@host"),
+    "the raw reference must not be persisted",
   );
 });
 
@@ -668,4 +675,184 @@ test("A1: a terminal run never starts a new external effect", async () => {
   assert.equal(ticked.invoked, 0);
   assert.equal(fake.ledger.calls.length, 0);
   assert.equal((await effectRow(tenant, runId)).status, "cancelled");
+});
+
+test("A1: a cancellation committed between the unlocked and locked run reads is refused", async () => {
+  const { tenant, actors } = await freshTenantAndActors("owner");
+  const owner = actors[0];
+  const connection = await connectedConnection(tenant, owner);
+  const facts = await factsFor(tenant, connection.id);
+  const fake = fakeProvider();
+  const { runId } = await planConnectorRun(tenant, owner, connection.id);
+  await db.tenant(tenant, (q) => engineTick(q, tenant, deps(stubPort(facts))));
+  const { claims } = await db.tenant(tenant, (q) =>
+    claimDueExternalEffects(q, tenant, 5),
+  );
+  const claim = claims[0];
+
+  // The exact interleaving: the unlocked read sees an ACTIVE run, the cancellation
+  // commits, and only then does the locked read (the authoritative one) run.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const decision = db.tenant(tenant, async (q) => {
+    const derived = await deriveEffectRequest(q, tenant, claim);
+    await gate;
+    const denial = await effectAuthorityRefusal(q, tenant, claim, undefined, {
+      lock: true,
+    });
+    if (denial)
+      await refuseExternalEffectBeforeIo(q, tenant, claim, {
+        category: denial.category,
+        summary: denial.summary,
+        cancelled: denial.cancelled === true,
+      });
+    return { derived, denial };
+  });
+  await sleep(50);
+  // No lock is held yet, so the cancellation commits immediately.
+  await db.tenant(tenant, (q) => cancelRun(q, owner, runId));
+  release();
+  const { derived, denial } = await decision;
+
+  assert.equal(
+    derived.ok,
+    true,
+    "the unlocked read legitimately saw an active run",
+  );
+  assert.ok(denial, "the LOCKED read must see the cancellation");
+  assert.equal(denial?.cancelled, true);
+  assert.equal(denial?.category, "authorization_revoked");
+
+  const effect = await effectRow(tenant, runId);
+  assert.equal(effect.status, "cancelled");
+  assert.equal(
+    effect.io_started_at,
+    null,
+    "the boundary must never be marked for a cancelled run",
+  );
+  assert.equal(
+    fake.ledger.calls.length,
+    0,
+    "no provider call may happen for a cancelled run",
+  );
+  const after = await effectTick(tenant, fake, facts);
+  assert.equal(after.invoked, 0);
+  assert.equal(fake.ledger.calls.length, 0);
+});
+
+test("A1: a hostile provider reference is reduced to a safe digest, never stored raw", async () => {
+  const { tenant, actors } = await freshTenantAndActors("owner");
+  const owner = actors[0];
+  const connection = await connectedConnection(tenant, owner);
+  const facts = await factsFor(tenant, connection.id);
+  const { runId } = await planConnectorRun(tenant, owner, connection.id);
+  await db.tenant(tenant, (q) => engineTick(q, tenant, deps(stubPort(facts))));
+
+  // URL/userinfo-shaped, with no obvious keyword and no query string.
+  const hostileReference = "https://alice:QX7p9@host/path";
+  await externalEffectTick(db, tenant, {
+    inspectConnection: async () => facts,
+    invokeProvider: async () => ({
+      recorded: true,
+      provider_reference: hostileReference,
+    }),
+  });
+
+  const effect = await effectRow(tenant, runId);
+  assert.equal(
+    effect.status,
+    "succeeded",
+    "a hostile reference must never strand a successful effect",
+  );
+  assert.ok(
+    effect.provider_reference === null ||
+      /^sha256:[0-9a-f]{32}$/.test(String(effect.provider_reference)),
+    `only a digest may be persisted (got ${effect.provider_reference})`,
+  );
+  assert.ok(
+    !JSON.stringify(effect).includes(hostileReference),
+    "the raw reference must not be persisted",
+  );
+
+  await forceClaimable(tenant, runId);
+  await db.tenant(tenant, (q) => engineTick(q, tenant, deps(stubPort(facts))));
+  const step = await actionStep(tenant, runId);
+  const detail = await db.tenant(tenant, (q) => getRunDetail(q, owner, runId));
+  assert.equal(step.status, "succeeded");
+  const evidence = JSON.stringify({ step, detail });
+  assert.ok(!evidence.includes(hostileReference));
+  assert.ok(
+    !evidence.includes("QX7p9"),
+    "no fragment of the credential appears",
+  );
+});
+
+test("A1: an injected error category is normalized, never persisted verbatim", async () => {
+  const { tenant, actors } = await freshTenantAndActors("owner");
+  const owner = actors[0];
+  const connection = await connectedConnection(tenant, owner);
+  const facts = await factsFor(tenant, connection.id);
+  const injected = "password=Secret123";
+  const hostile = fakeProvider({
+    fail: () =>
+      Object.assign(new Error("provider rejected the call"), {
+        delivery_state: "not_sent",
+        details: { category: injected },
+      }),
+  });
+  const { runId } = await planConnectorRun(tenant, owner, connection.id);
+  await db.tenant(tenant, (q) => engineTick(q, tenant, deps(stubPort(facts))));
+  await effectTick(tenant, hostile, facts);
+
+  const effect = await effectRow(tenant, runId);
+  assert.equal(effect.status, "failed");
+  assert.ok(
+    ["transient", "rate_limited", "provider_unavailable"].includes(
+      String(effect.error_category),
+    ),
+    `an unknown category must normalize to a canonical one (got ${effect.error_category})`,
+  );
+  assert.ok(
+    !JSON.stringify(effect).includes(injected),
+    "the injected category must not be persisted",
+  );
+
+  await forceClaimable(tenant, runId);
+  await db.tenant(tenant, (q) => engineTick(q, tenant, deps(stubPort(facts))));
+  const step = await actionStep(tenant, runId);
+  const detail = await db.tenant(tenant, (q) => getRunDetail(q, owner, runId));
+  const evidence = JSON.stringify({ step, detail });
+  assert.ok(!evidence.includes(injected));
+  assert.ok(!evidence.includes("Secret123"));
+});
+
+test("A1: a valid adapter category is still honoured and a credential-shaped one is not", async () => {
+  const { tenant, actors } = await freshTenantAndActors("owner");
+  const owner = actors[0];
+  const connection = await connectedConnection(tenant, owner);
+  const facts = await factsFor(tenant, connection.id);
+  const declared = fakeProvider({
+    fail: () =>
+      Object.assign(new Error("provider said no"), {
+        delivery_state: "not_sent",
+        details: { category: "validation" },
+      }),
+  });
+  const { runId } = await planConnectorRun(tenant, owner, connection.id);
+  await db.tenant(tenant, (q) => engineTick(q, tenant, deps(stubPort(facts))));
+  await effectTick(tenant, declared, facts);
+  const effect = await effectRow(tenant, runId);
+  assert.equal(effect.status, "failed");
+  assert.equal(
+    effect.error_category,
+    "validation",
+    "an allowlisted adapter category is honoured",
+  );
+  assert.equal(
+    effect.error_summary,
+    effectFailureSummary("validation"),
+    "and its summary stays the allowlisted constant",
+  );
 });

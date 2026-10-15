@@ -500,7 +500,10 @@ then runs the I/O between two short transactions:
    immutable revision, re-checks the run, authority, membership, automation
    principal and connection facts UNDER ROW LOCKS, and records `io_started_at`
    (extending the lease to 180 s) — all in ONE short transaction immediately
-   BEFORE the call. The check and the mark must not be separate transactions: a
+   BEFORE the call. The LOCKED run read is authoritative for the run's status as
+   well as its authority: the earlier request derivation reads status without a
+   lock, so a cancellation committed between those two reads is caught by the
+   locked re-check and refuses the boundary. The check and the mark must not be separate transactions: a
    cancel or revocation committed between them would otherwise let the worker send
    after the revocation had already landed. A revocation that commits first is
    therefore always seen and nothing is sent; one that starts later waits for this
@@ -530,7 +533,7 @@ twice or loses one:
 | `planned` | The effect exists; no provider I/O has been attempted. |
 | `claimed` | A worker holds a lease and may be inside the provider call. |
 | `succeeded` | A normalized successful outcome is committed. |
-| `failed` | The attempt provably never reached the provider, or the provider offers an idempotency primitive so a re-send is safe. |
+| `failed` | Either the attempt provably never reached the provider (`delivery_state: "not_sent"`), or the provider offers an idempotency primitive, in which case a re-send under the SAME key cannot duplicate the operation even though the failed attempt may already have been accepted. A retryable failure alone does NOT prove non-delivery. |
 | `outcome_unknown` | The provider may have received the action and its outcome cannot be proven. Never retried automatically, never reported as success. |
 | `cancelled` | The run was cancelled before the I/O boundary. |
 
@@ -547,6 +550,19 @@ immutable pinned revision and checks it against the `request_digest` recorded at
 plan time, so run evidence carries identity and outcomes but never message
 content. A terminal effect wakes its parked run, so the engine settles the step in
 the same tick.
+
+An adapter may declare an error category on `error.details.category`. It is
+validated at runtime against `FAILURE_CATEGORIES`; an unknown value is never
+persisted and the failure is classified normally, so an adapter cannot inject
+arbitrary text into `error_category`.
+
+A provider reference is treated as an opaque, provider-validated identifier. Only
+the provider's OWN declared contract (`<provider_key>:<opaque id>`, which our
+adapters emit) is stored verbatim; anything URL/userinfo/query-shaped or
+credential-labelled is reduced to a stable `sha256:` digest, so the evidence stays
+correlatable without storing what the provider sent. A result the evidence scan
+still refuses never strands a successful effect: the outcome commits with a
+bounded redacted result instead of rolling back a provider call that happened.
 
 Provider error text is UNTRUSTED and is never persisted: an exception can carry an
 SMTP password, an API token, an `Authorization` header, a recipient or message
