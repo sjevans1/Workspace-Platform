@@ -1006,3 +1006,133 @@ export async function connectorMetrics(
 export function providerActions(providerKey: string) {
   return providerDefinition(providerKey).actions;
 }
+
+/**
+ * W29-P0/A1: the live authority facts of one connection, read inside the caller's
+ * tenant transaction. It is the single implementation used by the engine's
+ * connector port AND by the external-effect worker phase before provider I/O, so
+ * the pre-execution re-check cannot drift from the authorization the run saw.
+ */
+export type ConnectionActionFacts = {
+  /** Always true when a row is returned; absent connections are reported as null. */
+  exists: boolean;
+  enabled: boolean;
+  status: string;
+  ownership: string;
+  owner_user_id: string | null;
+  capabilities_granted: string[];
+  provider_key: string;
+};
+
+export async function connectionActionFacts(
+  q: Query,
+  tenant: string,
+  connectionId: string,
+): Promise<ConnectionActionFacts | null> {
+  const row = await one(
+    q,
+    "SELECT id,provider_key,status,enabled,ownership,owner_user_id,capabilities_granted" +
+      " FROM connector_connections WHERE tenant_id=$1 AND id=$2",
+    [tenant, connectionId],
+  );
+  if (!row) return null;
+  return {
+    exists: true,
+    enabled: row.enabled === true,
+    status: String(row.status),
+    ownership: String(row.ownership),
+    owner_user_id: row.owner_user_id ?? null,
+    capabilities_granted: [...(row.capabilities_granted || [])],
+    provider_key: String(row.provider_key),
+  };
+}
+
+/**
+ * The one reach rule for a connector action, as a pure function so the engine and
+ * the external-effect worker apply the same boundary. Ownership decides reach: a
+ * user-delegated connection belongs to exactly one user, and a tenant/shared
+ * connection is reachable by an administrator or by the tenant's own service
+ * principal. Everything else is refused with a reason, and the caller decides how
+ * to surface it.
+ */
+export function connectorReachDenial(input: {
+  facts: ConnectionActionFacts;
+  capability: string;
+  authority_kind: "delegated_user" | "service_principal";
+  authority_user_id: string | null;
+  actor_role: string;
+}): string | null {
+  const { facts, capability, authority_kind, authority_user_id, actor_role } =
+    input;
+  if (!facts.enabled) return "connection is disabled";
+  if (facts.status !== "connected") return "connection is not connected";
+  if (!facts.capabilities_granted.includes(capability))
+    return "connection does not hold the required capability";
+  const ownsConnection =
+    facts.ownership === "user" && facts.owner_user_id === authority_user_id;
+  const sharedReachable =
+    facts.ownership === "tenant" &&
+    (authority_kind === "service_principal" ||
+      actor_role === "owner" ||
+      actor_role === "admin");
+  if (!ownsConnection && !sharedReachable)
+    return "connection is not available to this run's authority";
+  return null;
+}
+
+/**
+ * W29-P0/A1: the ONE governed way to execute a declared provider action.
+ *
+ * It validates the provider's declared contract (the action exists, and it is the
+ * action that requires this capability) and then performs the adapter call. The
+ * caller is responsible for the transaction boundary: this function must be
+ * invoked with NO tenant database transaction and NO row lock held, which is what
+ * the external-effect worker phase guarantees.
+ */
+export async function invokeProviderAction(input: {
+  provider_key: string;
+  action: string;
+  capability: string;
+  payload: Record<string, unknown>;
+  effect?: { idempotency_key: string; attempt: number };
+}): Promise<Record<string, unknown>> {
+  const definition = providerDefinition(input.provider_key);
+  const declared = definition.actions.find((item) => item.key === input.action);
+  assert(
+    declared,
+    400,
+    `Connector provider ${definition.key} does not declare action ${input.action}`,
+  );
+  assert(
+    declared!.requires_capability === input.capability,
+    400,
+    `Connector action ${input.action} requires ${declared!.requires_capability}`,
+  );
+  assert(
+    adapterImplemented(definition.key),
+    400,
+    `Connector provider ${definition.key} has no implemented adapter`,
+  );
+  return adapterFor(definition.key).action({
+    action: input.action,
+    capability: declared!.requires_capability,
+    config: {},
+    payload: input.payload || {},
+    ...(input.effect ? { effect: input.effect } : {}),
+  });
+}
+
+/**
+ * Whether the provider offers an idempotency primitive for this action. The
+ * external-effect lifecycle reads it at plan time, because it decides whether a
+ * reclaimed lease may re-send or must settle as outcome-unknown.
+ */
+export function providerActionIdempotent(
+  providerKey: string,
+  action: string,
+): boolean {
+  const declared = providerDefinition(providerKey).actions.find(
+    (item) => item.key === action,
+  );
+  return declared?.idempotent === true;
+}

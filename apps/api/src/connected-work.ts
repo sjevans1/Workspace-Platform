@@ -28,6 +28,7 @@ import {
   CAPABILITY_VOCABULARY_VERSION,
   CONNECTOR_CAPABILITIES,
   CONNECTOR_LIMITS,
+  connectionActionFacts,
   connectorMetricsForTenant,
   createConnection,
   credentialsFor,
@@ -129,46 +130,14 @@ const enabledBody = z.object({ enabled: z.boolean() });
 export function connectorActionPortFor(q: Query): ConnectorActionPort {
   return {
     async inspect({ tenant_id, connection_id, actor_role, user_id }) {
-      const row = await one(
-        q,
-        "SELECT id,provider_key,status,enabled,ownership,owner_user_id,capabilities_granted" +
-          " FROM connector_connections WHERE tenant_id=$1 AND id=$2",
-        [tenant_id, connection_id],
-      );
-      if (!row) return null;
+      // W29-P0/A1: one implementation of the live connection facts, shared with
+      // the external-effect worker phase that re-checks them immediately before
+      // provider I/O.
+      const facts = await connectionActionFacts(q, tenant_id, connection_id);
+      if (!facts) return null;
       void actor_role;
       void user_id;
-      return {
-        exists: true,
-        enabled: row.enabled === true,
-        status: row.status,
-        ownership: row.ownership,
-        owner_user_id: row.owner_user_id,
-        capabilities_granted: [...(row.capabilities_granted || [])],
-        provider_key: row.provider_key,
-      };
-    },
-    async invoke({ tenant_id, connection_id, action, capability, payload }) {
-      const row = await one(
-        q,
-        "SELECT provider_key FROM connector_connections WHERE tenant_id=$1 AND id=$2",
-        [tenant_id, connection_id],
-      );
-      assert(row, 404, "Connector connection not found");
-      const definition = providerDefinition(row.provider_key);
-      const declared = definition.actions.find((item) => item.key === action);
-      assert(declared, 400, `Connector provider ${definition.key} does not declare action ${action}`);
-      assert(
-        declared!.requires_capability === capability,
-        400,
-        `Connector action ${action} requires ${declared!.requires_capability}`,
-      );
-      return adapterFor(row.provider_key).action({
-        action,
-        capability,
-        config: {},
-        payload: payload || {},
-      });
+      return facts;
     },
   };
 }

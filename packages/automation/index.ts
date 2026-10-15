@@ -16,4 +16,5 @@ export * from "./conditions.ts";
 export * from "./schedule.ts";
 export * from "./triggers.ts";
 export * from "./actions.ts";
+export * from "./effects.ts";
 export * from "./engine.ts";

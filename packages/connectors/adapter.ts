@@ -9,6 +9,7 @@
  * deterministic workflow engine, so a provider can never broaden a Workspace
  * permission or bypass a capability check.
  */
+import { createHash } from "node:crypto";
 import type { Capability } from "./registry.ts";
 
 export type AdapterFailureCategory =
@@ -58,6 +59,15 @@ export type AdapterHooks = {
     capability: Capability;
     config: Record<string, unknown>;
     payload: Record<string, unknown>;
+    /**
+     * W29-P0/A1: the durable external-effect context. `idempotency_key` is stable
+     * for one logical effect, so an adapter whose provider offers an idempotency
+     * primitive must pass it through and may then treat a repeat as the same
+     * operation. An adapter that fails knowing the request never reached the
+     * provider must mark the error with `delivery_state: "not_sent"` (see
+     * `notSent`); anything else is treated as potentially delivered.
+     */
+    effect?: { idempotency_key: string; attempt: number };
   }): Promise<Record<string, unknown>>;
 };
 
@@ -140,16 +150,34 @@ export const SYNTHETIC_HOOKS: AdapterHooks = {
     }
     return { events, next_cursor: String(from + size) };
   },
-  async action({ action, payload }) {
+  async action({ action, payload, effect }) {
     if (action !== "synthetic.record") throw new Error(`Unsupported synthetic action: ${action}`);
+    // The provider reference is a deterministic function of the effect's
+    // idempotency key, so a re-send after a reclaimed lease reports the SAME
+    // provider-side operation instead of a second one.
+    const reference = effect
+      ? `synthetic:${createHash("sha256").update(effect.idempotency_key).digest("hex").slice(0, 32)}`
+      : null;
     return {
       synthetic: true,
       recorded: true,
       // Bounded, non-secret echo so the acceptance can prove the action really ran.
       label: boundedText(payload.label, 120) ?? "synthetic",
+      ...(reference ? { provider_reference: reference } : {}),
     };
   },
 };
+
+/**
+ * W29-P0/A1: the delivery-state marker an adapter raises when it knows the request
+ * never reached the provider. The runtime treats every other failure as
+ * potentially delivered, which is what stops a blind retry from sending twice.
+ */
+export function notSent(message: string): Error & { delivery_state: "not_sent" } {
+  const error = new Error(message) as Error & { delivery_state: "not_sent" };
+  error.delivery_state = "not_sent";
+  return error;
+}
 
 function assertBoundedCursor(from: number) {
   if (!Number.isInteger(from) || from < 0 || from > 1_000_000)

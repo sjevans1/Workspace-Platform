@@ -8,11 +8,13 @@ half of the promoted W29/W30 scope and consumes the normalized provider events,
 connections and action boundary described in
 [Connected Work architecture](CONNECTED_WORK_ARCHITECTURE.md).
 
-The storage layer is `infrastructure/migrations/030_automation_runtime.sql`,
-applied by the versioned runner in `packages/database/migrate.ts`, which reads
-`infrastructure/migrations` in sorted order. The runtime is the module
-`packages/automation` (`dsl.ts`, `conditions.ts`, `schedule.ts`, `triggers.ts`,
-`actions.ts`, `engine.ts`, re-exported by `index.ts`). The HTTP surface is in
+The storage layer is `infrastructure/migrations/030_automation_runtime.sql` (plus
+`031_automation_service_principal.sql` and, for the W29-P0/A1 durable external
+effect, `032_external_effects.sql`), applied by the versioned runner in
+`packages/database/migrate.ts`, which reads `infrastructure/migrations` in sorted
+order. The runtime is the module `packages/automation` (`dsl.ts`,
+`conditions.ts`, `schedule.ts`, `triggers.ts`, `actions.ts`, `effects.ts`,
+`engine.ts`, re-exported by `index.ts`). The HTTP surface is in
 `apps/api/src/connected-work.ts`, and the worker drives the runtime from
 `apps/worker/src/connected-work.ts` (`automationTick`, `workspaceEventTick`) inside
 the tick loop in `apps/worker/src/worker.ts`.
@@ -41,6 +43,7 @@ the tick loop in `apps/worker/src/worker.ts`.
 |---|---|
 | Definitions, revisions, runs, steps, schedule state, health function | `infrastructure/migrations/030_automation_runtime.sql` |
 | Operator-provisioned automation service identity and its capability allowlist | `infrastructure/migrations/031_automation_service_principal.sql` |
+| Durable external effects for connector actions | `infrastructure/migrations/032_external_effects.sql`, `packages/automation/effects.ts` |
 | DSL, conditions, schedules, triggers, actions, engine | `packages/automation/{dsl,conditions,schedule,triggers,actions,engine}.ts` |
 | Standard action registration at module load | `packages/automation/index.ts` |
 | HTTP surface for workflows, runs, catalog and metrics | `apps/api/src/connected-work.ts` |
@@ -64,10 +67,12 @@ Explicitly deferred, and NOT implemented here:
 - **Approvals.** `docs/RELEASE_1_0_FINAL_GATES.md` lists approvals for sensitive
   and external actions as a W30 requirement. No approval step, approval record,
   approval API or approval-aware action exists in this tranche's action set.
-- **Provider-backed actions.** No action sends mail, creates or cancels a calendar
-  event, or posts to a messaging channel. `connector.action.invoke` can only call
-  an action a registered adapter actually declares, and the only registered
-  adapter is the synthetic one.
+- **Real provider adapters.** No action sends mail, creates or cancels a calendar
+  event, or posts to a messaging channel: the only registered adapter is the
+  synthetic one. The EXECUTION lifecycle for such an action now exists
+  (see *External effects*), so a real adapter can be activated later without
+  running provider I/O inside the engine's transaction, but none is activated in
+  this tranche.
 - **A workflow authoring interface and template library.** The HTTP contract
   exists; authoring tooling beyond the JSON definition is not part of the runtime.
 - **Agent or model steps.** See *No LLM is required for workflow execution*.
@@ -438,6 +443,8 @@ step failure, so the connector plane and the engine share one vocabulary:
 | 5xx | `transient` | yes |
 | 400, 422 | `validation` | no |
 | anything else | `transient` | yes |
+| external effect may have reached the provider | `outcome_unknown` | **no** |
+| external effect refused before the I/O boundary | classified reason (`capability_missing`, `authorization_revoked`, `validation`, ...) | per category |
 
 A step is retried only when the category is retryable and the action itself
 declares `retryable: true`, so `workflow.delay` and `workspace.record.create` are
@@ -471,12 +478,80 @@ Runs never re-plan. A reclaimed run continues against its pinned
 `(workflow_id, revision)` and the plan digest recorded at creation, so an edit
 that lands while the run is in flight cannot change what it does.
 
+## External effects: claim, provider I/O outside the transaction, commit
+
+A connector action is the one place a workflow reaches outside Workspace, so its
+provider I/O must never happen inside the engine's tenant transaction. A slow or
+hostile provider would otherwise hold a database connection and a row lock for as
+long as it likes, and a rollback after the provider had already accepted the
+request would leave Workspace believing nothing happened.
+
+`connector.action.invoke` therefore does NOT call the provider. The engine
+authorizes the action against the live connection facts, then persists or reuses
+one durable effect row in `workflow_external_effects` and parks the step
+(`status='waiting'`, `retry_state.external_effect_id`). A dedicated worker phase
+then runs the I/O between two short transactions:
+
+1. **claim** — `claimDueExternalEffects` takes due effects with
+   `FOR UPDATE SKIP LOCKED`, sets `status='claimed'`, a fresh `lease_token`,
+   `lease_expires_at = now() + 60 s` and `attempt = attempt + 1`, inside the
+   caller's short tenant transaction;
+2. **mark** — `markExternalEffectIoStarted` records `io_started_at` and extends
+   the lease to 180 s, in its own short transaction, immediately BEFORE the call;
+3. **provider I/O** — `invokeProviderAction` runs with no tenant transaction and no
+   row lock held, carrying the effect's stable `idempotency_key`;
+4. **commit** — `commitExternalEffectOutcome` re-reads the row `FOR UPDATE`, and
+   writes the normalized outcome only while this worker's lease is still
+   authoritative. A stale worker whose lease was reclaimed writes nothing.
+
+Before the boundary the phase re-checks the run's authority and the connection:
+the authority user must still be an active member, a service principal must still
+hold the `connector.action` capability, and the connection must still exist, be
+enabled, be `connected`, hold the capability and be reachable by that authority.
+A refusal happens BEFORE any provider I/O, so a disabled, revoked or
+authority-less connection fails closed with `capability_missing` or
+`authorization_revoked` and no external call is made.
+
+The status vocabulary is deliberately honest, because a lie here sends a message
+twice or loses one:
+
+| Status | Meaning |
+|---|---|
+| `planned` | The effect exists; no provider I/O has been attempted. |
+| `claimed` | A worker holds a lease and may be inside the provider call. |
+| `succeeded` | A normalized successful outcome is committed. |
+| `failed` | The attempt provably never reached the provider, or the provider offers an idempotency primitive so a re-send is safe. |
+| `outcome_unknown` | The provider may have received the action and its outcome cannot be proven. Never retried automatically, never reported as success. |
+| `cancelled` | The run was cancelled before the I/O boundary. |
+
+A reclaimed lease is decided from evidence, never from optimism: a claim whose
+`io_started_at` is null never crossed the boundary and is safe to retry; a claim
+that crossed it is re-sent ONLY when the provider declares an idempotency
+primitive for that action (`idempotent: true` in the provider definition), and is
+otherwise settled as `outcome_unknown`. An adapter that fails before its request
+leaves marks the error with `delivery_state: "not_sent"`; anything else is treated
+as potentially delivered.
+
+The request itself is NOT stored. The worker re-derives it from the run's
+immutable pinned revision and checks it against the `request_digest` recorded at
+plan time, so run evidence carries identity and outcomes but never message
+content. A terminal effect wakes its parked run, so the engine settles the step in
+the same tick.
+
+`outcome_unknown` and a cancelled run are both fatal for the step: the run records
+the honest category and stops. Only a human may re-attempt an effect whose outcome
+is unknown.
+
 ## Cancellation and the disable policy
 
 `cancelRun` moves a run to `cancelled` and records `cancelled_at`; the claim
 predicate never picks a terminal run up again. Cancellation is a run-level state
 change: this tranche specifies no mechanism to interrupt a step that is already
-executing. What bounds a single step is `WORKFLOW_LIMITS.step_timeout_seconds`
+executing. For an external effect the boundary is explicit: an effect that has not
+reached the provider is settled as `cancelled` and nothing is sent, while an
+effect whose provider call already happened still commits its real outcome and the
+run stays cancelled, because cancelling cannot undo an external side effect and
+run history must not pretend otherwise. What bounds a single step is `WORKFLOW_LIMITS.step_timeout_seconds`
 (60): `executeRun` races the action against that ceiling and fails the step as a
 retryable timeout, so a step cannot hold the run's lease and the tenant
 transaction indefinitely.
