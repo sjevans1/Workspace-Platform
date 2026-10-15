@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Pure Markdown PRs use docs-check.yml; code/workflow changes still run FAST.
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
   workflow_dispatch:
     inputs:
       suite:
