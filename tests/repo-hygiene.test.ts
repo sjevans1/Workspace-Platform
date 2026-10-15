@@ -184,6 +184,63 @@ test("#224: a failed or short lane can never claim completeness", () => {
   assert.equal(skipped.complete, false, "a skipped test is never complete");
 });
 
+// The run status is part of the completeness contract: a runner or global
+// failure can leave every individual test marked passed while the run itself
+// failed, and publishing `status: "failed"` beside `complete: true` would be a
+// contradictory artifact.
+const allPassedOutcomes = [
+  { file: "a.spec.ts", title: "a", status: "passed" },
+  { file: "a.spec.ts", title: "b", status: "passed" },
+];
+const completeBase = {
+  lane: "connected-work-and-automations",
+  config: "playwright.connected-work.config.ts",
+  retries: 0,
+  expectedTests: 2,
+};
+
+test("#224: overall runStatus failed with every test passed is never complete", () => {
+  const manifest = buildManifest({
+    ...completeBase,
+    runStatus: "failed",
+    outcomes: allPassedOutcomes,
+  });
+  assert.equal(manifest.status, "failed");
+  assert.equal(manifest.counts.passed, 2, "the individual tests did pass");
+  assert.equal(
+    manifest.complete,
+    false,
+    "a failed RUN must never publish a complete manifest, even when every test passed",
+  );
+});
+
+test("#224: overall runStatus interrupted with every test passed is never complete", () => {
+  const manifest = buildManifest({
+    ...completeBase,
+    runStatus: "interrupted",
+    outcomes: allPassedOutcomes,
+  });
+  assert.equal(manifest.status, "interrupted");
+  assert.equal(manifest.counts.passed, 2, "the individual tests did pass");
+  assert.equal(
+    manifest.complete,
+    false,
+    "an interrupted RUN must never publish a complete manifest",
+  );
+});
+
+test("#224: an all-passed run that passed overall remains complete", () => {
+  const manifest = buildManifest({
+    ...completeBase,
+    runStatus: "passed",
+    outcomes: allPassedOutcomes,
+  });
+  assert.equal(manifest.status, "passed");
+  assert.equal(manifest.complete, true);
+  assert.equal(manifest.total, 2);
+  assert.equal(manifest.expected_tests, 2);
+});
+
 test("#224: the reporter writes the manifest into the artifact path", async () => {
   const dir = await mkdtemp(join(tmpdir(), "cw-evidence-"));
   const outputFile = join(dir, "connected-work-evidence.json");

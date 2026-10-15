@@ -81,8 +81,13 @@ export function buildManifest(input: ManifestInput): LaneManifest {
     expected_tests: input.expectedTests,
     total: tests.length,
     counts: sortedCounts,
-    // An explicit success shape: every expected test ran, and every one passed.
+    // An explicit success shape: the RUN itself must have passed, every expected
+    // test must have run, and every one of them must have passed. The run status
+    // is required because a runner or global failure can leave every individual
+    // test marked passed while the run as a whole failed, which would otherwise
+    // publish a contradictory `status: "failed"` + `complete: true` artifact.
     complete:
+      input.runStatus === "passed" &&
       tests.length === input.expectedTests &&
       (sortedCounts.passed || 0) === input.expectedTests,
     tests,
