@@ -1,5 +1,7 @@
 # OpenJM Workspace
 
+**Development governance:** [OpenJM Development Framework v1.8.3 adoption](docs/FRAMEWORK_ADOPTION.md) · [version lock](framework.lock). This is a reference pin; live controller activation is separately gated and existing product work is unchanged.
+
 A self-hosted, white-label workspace for shared knowledge, collaborative pages and structured work. Built from the OpenJM Workspace Astra handoff as an executable first pass.
 
 **Status: working alpha, not the completed production MVP.** See the [standalone 1.0 delivery roadmap](docs/ROADMAP_1_0.md) and [live W01–W28 release tracker](https://github.com/sjevans1/Workspace-Platform/issues/62) for outstanding work. The backend, collaboration protocol, tenant isolation and backup round trip have automated coverage. See [acceptance status and remaining work](docs/ACCEPTANCE.md) for the exact verification boundary.
