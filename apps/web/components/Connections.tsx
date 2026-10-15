@@ -97,6 +97,9 @@ export default function Connections({ me }: { me: any }) {
     policy: { fingerprint: string; version: string };
   } | null>(null);
   const [readinessBusy, setReadinessBusy] = useState(false);
+  // What was actually checked, so the result names the exact destination even when
+  // the answer is that the host itself is not a usable public name.
+  const [readinessTarget, setReadinessTarget] = useState("");
   // A mutating action is confirmed in a dialog before it is sent, so a click can
   // never disable or revoke a connection by accident.
   const [confirm, setConfirm] = useState<{
@@ -247,11 +250,14 @@ export default function Connections({ me }: { me: any }) {
    */
   async function checkReadiness(form: HTMLFormElement) {
     const data = new FormData(form);
+    const host = String(data.get("host") || "").trim();
+    const port = Number(data.get("port"));
+    setReadinessTarget(`${host}:${port}`);
     setReadinessBusy(true);
     try {
       const result = await api("/connectors/endpoints/preflight", "POST", {
-        host: String(data.get("host") || "").trim(),
-        port: Number(data.get("port")),
+        host,
+        port,
       });
       setReadiness(result.readiness);
     } finally {
@@ -372,7 +378,7 @@ export default function Connections({ me }: { me: any }) {
                 <option value="587">587 (SMTP submission)</option>
               </select>
             </Field>
-            <div className="modal-actions">
+            <div className="readiness-actions">
               <button className="button primary" disabled={readinessBusy}>
                 {readinessBusy ? "Checking…" : "Check network readiness"}
               </button>
@@ -408,7 +414,8 @@ export default function Connections({ me }: { me: any }) {
               <p className="muted small-text">{readiness.next_action}</p>
               <p className="muted small-text">
                 Policy {readiness.policy.fingerprint} · checked{" "}
-                {readiness.host || "—"}:{readiness.port} · no endpoint contact
+                {readinessTarget || `${readiness.host}:${readiness.port}`} · no
+                endpoint contact
               </p>
             </div>
           )}

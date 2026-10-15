@@ -174,7 +174,7 @@ test("10. signing out returns to sign-in and protected navigation is denied", as
 
 test("11. no client-side script is present on any console surface", async ({ page }) => {
   await signIn(page);
-  for (const path of ["/", "/deployments", `/deployments/${E2E_IDS.online}`, "/alerts", "/audit"]) {
+  for (const path of ["/", "/deployments", `/deployments/${E2E_IDS.online}`, "/alerts", "/audit", "/egress"]) {
     await page.goto(path);
     await expect(page.locator("script")).toHaveCount(0);
     await expect(page.locator('link[rel="stylesheet"]')).toHaveCount(1);
@@ -232,4 +232,23 @@ test("13. the console is usable at this project's desktop or tablet viewport", a
   await expect(table).toBeVisible();
   await table.scrollIntoViewIfNeeded();
   console.log(`console viewport ${testInfo.project.name} ${viewport.width}x${viewport.height}: ok`);
+});
+
+test("14. the egress posture and diagnostic render, and stay read-only", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("link", { name: "Egress posture" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Outbound provider egress" })).toBeVisible();
+  // The effective policy identity is shown; the policy body is not.
+  await expect(page.getByText("e3f1c0de9a7b4f2d8c6a1b0e")).toBeVisible();
+  await expect(page.getByText("DNS and policy only; the endpoint is never contacted")).toBeVisible();
+  await expect(page.getByText("metadata", { exact: false }).first()).toBeVisible();
+  // The diagnostic is a native GET form: no script, and it works with keyboard input.
+  await page.getByLabel("Host").fill("mail.internal.example");
+  await page.getByLabel("Port").selectOption("993");
+  await page.getByRole("button", { name: "Check destination" }).click();
+  await expect(page).toHaveURL(/host=mail\.internal\.example/);
+  await expect(page.getByText("Requires operator approval")).toBeVisible();
+  await expect(page.getByText("endpoint contacted: no")).toBeVisible();
+  // There is no control that could change policy from here.
+  await expect(page.getByRole("button", { name: /save|apply|update policy/i })).toHaveCount(0);
 });
