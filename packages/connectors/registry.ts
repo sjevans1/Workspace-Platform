@@ -277,6 +277,25 @@ export function providerKeys(): string[] {
   return [...BY_KEY.keys()].sort();
 }
 
+/**
+ * W29-P0/A3: registers one additional provider definition at runtime.
+ *
+ * This exists for the deterministic acceptance OAuth provider, which must not appear
+ * in a production catalog at all: a production deployment never calls this, so the
+ * key, its descriptor and its adapter simply do not exist there. The definition is
+ * validated by exactly the same registration rules as a built-in one, so a runtime
+ * registration cannot smuggle in a malformed provider.
+ */
+export function registerProviderDefinition(definition: unknown): void {
+  const validated = validateProviderRegistration(definition as ProviderDefinition);
+  assert(
+    !BY_KEY.has(validated.key),
+    500,
+    `Provider ${validated.key} is already registered`,
+  );
+  BY_KEY.set(validated.key, validated);
+}
+
 /** The catalog an administrator may request a connection against. */
 export function providerCatalog(): ProviderDefinition[] {
   return providerKeys().map((key) => BY_KEY.get(key)!);

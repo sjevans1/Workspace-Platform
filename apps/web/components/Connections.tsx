@@ -115,6 +115,34 @@ export default function Connections({ me }: { me: any }) {
   // The configuration keys this deployment actually stores (published by the
   // catalog), so the guided form refuses anything else instead of dropping it.
   const [configKeys, setConfigKeys] = useState<string[]>([]);
+  // W29-P0/A3: the registered OAuth descriptors this deployment can authorize
+  // against, and the guided authorization state.
+  const [oauth, setOauth] = useState<
+    {
+      provider_key: string;
+      display_name: string;
+      test_only: boolean;
+      connectable: boolean;
+      scopes: {
+        scope: string;
+        capability: string | null;
+        label: string;
+        description: string;
+      }[];
+    }[]
+  >([]);
+  const [wizard, setWizard] = useState<{ step: 1 | 2; connection: string } | null>(
+    null,
+  );
+  const [authorizing, setAuthorizing] = useState<{
+    connection: string;
+    expiresAt: string | null;
+  } | null>(null);
+  const [oauthOutcome, setOauthOutcome] = useState<{
+    outcome: string;
+    connection: string | null;
+  } | null>(null);
+  const [oauthStatus, setOauthStatus] = useState<Record<string, any>>({});
   const [connections, setConnections] = useState<Connection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -173,6 +201,7 @@ export default function Connections({ me }: { me: any }) {
       setProviders(catalog.providers || []);
       setDeclared(catalog.declared || []);
       setConfigKeys(catalog.config_keys || []);
+      setOauth(catalog.oauth || []);
       setConnections(list.connections || []);
       setError("");
     } catch (e) {
@@ -184,6 +213,56 @@ export default function Connections({ me }: { me: any }) {
   useEffect(() => {
     run(load);
   }, []);
+
+  // W29-P0/A3: the provider callback redirects to a CLEAN application URL. The
+  // outcome is read once, the address is rewritten without it, and the real state is
+  // then read from the authenticated status API rather than trusted from the query.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const outcome = url.searchParams.get("oauth");
+    if (!outcome) return;
+    const connection = url.searchParams.get("connection");
+    setOauthOutcome({ outcome, connection });
+    url.searchParams.delete("oauth");
+    url.searchParams.delete("connection");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  }, []);
+
+  async function startAuthorization(connection: string, capabilities: string[]) {
+    const result = await api(
+      `/connectors/connections/${connection}/oauth/start`,
+      "POST",
+      { capabilities },
+    );
+    setAuthorizing({
+      connection,
+      expiresAt: result.authorization?.expires_at ?? null,
+    });
+    setOauthOutcome(null);
+    setModal("");
+    window.location.assign(result.authorization.authorization_url);
+  }
+
+  async function reconnect(connection: Connection) {
+    const result = await api(
+      `/connectors/connections/${connection.id}/oauth/reconnect`,
+      "POST",
+      { capabilities: connection.capabilities_requested },
+    );
+    setAuthorizing({
+      connection: connection.id,
+      expiresAt: result.authorization?.expires_at ?? null,
+    });
+    setOauthOutcome(null);
+    window.location.assign(result.authorization.authorization_url);
+  }
+
+  async function loadOauthStatus(connection: Connection) {
+    const result = await api(
+      `/connectors/connections/${connection.id}/oauth/status`,
+    );
+    setOauthStatus((current) => ({ ...current, [connection.id]: result.oauth }));
+  }
 
   function submit(fn: (form: HTMLFormElement) => Promise<void>) {
     return (e: React.FormEvent<HTMLFormElement>) => {
@@ -229,6 +308,14 @@ export default function Connections({ me }: { me: any }) {
       ...(config ? { config } : {}),
     });
     await load();
+    const descriptor = oauth.find((entry) => entry.provider_key === key);
+    if (descriptor) {
+      // An OAuth connection is authorized AT the provider: the review step comes
+      // next, and no secret is ever pasted into this flow.
+      setModal("");
+      setWizard({ step: 2, connection: created.connection.id });
+      return;
+    }
     setActive(created.connection);
     setModal("connect");
     notify("Connection created. Supply the credential to finish connecting.");
@@ -520,6 +607,57 @@ export default function Connections({ me }: { me: any }) {
         </div>
       )}
 
+      {oauthOutcome && (
+        <div
+          className={
+            oauthOutcome.outcome === "connected"
+              ? "readiness-result readiness-ready"
+              : "readiness-result readiness-blocked"
+          }
+          role="status"
+        >
+          <p className="readiness-state">
+            {oauthOutcome.outcome === "connected"
+              ? "Connected"
+              : oauthOutcome.outcome === "denied"
+                ? "Authorization not completed"
+                : "Could not connect"}
+          </p>
+          <p className="muted small-text">
+            {oauthOutcome.outcome === "connected"
+              ? "The provider approved this account and Workspace stored the grant. Review it below."
+              : oauthOutcome.outcome === "denied"
+                ? "The provider did not approve this request. The connection is unchanged; you can try again when you are ready."
+                : "The authorization did not finish. The connection is unchanged; you can try again when you are ready."}
+          </p>
+          <button
+            className="button quiet"
+            type="button"
+            onClick={() => setOauthOutcome(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {authorizing && (
+        <div className="readiness-result" role="status">
+          <p className="readiness-state">Waiting for provider approval</p>
+          <p className="muted small-text">
+            Workspace has created a one-time authorization request. Finish it in
+            the provider's window; if you closed it, start again below. The
+            connection is not treated as authorized until the provider confirms.
+          </p>
+          <button
+            className="button quiet"
+            type="button"
+            onClick={() => setAuthorizing(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       {error && (
         <div role="alert">
           <p>{error}</p>
@@ -649,19 +787,23 @@ export default function Connections({ me }: { me: any }) {
                 )}
                 {["connected", "attention_required", "disabled"].includes(
                   c.status,
-                ) && (
-                  <button
-                    className="button"
-                    disabled={busy === c.id}
-                    onClick={() => {
-                      setActive(c);
-                      setModal("rotate");
-                    }}
-                  >
-                    <RotateCw size={15} />
-                    Rotate credential
-                  </button>
-                )}
+                ) &&
+                  // W29-P0/A3: an OAuth connection is authorized at the provider, so
+                  // a manual secret rotation would be a dead control. The working
+                  // path for it is Reconnect, below.
+                  !oauth.some((entry) => entry.provider_key === c.provider_key) && (
+                    <button
+                      className="button"
+                      disabled={busy === c.id}
+                      onClick={() => {
+                        setActive(c);
+                        setModal("rotate");
+                      }}
+                    >
+                      <RotateCw size={15} />
+                      Rotate credential
+                    </button>
+                  )}
                 {c.status !== "revoked" && c.status !== "pending" && (
                   <button
                     className="button"
@@ -707,6 +849,25 @@ export default function Connections({ me }: { me: any }) {
                     {perRowEvents ? "Hide events" : "Events"}
                   </button>
                 )}
+                {oauth.some((entry) => entry.provider_key === c.provider_key) && (
+                  <button
+                    className="button"
+                    disabled={busy === c.id}
+                    onClick={() => run(() => loadOauthStatus(c))}
+                  >
+                    {oauthStatus[c.id] ? "Hide access" : "View access"}
+                  </button>
+                )}
+                {oauth.some((entry) => entry.provider_key === c.provider_key) &&
+                  c.status !== "revoked" && (
+                    <button
+                      className="button"
+                      disabled={busy === c.id}
+                      onClick={() => run(() => reconnect(c))}
+                    >
+                      Reconnect
+                    </button>
+                  )}
                 {c.status !== "revoked" && (
                   <button
                     className="button quiet danger"
@@ -720,6 +881,69 @@ export default function Connections({ me }: { me: any }) {
                   </button>
                 )}
               </div>
+              {oauthStatus[c.id] && (
+                <div className="oauth-detail" role="status">
+                  <p className="muted small-text">
+                    Account access:{" "}
+                    {c.status === "connected"
+                      ? "active"
+                      : c.status === "attention_required"
+                        ? "Reconnect required"
+                        : c.status === "disabled"
+                          ? "paused by an administrator"
+                          : label(c.status)}
+                  </p>
+                  <p className="muted small-text">
+                    Permissions granted:{" "}
+                    {c.capabilities_granted.length
+                      ? c.capabilities_granted
+                          .map(
+                            (capability) =>
+                              oauth
+                                .find(
+                                  (entry) =>
+                                    entry.provider_key === c.provider_key,
+                                )
+                                ?.scopes.find(
+                                  (scope) => scope.capability === capability,
+                                )?.label ?? label(capability),
+                          )
+                          .join(", ")
+                      : "none yet"}
+                  </p>
+                  <p className="muted small-text">
+                    Last authorized:{" "}
+                    {oauthStatus[c.id].issued_at
+                      ? String(oauthStatus[c.id].issued_at).slice(0, 16).replace("T", " ")
+                      : "not reported"}
+                    . Token values are never shown.
+                  </p>
+                  <details className="advanced">
+                    <summary>Advanced diagnostics</summary>
+                    <p className="muted small-text">
+                      Authorization record: {String(oauthStatus[c.id].state)}
+                      {oauthStatus[c.id].failure_category
+                        ? ` (${String(oauthStatus[c.id].failure_category)})`
+                        : ""}
+                    </p>
+                    <p className="muted small-text">
+                      Stored credential records:{" "}
+                      {(oauthStatus[c.id].grant || []).length
+                        ? (oauthStatus[c.id].grant || [])
+                            .map(
+                              (entry: any) =>
+                                `${entry.kind} v${entry.key_version}${
+                                  entry.expires_at
+                                    ? ` expires ${String(entry.expires_at).slice(0, 10)}`
+                                    : ""
+                                }`,
+                            )
+                            .join(", ")
+                        : "none"}
+                    </p>
+                  </details>
+                </div>
+              )}
             </div>
           );
         })}
@@ -797,6 +1021,84 @@ export default function Connections({ me }: { me: any }) {
                     : "Enable connection"}
               </button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {wizard && (
+        <Modal
+          title="Review permissions"
+          close={() => {
+            setWizard(null);
+          }}
+        >
+          <div className="form">
+            {(() => {
+              const connection = connections.find(
+                (entry) => entry.id === wizard.connection,
+              );
+              const descriptor = oauth.find(
+                (entry) => entry.provider_key === connection?.provider_key,
+              );
+              const requested = connection?.capabilities_requested || [];
+              return (
+                <>
+                  <p>
+                    <strong>{descriptor?.display_name}</strong>
+                  </p>
+                  <p className="muted small-text">
+                    Account:{" "}
+                    {connection?.ownership === "tenant"
+                      ? "shared with this workspace"
+                      : "your own delegated account"}
+                  </p>
+                  <p>Workspace will request:</p>
+                  <ul className="scope-list">
+                    {(descriptor?.scopes || [])
+                      .filter((scope) =>
+                        requested.includes(String(scope.capability)),
+                      )
+                      .map((scope) => (
+                        <li key={scope.scope}>
+                          <strong>{scope.label}</strong>
+                          <span className="muted small-text">
+                            {" "}
+                            {scope.description}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                  <p className="muted small-text">
+                    Your provider may bill your own account. No OpenJM-owned
+                    provider credit is required.
+                  </p>
+                  <p className="muted small-text">
+                    Nothing is granted until the provider approves and Workspace
+                    has stored the grant. Changing a selection here does not
+                    change any existing permission.
+                  </p>
+                  <div className="modal-actions">
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={() => setWizard(null)}
+                    >
+                      Back
+                    </button>
+                    <button
+                      className="button primary"
+                      type="button"
+                      disabled={busy === connection?.id}
+                      onClick={() =>
+                        run(() => startAuthorization(wizard.connection, requested))
+                      }
+                    >
+                      Continue to provider
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </Modal>
       )}

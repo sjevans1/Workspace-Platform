@@ -17,7 +17,14 @@ export default function Settings({
   appearance: Appearance;
   setAppearance: (choice: Appearance) => void;
 }) {
-  const [tab, setTab] = useState("profile"),
+  // W29-P0/A3: after a provider callback the user lands on the Connections tab, where
+  // the outcome and the connection state are explained.
+  const [tab, setTab] = useState(
+    typeof window !== "undefined" &&
+      new URL(window.location.href).searchParams.has("oauth")
+      ? "connections"
+      : "profile",
+  ),
     [members, setMembers] = useState<any[]>([]),
     [branding, setBranding] = useState(me.branding),
     [integrations, setIntegrations] = useState<any[]>([]),

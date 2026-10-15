@@ -2804,3 +2804,27 @@ textarea:focus-visible {
 .advanced[open] summary {
   margin-bottom: 10px;
 }
+
+/* W29-P0/A3: the authorization review and the connection's OAuth detail. */
+.scope-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scope-list li {
+  font-size: 13px;
+}
+.oauth-detail {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-basis: 100%;
+}
+.oauth-detail p {
+  margin: 0;
+}
