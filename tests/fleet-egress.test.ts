@@ -80,6 +80,10 @@ test("A2 operator egress: the posture reports identity and classes, never the po
   assert.equal(typeof posture.policy.public_pinned, "boolean");
   assert.equal(typeof posture.policy.internal_rules, "number");
   assert.equal(typeof posture.policy.internal_trust_chain, "boolean");
+  // Blocker 1 (review): the posture declares WHOSE policy it is, and it is not a
+  // customer deployment's.
+  assert.equal(posture.scope, "fleet_local");
+  assert.match(posture.scope_note, /not the policy of any customer deployment/i);
   assert.ok(posture.never_reachable.includes("metadata"));
   assert.ok(posture.never_reachable.includes("loopback"));
   assert.ok(posture.never_reachable.includes("carrier_grade"));
@@ -90,7 +94,7 @@ test("A2 operator egress: the posture reports identity and classes, never the po
   assert.ok(
     !/"cidr"|ca_pem|CONNECTOR_EGRESS|BEGIN CERTIFICATE/.test(response.body),
   );
-  assert.ok(!/deployment|tenant/i.test(response.body));
+  assert.ok(!/deployment_id|tenant_id|workspace_deployment/i.test(response.body));
 });
 
 test("A2 operator egress: the diagnostic answers with the shared vocabulary", async () => {
@@ -98,6 +102,8 @@ test("A2 operator egress: the diagnostic answers with the shared vocabulary", as
   const ready = await diagnostic("mail.example.test", 443);
   assert.equal(ready.statusCode, 200, ready.body);
   assert.equal(ready.json().readiness.state, "ready");
+  assert.equal(ready.json().readiness.scope, "fleet_local");
+  assert.match(ready.json().readiness.scope_note, /Fleet service process/);
   assert.equal(ready.json().readiness.contacted, false);
   assert.ok(!ready.body.includes(PUBLIC_IP), "no raw address is returned");
 

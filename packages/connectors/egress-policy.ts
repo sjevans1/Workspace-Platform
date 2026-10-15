@@ -34,6 +34,11 @@ export const EGRESS_LIMITS = Object.freeze({
   max_ports_per_rule: 16,
   /** Answers considered for one resolution. */
   max_dns_answers: 16,
+  /**
+   * Resolution budget. A readiness check and a real dial are both bounded, so a
+   * resolver that stalls can never hold a request (or a pool connection) open.
+   */
+  dns_timeout_ms: 4_000,
   /** Hostname length bound (a DNS name is 253 characters). */
   max_hostname_length: 253,
   max_summary: 200,
@@ -408,52 +413,121 @@ export function parseDestination(
   return { scheme: "https", host, port, path };
 }
 
-/** A redacted, log-safe rendering of a destination. Never userinfo or a query. */
+/**
+ * A redacted, log-safe rendering of a destination: scheme, host and port ONLY.
+ *
+ * The path is deliberately not retained. Provider paths routinely carry bearer
+ * tokens, reset keys or opaque identifiers with no query string at all, so a
+ * "redacted" URL that keeps a path is not safe to log, audit or persist. Anything
+ * that needs to correlate two diagnostics uses `destinationDigest`, which is not
+ * reversible.
+ */
 export function redactDestination(input: {
   host: string;
   port: number;
-  path?: string;
 }): string {
-  const path = String(input.path || "/")
-    .split("?")[0]
-    .split("#")[0];
-  const bounded = path.length > 80 ? `${path.slice(0, 80)}…` : path;
-  return `https://${input.host}:${input.port}${bounded}`;
+  return `https://${input.host}:${input.port}`;
 }
 
 // ---------------------------------------------------------------------------
 // Policy configuration (operator only).
 // ---------------------------------------------------------------------------
 
-function cidrContains(cidr: string, address: string): boolean {
-  const [base, bitsRaw] = cidr.split("/");
+/**
+ * Parses a CIDR into the PREFIX-ALIGNED network it actually denotes. The base is
+ * masked down to the network boundary, so `10.0.0.5/24` is the network
+ * `10.0.0.0/24` rather than a range that starts at `.5` and spills past the /24.
+ * Returns null when the text is not a usable CIDR.
+ */
+function cidrRange(cidr: string): {
+  family: 4 | 6;
+  bits: number;
+  base: bigint;
+  network: bigint;
+  size: bigint;
+} | null {
+  const [base, bitsRaw] = String(cidr).split("/");
   const bits = Number(bitsRaw);
   const family = isIP(base);
-  if (!family || !Number.isInteger(bits)) return false;
-  const addressFamily = isIP(address);
-  if (addressFamily !== family) return false;
+  if (family !== 4 && family !== 6) return null;
+  if (!Number.isInteger(bits)) return null;
+  const addressBits = family === 4 ? 32 : 128;
+  if (bits < 0 || bits > addressBits) return null;
+  const value = family === 4 ? ipv4ToBigInt(base) : ipv6ToBigInt(base);
+  if (value === null) return null;
+  const size = 1n << BigInt(addressBits - bits);
+  return {
+    family,
+    bits,
+    base: value,
+    network: value - (value % size),
+    size,
+  };
+}
+
+/** Formats a masked address value back to text. Used for operator-facing messages. */
+function bigIntToIp(value: bigint, family: 4 | 6): string | null {
+  if (value < 0n) return null;
   if (family === 4) {
-    const value = ipv4ToBigInt(address);
-    const baseValue = ipv4ToBigInt(base);
-    if (value === null || baseValue === null || bits < 0 || bits > 32)
-      return false;
-    const size = 1n << BigInt(32 - bits);
-    return value >= baseValue && value < baseValue + size;
+    if (value > 0xffffffffn) return null;
+    return [24n, 16n, 8n, 0n]
+      .map((shift) => Number((value >> shift) & 0xffn))
+      .join(".");
   }
-  const value = ipv6ToBigInt(address);
-  const baseValue = ipv6ToBigInt(base);
-  if (value === null || baseValue === null || bits < 0 || bits > 128)
-    return false;
-  const size = 1n << BigInt(128 - bits);
-  return value >= baseValue && value < baseValue + size;
+  if (value > (1n << 128n) - 1n) return null;
+  const groups: number[] = [];
+  for (let index = 7; index >= 0; index -= 1)
+    groups.push(Number((value >> BigInt(index * 16)) & 0xffffn));
+  // RFC 5952 compression: the longest run of two or more zero groups becomes "::".
+  let bestStart = -1;
+  let bestLength = 0;
+  for (let index = 0; index < 8; index += 1) {
+    if (groups[index] !== 0) continue;
+    let end = index;
+    while (end < 8 && groups[end] === 0) end += 1;
+    if (end - index > bestLength) {
+      bestStart = index;
+      bestLength = end - index;
+    }
+    index = end;
+  }
+  if (bestLength < 2) return groups.map((g) => g.toString(16)).join(":");
+  const head = groups.slice(0, bestStart).map((g) => g.toString(16)).join(":");
+  const tail = groups.slice(bestStart + bestLength).map((g) => g.toString(16)).join(":");
+  return `${head}::${tail}`;
+}
+
+/** The canonical, prefix-aligned form of a CIDR, or null when it is unusable. */
+export function canonicalCidr(cidr: string): string | null {
+  const range = cidrRange(cidr);
+  if (!range) return null;
+  const address = bigIntToIp(range.network, range.family);
+  return address === null ? null : `${address}/${range.bits}`;
+}
+
+/** True when the written base address IS the network boundary of its prefix. */
+export function cidrIsNetworkAligned(cidr: string): boolean {
+  const range = cidrRange(cidr);
+  return Boolean(range && range.base === range.network);
+}
+
+function cidrContains(cidr: string, address: string): boolean {
+  const range = cidrRange(cidr);
+  if (!range) return false;
+  if (isIP(address) !== range.family) return false;
+  const value =
+    range.family === 4 ? ipv4ToBigInt(address) : ipv6ToBigInt(address);
+  if (value === null) return false;
+  // Compared against the MASKED network, so an unaligned base can never widen a
+  // rule past the prefix the operator wrote.
+  return value >= range.network && value < range.network + range.size;
 }
 
 /** True when a rule CIDR touches a range that must never be reachable. */
 export function cidrTouchesHardDenyRange(cidr: string): boolean {
-  const [base, bitsRaw] = cidr.split("/");
-  const bits = Number(bitsRaw);
-  const family = isIP(base);
-  if (!family || !Number.isInteger(bits)) return true;
+  const parsedRange = cidrRange(cidr);
+  if (!parsedRange) return true;
+  const { family } = parsedRange;
   const overlaps = (
     baseA: bigint,
     sizeA: bigint,
@@ -461,10 +535,8 @@ export function cidrTouchesHardDenyRange(cidr: string): boolean {
     sizeB: bigint,
   ): boolean => baseA < baseB + sizeB && baseB < baseA + sizeA;
   if (family === 4) {
-    if (bits < 0 || bits > 32) return true;
-    const value = ipv4ToBigInt(base);
-    if (value === null) return true;
-    const size = 1n << BigInt(32 - bits);
+    const value = parsedRange.network;
+    const size = parsedRange.size;
     for (const range of V4_HARD_DENY) {
       // Only NEVER-overridable ranges are disqualifying: private and unique-local
       // space is exactly what an operator rule is allowed to approve.
@@ -479,10 +551,8 @@ export function cidrTouchesHardDenyRange(cidr: string): boolean {
     }
     return false;
   }
-  if (bits < 0 || bits > 128) return true;
-  const value = ipv6ToBigInt(base);
-  if (value === null) return true;
-  const size = 1n << BigInt(128 - bits);
+  const value = parsedRange.network;
+  const size = parsedRange.size;
   for (const range of V6_HARD_DENY) {
     if (OVERRIDABLE.has(range.class)) continue;
     const rangeBase = ipv6ToBigInt(range.base)!;
@@ -534,6 +604,11 @@ function parseRule(raw: unknown, label: string): EgressRule {
       /^[0-9a-fA-F.:]+\/[0-9]{1,3}$/.test(cidr),
       500,
       `${label} declares an invalid CIDR`,
+    );
+    assert(
+      cidrIsNetworkAligned(cidr),
+      500,
+      `${label} must be prefix-aligned: write ${canonicalCidr(cidr) ?? "a valid network"} instead of ${cidr}`,
     );
     assert(
       !cidrTouchesHardDenyRange(cidr),

@@ -23,6 +23,8 @@ type Provider = {
   webhook: boolean;
   polling: boolean;
   health_check: boolean;
+  /** W29-P0/A2: whether connecting this provider needs an endpoint at all. */
+  endpoint_required?: boolean;
 };
 
 type Connection = {
@@ -63,6 +65,48 @@ type ConnectorEvent = {
 // The statuses the API reports. Shown as they are, with underscores turned into spaces.
 const label = (value: string) => value.replace(/_/g, " ");
 
+/**
+ * W29-P0/A2: the guided readiness use cases. The choice selects the ports the check
+ * may consider and the guidance shown, and it is sent to the API, which answers for
+ * exactly that use case. Only the synthetic provider is connectable in this release,
+ * so the readiness journey is the honest way to prepare a real endpoint.
+ */
+const USE_CASES: {
+  key: string;
+  label: string;
+  ports: number[];
+  guidance: string;
+}[] = [
+  {
+    key: "custom_imap",
+    label: "Custom mailbox over IMAP",
+    ports: [993],
+    guidance:
+      "IMAP over TLS on port 993. Connecting needs the mailbox host, port 993 and a credential the provider issues for this workspace.",
+  },
+  {
+    key: "custom_smtp",
+    label: "Custom mailbox over SMTP",
+    ports: [465, 587],
+    guidance:
+      "SMTP over TLS on port 465, or submission on 587. Sending needs the provider's SMTP credential for this workspace.",
+  },
+  {
+    key: "https",
+    label: "HTTPS API endpoint",
+    ports: [443],
+    guidance:
+      "An HTTPS API endpoint on port 443. Connecting needs an API token the provider issues for this workspace.",
+  },
+];
+
+const PORT_LABELS: Record<number, string> = {
+  443: "HTTPS",
+  993: "IMAP over TLS",
+  465: "SMTP over TLS",
+  587: "SMTP submission",
+};
+
 export default function Connections({ me }: { me: any }) {
   const admin = ["owner", "admin"].includes(me.user.role);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -90,6 +134,8 @@ export default function Connections({ me }: { me: any }) {
     state: string;
     summary: string;
     next_action: string;
+    guidance: string | null;
+    use_case: string | null;
     host: string | null;
     port: number;
     address_class: string | null;
@@ -97,6 +143,9 @@ export default function Connections({ me }: { me: any }) {
     policy: { fingerprint: string; version: string };
   } | null>(null);
   const [readinessBusy, setReadinessBusy] = useState(false);
+  // The use case is not decoration: it selects the ports the check may consider and
+  // the guidance shown, and it is sent to the API, which answers for that use case.
+  const [useCase, setUseCase] = useState("custom_imap");
   // What was actually checked, so the result names the exact destination even when
   // the answer is that the host itself is not a usable public name.
   const [readinessTarget, setReadinessTarget] = useState("");
@@ -258,6 +307,7 @@ export default function Connections({ me }: { me: any }) {
       const result = await api("/connectors/endpoints/preflight", "POST", {
         host,
         port,
+        use_case: useCase,
       });
       setReadiness(result.readiness);
     } finally {
@@ -349,18 +399,20 @@ export default function Connections({ me }: { me: any }) {
             not contact the endpoint, so it cannot be used to scan a network.
           </p>
           <form className="form readiness-form" onSubmit={submit(checkReadiness)}>
-            <Field label="Provider or use case">
-              <select name="use_case" defaultValue="custom">
-                {providers
-                  .filter((p) => p.implemented)
-                  .map((p) => (
-                    <option key={p.key} value={p.key}>
-                      {p.display_name}
-                    </option>
-                  ))}
-                <option value="custom">Custom mail endpoint (IMAP/SMTP)</option>
+            <Field label="Use case">
+              <select
+                name="use_case"
+                value={useCase}
+                onChange={(e) => setUseCase(e.target.value)}
+              >
+                {USE_CASES.map((entry) => (
+                  <option key={entry.key} value={entry.key}>
+                    {entry.label}
+                  </option>
+                ))}
               </select>
             </Field>
+            <p className="muted small-text">{USE_CASES.find((entry) => entry.key === useCase)?.guidance}</p>
             <Field label="Host">
               <input
                 name="host"
@@ -371,11 +423,14 @@ export default function Connections({ me }: { me: any }) {
               />
             </Field>
             <Field label="Port">
-              <select name="port" defaultValue="993">
-                <option value="443">443 (HTTPS)</option>
-                <option value="993">993 (IMAP over TLS)</option>
-                <option value="465">465 (SMTP over TLS)</option>
-                <option value="587">587 (SMTP submission)</option>
+              <select name="port" key={useCase} defaultValue={String(USE_CASES.find((entry) => entry.key === useCase)?.ports[0])}>
+                {(USE_CASES.find((entry) => entry.key === useCase)?.ports || []).map(
+                  (port) => (
+                    <option key={port} value={String(port)}>
+                      {port} ({PORT_LABELS[port]})
+                    </option>
+                  ),
+                )}
               </select>
             </Field>
             <div className="readiness-actions">
@@ -411,6 +466,9 @@ export default function Connections({ me }: { me: any }) {
                               : label(readiness.state)}
               </p>
               <p>{readiness.summary}</p>
+              {readiness.guidance && (
+                <p className="muted small-text">{readiness.guidance}</p>
+              )}
               <p className="muted small-text">{readiness.next_action}</p>
               <p className="muted small-text">
                 Policy {readiness.policy.fingerprint} · checked{" "}
@@ -760,14 +818,43 @@ export default function Connections({ me }: { me: any }) {
                     </label>
                   ))}
                 </fieldset>
-                <Field label="Configuration (JSON, optional)">
-                  <textarea
-                    name="config"
-                    rows={3}
-                    spellCheck={false}
-                    placeholder='{"mailbox":"inbox"}'
-                  />
-                </Field>
+                <div className="guided-config">
+                  <p className="muted small-text">
+                    {selected.endpoint_required === false
+                      ? "This provider needs no endpoint configuration: it is the acceptance test provider, and its credential is supplied on the next step."
+                      : "Enter the endpoint this provider connects to. Use Endpoint readiness above to check it first."}
+                  </p>
+                  {selected.endpoint_required !== false && (
+                    <div className="form-grid">
+                      <Field label="Endpoint host">
+                        <input
+                          name="config_host"
+                          placeholder="mail.example.com"
+                          autoComplete="off"
+                        />
+                      </Field>
+                      <Field label="Endpoint port">
+                        <input
+                          name="config_port"
+                          inputMode="numeric"
+                          placeholder="993"
+                          autoComplete="off"
+                        />
+                      </Field>
+                    </div>
+                  )}
+                  <details className="advanced">
+                    <summary>Advanced configuration (JSON)</summary>
+                    <Field label="Provider configuration">
+                      <textarea
+                        name="config"
+                        rows={3}
+                        spellCheck={false}
+                        placeholder='{"mailbox":"inbox"}'
+                      />
+                    </Field>
+                  </details>
+                </div>
                 <p className="muted small-text">
                   No secret is entered here. You supply the credential on the
                   next step, after the connection exists.

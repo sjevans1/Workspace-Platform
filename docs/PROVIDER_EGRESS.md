@@ -124,11 +124,27 @@ answer and a real connection attempt can never disagree. See
 
 ### The three surfaces
 
-| Surface                   | Route                                          | Authorization                                                      | Contact                 |
-| ------------------------- | ---------------------------------------------- | ------------------------------------------------------------------ | ----------------------- |
-| Client endpoint readiness | `POST /api/v1/connectors/endpoints/preflight`  | owner/admin, human session, CSRF, 30/min per client                | none: DNS + policy only |
-| Operator posture          | `GET /egress` (fleet API)                      | operator bearer token, read budget                                 | none                    |
-| Operator diagnostic       | `GET /egress/diagnostic?host&port` (fleet API) | operator bearer token, read budget, audited as `egress.diagnostic` | none                    |
+| Surface                   | Route                                          | Authorization                                                                       | Scope                     | Contact                 |
+| ------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
+| Client endpoint readiness | `POST /api/v1/connectors/endpoints/preflight`  | owner/admin, re-read live inside a short tenant transaction; human session; CSRF; 30/min per client | the deployment that will connect | none: DNS + policy only |
+| Operator posture          | `GET /egress` (fleet API)                      | operator bearer token, read budget                                                  | **Fleet-local**           | none                    |
+| Operator diagnostic       | `GET /egress/diagnostic?host&port` (fleet API) | operator bearer token, read budget, audited as `egress.diagnostic`                  | **Fleet-local**           | none                    |
+
+Every answer declares its scope (`deployment` or `fleet_local`) and carries the note
+that explains it. The Fleet service evaluates its own configuration and resolver, so
+its answers are a reference for operators and NOT a statement about any customer
+deployment: a Ready answer there does not prove a customer deployment would permit
+the destination. A trusted per-deployment policy-identity channel is a separately
+gated requirement before real-provider activation and is not implemented here.
+
+Preflight holds no tenant transaction across network work: the route opens none, the
+handler re-reads the caller's live membership and role inside a short tenant
+transaction, releases it, and only then resolves. Resolution and the whole check are
+bounded, and in the transport one shared deadline covers DNS, TCP, TLS and HTTP, so a
+late DNS answer is never used to dial.
+
+The use case is part of the contract: it selects the ports the check may consider
+(IMAP 993, SMTP 465/587, HTTPS 443) and the guidance the answer carries.
 
 The console page (`GET /egress` on the fleet console) renders the posture and
 carries the diagnostic as an ordinary GET form, so the console still ships no
@@ -138,12 +154,22 @@ Preflight answers with one canonical vocabulary (`ready`, `blocked_by_operator_p
 `private_requires_approval`, `dns_not_safe`, `dns_failure`, `invalid_destination`,
 `unsupported_scheme`, `unsupported_port`, `tls_issue`, `unreachable`), a summary, a
 grounded next action, the policy fingerprint, and the class of the resolved address.
-It never returns a raw address, the policy body or the CA material. `tls_issue` and
+It never returns a raw address, a URL path, the policy body or the CA material: a
+redacted destination is scheme, host and port only, because provider paths routinely
+carry bearer tokens, reset keys or opaque identifiers with no query string at all. `tls_issue` and
 `unreachable` are only ever reported by a real connection test through the governed
 transport; preflight never contacts the endpoint, so a blocked destination is not
 probed to produce its denial and the check cannot be used as a port scanner. The
 port vocabulary is fixed (`443`, `993`, `465`, `587`), so an arbitrary port cannot be
 probed either.
+
+Operator rules are **prefix-aligned**: a rule CIDR must be written at its network
+boundary (`10.0.0.0/24`, not `10.0.0.5/24`), and a non-aligned CIDR is refused at load
+with the correct form named. The matching arithmetic masks to the network boundary as
+well, so even a value that bypassed validation can never widen a rule past the prefix
+the operator wrote. TLS identity is always the canonical approved host: there is no
+caller-supplied SNI override, because a caller-chosen name could verify a certificate
+for a destination the policy never approved.
 
 Both planes must be given the same deployment egress configuration
 (`CONNECTOR_EGRESS_*`). The policy is loaded once per process and a malformed policy

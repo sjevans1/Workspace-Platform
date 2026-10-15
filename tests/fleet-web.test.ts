@@ -82,6 +82,9 @@ const ALERTS = [
 
 // W29-P0/A2 fixtures: the read-only egress posture and one readiness answer.
 const EGRESS_POSTURE = {
+  scope: "fleet_local",
+  scope_note:
+    "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
   policy: { fingerprint: "e3f1c0de9a7b4f2d8c6a1b0e", version: "1.0.0", internal_rules: 2, public_pinned: true, public_rules: 2, internal_trust_chain: false },
   never_reachable: ["loopback", "link_local", "metadata", "carrier_grade"],
   overridable: ["private", "unique_local"],
@@ -90,6 +93,9 @@ const EGRESS_POSTURE = {
 };
 
 const EGRESS_READINESS = {
+  scope: "fleet_local",
+  scope_note:
+    "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
   state: "private_requires_approval",
   code: "address_not_permitted",
   summary: "This destination resolves to private or unique-local space and no operator rule permits it.",
@@ -861,6 +867,11 @@ test("the egress page renders posture and the diagnostic form without script", a
   assert.match(markup, /Never reachable/);
   assert.match(markup, /metadata/);
   assert.match(markup, /DNS and policy only; the endpoint is never contacted/);
+  // Blocker 1 (review): the page must not present Fleet-local policy as a customer
+  // deployment's, and must say what is not implemented.
+  assert.match(markup, /Scope: Fleet service process \(local policy\)/);
+  assert.match(markup, /not the policy of any customer deployment/);
+  assert.match(markup, /Per-deployment effective-policy diagnosis is not implemented/);
   // The diagnostic is an ordinary GET form: no script, no client bundle.
   assert.match(markup, /<form method="get" action="\/egress"/);
   assert.ok(!/<script/i.test(markup), "the console ships no client-side script");

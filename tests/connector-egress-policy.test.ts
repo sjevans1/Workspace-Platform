@@ -11,14 +11,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_EGRESS_POLICY,
+  ProviderEgressError,
   authorizeHostAndPort,
+  canonicalCidr,
   canonicalHostname,
+  cidrIsNetworkAligned,
   cidrTouchesHardDenyRange,
   classifyAddress,
   evaluateDestination,
   loadEgressPolicy,
   parseDestination,
   redactDestination,
+  type EgressPolicy,
 } from "../packages/connectors/index.ts";
 
 const policy = DEFAULT_EGRESS_POLICY;
@@ -255,20 +259,126 @@ test("A2 policy: destination URLs refuse userinfo, unexpected schemes and ports"
   assert.equal(ok.path, "/x?y=1");
 });
 
-test("A2 policy: redaction never emits userinfo, a query or an unbounded path", () => {
-  const redacted = redactDestination({
-    host: "mail.example.test",
-    port: 443,
-    path: "/oauth/token?client_secret=abc#frag",
+test("A2 policy: a redacted destination is host and port only", () => {
+  // Blocker 4 (review): a path is not redacted material. Provider paths carry
+  // bearer tokens, reset keys and opaque identifiers with no query string at all,
+  // so NOTHING of the path may reach an error, a log or persisted evidence.
+  const secrets = [
+    "/oauth/token/eyJhbGciOiJIUzI1NiJ9.SECRET.SIGNATURE",
+    "/d/reset/bd4f8a2c-1111-2222-3333-444455556666",
+    "/api/v1/messages/01H8ZQ7KQ4T5V6W7X8Y9Z0ABCDEF",
+    `/x/${"y".repeat(200)}`,
+  ];
+  for (const path of secrets) {
+    const redacted = redactDestination({ host: "mail.example.test", port: 443 });
+    assert.equal(redacted, "https://mail.example.test:443");
+    for (const fragment of [path, path.split("/")[2] || "", path.slice(0, 40)])
+      if (fragment.length > 3)
+        assert.ok(
+          !redacted.includes(fragment),
+          `no path fragment may survive redaction: ${fragment.slice(0, 20)}`,
+        );
+  }
+  // The full error surface is checked against a secret-bearing path.
+  const error = new ProviderEgressError("tls_failure", {
+    destination: redactDestination({ host: "mail.example.test", port: 443 }),
   });
-  assert.equal(redacted, "https://mail.example.test:443/oauth/token");
-  const long = redactDestination({
-    host: "mail.example.test",
-    port: 993,
-    path: `/${"x".repeat(200)}`,
+  const rendered = JSON.stringify({
+    code: error.code,
+    summary: error.summary,
+    destination: error.destination,
+    message: error.message,
+    stack: error.stack,
   });
-  assert.ok(long.length < 120, "a long path is bounded");
+  assert.ok(!rendered.includes("reset"), "no path segment is rendered");
+  assert.ok(!/eyJ|SECRET|SIGNATURE|01H8ZQ/.test(rendered));
+  assert.equal(error.destination, "https://mail.example.test:443");
 });
+
+// ---------------------------------------------------------------------------
+// CIDR prefix alignment (Blocker 3).
+// ---------------------------------------------------------------------------
+
+test("A2 policy: CIDR matching is prefix-aligned, not base-offset arithmetic", () => {
+  // The adversarial case from review: 10.0.0.5/24 must NOT be read as the range
+  // 10.0.0.5 .. 10.0.1.4. The math is masked to the network boundary.
+  // Built directly, because loadEgressPolicy now REFUSES a non-aligned CIDR (the
+  // next test). This is the defence-in-depth case: even a value that bypassed
+  // validation must be read as its prefix-aligned network, never as base+size.
+  const unaligned: EgressPolicy = {
+    rules: [
+      {
+        host: "mail.internal.example",
+        ports: [993],
+        cidr: "10.0.0.5/24",
+        allow_private: true,
+      },
+    ],
+    public_rules: [],
+    ca_pem: null,
+  };
+  const allowed = (address: string) =>
+    authorizeHostAndPort({
+      host: "mail.internal.example",
+      port: 993,
+      addresses: [address],
+      policy: unaligned,
+    }).allowed;
+  // Boundary behaviour is the /24 network, both edges exact.
+  assert.equal(allowed("10.0.0.0"), true, "the network address is inside 10.0.0.0/24");
+  assert.equal(allowed("10.0.0.255"), true, "the broadcast address is inside 10.0.0.0/24");
+  assert.equal(allowed("10.0.1.4"), false, "an address outside the stated /24 is refused");
+  assert.equal(allowed("10.0.1.0"), false, "the next /24 is refused");
+  assert.equal(allowed("10.0.0.256"), false, "an invalid address is refused");
+});
+
+test("A2 policy: a non-aligned CIDR is refused at load with the aligned form named", () => {
+  for (const [cidr, expected] of [
+    ["10.0.0.5/24", "10.0.0.0/24"],
+    ["10.20.30.40/16", "10.20.0.0/16"],
+    ["fd00:1234::5/48", "fd00:1234::/48"],
+  ]) {
+    assert.equal(canonicalCidr(cidr), expected, cidr);
+    assert.equal(cidrIsNetworkAligned(cidr), false, cidr);
+    assert.throws(
+      () =>
+        loadEgressPolicy({
+          CONNECTOR_EGRESS_RULES: JSON.stringify([
+            { host: "mail.internal.example", ports: [993], cidr, allow_private: true },
+          ]),
+        }),
+      new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      `the rejection must name ${expected}`,
+    );
+  }
+  for (const cidr of ["10.0.0.0/24", "10.20.0.0/16", "fd00:1234::/48", "0.0.0.0/0", "2001:db8::/32"])
+    assert.equal(cidrIsNetworkAligned(cidr), true, cidr);
+  assert.equal(canonicalCidr("not-a-cidr"), null);
+  assert.equal(canonicalCidr("10.0.0.0/33"), null);
+  assert.equal(canonicalCidr("fd00::/129"), null);
+});
+
+test("A2 policy: hard-deny overlap is computed on the masked network", () => {
+  // A /7 that starts at 127.0.0.0 masks to 126.0.0.0/7, which still contains
+  // loopback, so it stays disqualifying; a rule that only *looks* adjacent is not.
+  assert.equal(cidrTouchesHardDenyRange("127.0.0.0/7"), true);
+  assert.equal(cidrTouchesHardDenyRange("126.0.0.0/7"), true);
+  assert.equal(cidrTouchesHardDenyRange("169.254.0.0/16"), true);
+  assert.equal(cidrTouchesHardDenyRange("169.254.10.7/16"), true, "the unaligned form masks to the same /16");
+  assert.equal(cidrTouchesHardDenyRange("10.20.30.40/16"), false, "private space stays approvable");
+  assert.equal(cidrTouchesHardDenyRange("fd00:1234::5/48"), false);
+  assert.equal(cidrTouchesHardDenyRange("::ffff:127.0.0.1/128"), true);
+});
+
+/** Builds a policy from rules without going through the environment. */
+function policyWith(input: { rules: any[]; public_rules?: any[] }): EgressPolicy {
+  return loadEgressPolicy({
+    CONNECTOR_EGRESS_RULES: JSON.stringify(input.rules),
+    ...(input.public_rules
+      ? { CONNECTOR_EGRESS_PUBLIC_RULES: JSON.stringify(input.public_rules) }
+      : {}),
+  });
+}
 
 // ---------------------------------------------------------------------------
 // DNS answer validation.

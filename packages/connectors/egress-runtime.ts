@@ -22,7 +22,11 @@ import {
   loadEgressPolicy,
   type EgressPolicy,
 } from "./egress-policy.ts";
-import { destinationDigest } from "./egress-transport.ts";
+import {
+  ProviderEgressError,
+  destinationDigest,
+  runUnderBudget,
+} from "./egress-transport.ts";
 
 /** Bumped when the readiness vocabulary or its meaning changes. */
 export const EGRESS_POLICY_VERSION = "1.0.0";
@@ -32,6 +36,38 @@ export const EGRESS_POLICY_VERSION = "1.0.0";
  * set is refused, so the check can never be turned into an arbitrary port probe.
  */
 export const EGRESS_PREFLIGHT_PORTS = [443, 993, 465, 587] as const;
+
+/**
+ * The use cases the guided readiness journey offers. The choice is not decoration:
+ * it selects the ports the check may consider and the guidance the answer carries,
+ * so the journey is a real onboarding path rather than a network-check form.
+ */
+export const PREFLIGHT_USE_CASES = ["custom_imap", "custom_smtp", "https"] as const;
+export type PreflightUseCase = (typeof PREFLIGHT_USE_CASES)[number];
+
+export const USE_CASE_GUIDANCE: Record<
+  PreflightUseCase,
+  { label: string; ports: number[]; guidance: string }
+> = Object.freeze({
+  custom_imap: {
+    label: "Custom mailbox over IMAP",
+    ports: [993],
+    guidance:
+      "IMAP over TLS on port 993. Connecting needs the mailbox host, port 993 and a credential the provider issues for this workspace.",
+  },
+  custom_smtp: {
+    label: "Custom mailbox over SMTP",
+    ports: [465, 587],
+    guidance:
+      "SMTP over TLS on port 465, or submission on 587. Sending needs the provider's SMTP credential for this workspace.",
+  },
+  https: {
+    label: "HTTPS API endpoint",
+    ports: [443],
+    guidance:
+      "An HTTPS API endpoint on port 443. Connecting needs an API token the provider issues for this workspace.",
+  },
+});
 
 /** The canonical readiness states, shared by both planes. */
 export const READINESS_STATES = [
@@ -49,8 +85,33 @@ export const READINESS_STATES = [
 
 export type ReadinessState = (typeof READINESS_STATES)[number];
 
+/**
+ * WHOSE policy an answer describes.
+ *
+ * `deployment` means the check ran inside the customer deployment that will make
+ * the connection, so the answer is that deployment's effective policy.
+ * `fleet_local` means it ran in the OpenJM Fleet service process, whose
+ * configuration and resolver are its own: it is a useful operator reference, but
+ * it is NOT a statement about any customer deployment.
+ */
+export type EgressScope = "deployment" | "fleet_local";
+
+export const EGRESS_SCOPE_NOTES: Record<EgressScope, string> = Object.freeze({
+  deployment:
+    "Evaluated inside this deployment, with this deployment's egress configuration.",
+  fleet_local:
+    "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
+});
+
 export type ReadinessResult = {
   state: ReadinessState;
+  /** Whose policy this answer describes. */
+  scope: EgressScope;
+  scope_note: string;
+  /** The use case this check was made for, when one was chosen. */
+  use_case: PreflightUseCase | null;
+  /** Plain-language guidance for the chosen use case. */
+  guidance: string | null;
   /** Bounded evaluator code, never free text. */
   code: string;
   summary: string;
@@ -182,13 +243,21 @@ export async function preflightEndpoint(input: {
   port: number;
   policy?: EgressPolicy;
   allowed_ports?: number[];
+  use_case?: PreflightUseCase;
+  /** Defaults to `deployment`: the caller is the deployment making the connection. */
+  scope?: EgressScope;
   deps?: { resolve?: EgressResolver };
 }): Promise<ReadinessResult> {
   const policy = input.policy ?? egressPolicy();
   const fingerprint = policyFingerprint(policy);
   const version = EGRESS_POLICY_VERSION;
   const port = Number(input.port);
+  const scope: EgressScope = input.scope ?? "deployment";
   const base = {
+    scope,
+    scope_note: EGRESS_SCOPE_NOTES[scope],
+    use_case: input.use_case ?? null,
+    guidance: input.use_case ? USE_CASE_GUIDANCE[input.use_case].guidance : null,
     host: null as string | null,
     port: Number.isFinite(port) ? port : 0,
     destination_digest: destinationDigest(String(input.host || ""), port || 0),
@@ -210,20 +279,32 @@ export async function preflightEndpoint(input: {
     next_action: NEXT_ACTIONS[value],
   });
 
+  // The use case narrows the port vocabulary; without one, the full set applies.
+  const allowedPorts = input.use_case
+    ? USE_CASE_GUIDANCE[input.use_case].ports
+    : (input.allowed_ports ?? [...EGRESS_PREFLIGHT_PORTS]);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     return state("unsupported_port", "unsupported_port");
-  if (input.allowed_ports && !input.allowed_ports.includes(port))
+  if (!allowedPorts.includes(port))
     return state("unsupported_port", "unsupported_port");
   const host = canonicalHostname(input.host);
   if (!host) return state("invalid_destination", "invalid_destination");
 
   let answers: { address: string; family: number }[];
   try {
-    answers = await (input.deps?.resolve ?? activeResolver ?? defaultResolver)(
-      host,
+    // Resolution is bounded exactly like a real dial: a resolver that stalls must
+    // not hold the request, and a late answer is never used.
+    answers = await runUnderBudget(
+      Promise.resolve().then(() =>
+        (input.deps?.resolve ?? activeResolver ?? defaultResolver)(host),
+      ),
+      EGRESS_LIMITS.dns_timeout_ms,
+      "dns_timeout",
     );
-  } catch {
-    return state("dns_failure", "dns_failure", { host });
+  } catch (error) {
+    const code =
+      error instanceof ProviderEgressError ? error.code : "dns_failure";
+    return state("dns_failure", code, { host });
   }
   const addresses = (answers || []).map((answer) => String(answer.address));
   if (!addresses.length)
@@ -275,6 +356,9 @@ export async function preflightEndpoint(input: {
 }
 
 export type EgressPosture = {
+  /** The posture always describes the process it is read from. */
+  scope: EgressScope;
+  scope_note: string;
   policy: {
     fingerprint: string;
     version: string;
@@ -292,8 +376,13 @@ export type EgressPosture = {
 };
 
 /** The read-only posture summary an operator page may show. */
-export function egressPosture(policy: EgressPolicy): EgressPosture {
+export function egressPosture(
+  policy: EgressPolicy,
+  scope: EgressScope = "fleet_local",
+): EgressPosture {
   return {
+    scope,
+    scope_note: EGRESS_SCOPE_NOTES[scope],
     policy: {
       fingerprint: policyFingerprint(policy),
       version: EGRESS_POLICY_VERSION,

@@ -19,6 +19,25 @@ import type { FleetAlert, FleetAuditEntry, FleetDeployment, FleetDeploymentDetai
 export const UNKNOWN = "Unknown";
 export const NOT_REPORTED = "Not reported";
 
+/**
+ * W29-P0/A2: WHOSE policy this console is showing. The Fleet service evaluates its
+ * OWN configuration and resolver, which need not match any customer deployment, so
+ * the page says exactly that instead of implying it diagnoses a customer.
+ */
+function scopeLabel(scope: string): string {
+  return scope === "fleet_local"
+    ? "Fleet service process (local policy)"
+    : "Workspace deployment";
+}
+
+function scopeNotice(posture: { scope: string; scope_note: string }): string {
+  return `<div class="notice notice--error" role="status">
+  <p><strong>Scope: ${escapeHtml(scopeLabel(posture.scope))}.</strong></p>
+  <p>${escapeHtml(posture.scope_note)}</p>
+  <p class="muted small">Per-deployment effective-policy diagnosis is not implemented: it needs a trusted policy-identity channel from each Workspace deployment, which is gated separately before any real-provider activation.</p>
+</div>`;
+}
+
 /** W29-P0/A2: the canonical readiness vocabulary, in operator language. */
 export function readinessLabel(state: string): string {
   const labels: Record<string, string> = {
@@ -607,9 +626,15 @@ export function renderEgress(options: {
 }): string {
   const { posture } = options;
   const factsRows = [
+    ["Scope", scopeLabel(posture.scope)],
     ["Policy fingerprint", `<code>${escapeHtml(posture.policy.fingerprint)}</code>`],
     ["Policy vocabulary version", escapeHtml(posture.policy.version)],
-    ["Configuration source", "Deployment configuration"],
+    [
+      "Configuration source",
+      posture.scope === "fleet_local"
+        ? "The Fleet service process's own environment"
+        : "Deployment configuration",
+    ],
     [
       "Public destinations",
       posture.policy.public_pinned
@@ -642,6 +667,7 @@ export function renderEgress(options: {
   <p>${escapeHtml(options.result.summary)}</p>
   <p class="muted">${escapeHtml(options.result.next_action)}</p>
   <p class="muted small">${escapeHtml(options.result.host ?? options.query.host)}:${options.result.port} · class ${escapeHtml(options.result.address_class ?? "unknown")} · ${escapeHtml(options.result.destination_digest)} · endpoint contacted: no</p>
+  <p class="muted small">Scope: ${escapeHtml(scopeLabel(options.result.scope))}. ${escapeHtml(options.result.scope_note)}</p>
 </div>`
     : "";
   const diagnostics = options.diagnostics.length
@@ -652,7 +678,8 @@ export function renderEgress(options: {
       )
     : `<p class="empty">No diagnostics answered yet.</p>`;
   return `<h1>Outbound provider egress</h1>
-<p class="lede">The effective network policy this deployment applies to provider connections. Read-only: policy is deployment configuration, and this console has no control that could change it.</p>
+${scopeNotice(posture)}
+<p class="lede">Read-only: policy is deployment configuration, and this console has no control that could change it.</p>
 <section aria-labelledby="egress-posture">
 <h2 id="egress-posture">Effective posture</h2>
 ${table(["Fact", "Value"], factsRows, { caption: "Effective egress posture" })}
@@ -667,7 +694,7 @@ ${table(["Fact", "Value"], factsRows, { caption: "Effective egress posture" })}
 </section>
 <section aria-labelledby="egress-diagnostic">
 <h2 id="egress-diagnostic">Destination diagnostic</h2>
-<p class="lede">Answers whether a destination would be allowed, using the same evaluator a real provider connection uses. The endpoint is never contacted, so a blocked destination is not probed to produce its denial.</p>
+<p class="lede">Answers whether a destination would be allowed <strong>under this process's policy</strong>, using the same evaluator a real provider connection uses. The endpoint is never contacted, so a blocked destination is not probed to produce its denial.</p>
 ${form}
 ${result}
 </section>

@@ -49,6 +49,9 @@ const client: FleetClient = {
     ok: true,
     data: {
       posture: {
+        scope: "fleet_local",
+        scope_note:
+          "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
         policy: { fingerprint: "e3f1c0de9a7b4f2d8c6a1b0e", version: "1.0.0", internal_rules: 2, public_pinned: true, public_rules: 2, internal_trust_chain: false },
         never_reachable: ["loopback", "link_local", "metadata", "carrier_grade"],
         overridable: ["private", "unique_local"],
@@ -61,6 +64,9 @@ const client: FleetClient = {
     ok: true,
     data: {
       readiness: {
+        scope: "fleet_local",
+        scope_note:
+          "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
         state: "private_requires_approval",
         code: "address_not_permitted",
         summary: "This destination resolves to private or unique-local space and no operator rule permits it.",

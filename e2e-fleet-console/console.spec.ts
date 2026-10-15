@@ -241,6 +241,9 @@ test("14. the egress posture and diagnostic render, and stay read-only", async (
   // The effective policy identity is shown; the policy body is not.
   await expect(page.getByText("e3f1c0de9a7b4f2d8c6a1b0e")).toBeVisible();
   await expect(page.getByText("DNS and policy only; the endpoint is never contacted")).toBeVisible();
+  // Blocker 1 (review): the scope is stated, not implied.
+  await expect(page.getByText(/Scope: Fleet service process/)).toBeVisible();
+  await expect(page.getByText(/not the policy of any customer deployment/)).toBeVisible();
   await expect(page.getByText("metadata", { exact: false }).first()).toBeVisible();
   // The diagnostic is a native GET form: no script, and it works with keyboard input.
   await page.getByLabel("Host").fill("mail.internal.example");

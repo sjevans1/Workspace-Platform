@@ -2779,3 +2779,28 @@ textarea:focus-visible {
 :root[data-theme="dark"] .readiness-result.readiness-blocked .readiness-state {
   color: #f49b88;
 }
+
+/* W29-P0/A2: the guided configuration block in the connection flow. Typed fields
+   are the primary surface; raw JSON is a deliberate, labelled fallback. */
+.guided-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.guided-config > p {
+  margin: 0;
+  max-width: 66ch;
+}
+.advanced {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+.advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.advanced[open] summary {
+  margin-bottom: 10px;
+}

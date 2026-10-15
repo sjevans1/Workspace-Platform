@@ -107,7 +107,12 @@ import {
   templateSummaries,
 } from "../../../packages/templates/index.ts";
 import { instantiateTemplate } from "./template-instantiate.ts";
-import { connectedWorkRoutes, registerConnectorIngress } from "./connected-work.ts";
+import {
+  connectedWorkRoutes,
+  registerConnectorIngress,
+  type ConnectedWorkSeamRoute,
+  type TenantSeam,
+} from "./connected-work.ts";
 import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
 import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import {
@@ -687,6 +692,31 @@ export async function buildApp(
         const r = req as Request;
         if (s) scope(r.actor, s);
         return db.tenant(r.actor.tenant_id, (q) => h(q, r.actor, r, reply));
+      },
+    });
+  // W29-P0/A2: a route that must not hold a tenant transaction across network work.
+  // The wrapper opens NOTHING; the handler uses the seam to open short-lived tenant
+  // transactions (authorization) and releases them before it resolves anything, so
+  // a slow resolver cannot occupy a pool connection. The actor still comes from the
+  // authenticated session, so the seam cannot be used to spoof a tenant.
+  const seamRoute: ConnectedWorkSeamRoute = (method, p, summary, h, options) =>
+    app.route({
+      method,
+      url: `/api/v1${p}`,
+      schema: {
+        summary,
+        tags: [p.split("/")[1]],
+        security: [{ session: [] }, { serviceToken: [] }],
+        ...(integrationOpenApi[`${method} ${p}`] || {}),
+      },
+      config: { rateLimit: options.rateLimit },
+      preHandler: auth,
+      handler: async (req) => {
+        const r = req as Request;
+        const seam: TenantSeam = {
+          run: (fn) => db.tenant(r.actor.tenant_id, fn),
+        };
+        return h(seam, r.actor, r);
       },
     });
   const dependencyReadiness = async () => {
@@ -2743,7 +2773,7 @@ export async function buildApp(
   // registrations stay in their own module rather than enlarging this file, and the
   // provider ingress endpoint is registered separately because, unlike every other
   // route here, it carries no session.
-  connectedWorkRoutes(route);
+  connectedWorkRoutes(route, seamRoute);
   registerConnectorIngress(app, db);
   await registerScim(app, db);
   app.addHook("onClose", async () => {

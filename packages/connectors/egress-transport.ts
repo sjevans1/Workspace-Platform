@@ -31,6 +31,12 @@ import {
 } from "./egress-policy.ts";
 
 export const EGRESS_TRANSPORT_LIMITS = Object.freeze({
+  /**
+   * Resolution is bounded like every other phase. The total budget below covers
+   * DNS, TCP, TLS and HTTP together, so a slow resolver cannot consume the
+   * connection budget and a late answer can never proceed to a dial.
+   */
+  dns_timeout_ms: 4_000,
   connect_timeout_ms: 5_000,
   tls_timeout_ms: 8_000,
   read_timeout_ms: 15_000,
@@ -50,6 +56,7 @@ export type EgressFailureCode =
   | "url_userinfo"
   | "policy_denied"
   | "dns_failure"
+  | "dns_timeout"
   | "connect_timeout"
   | "connect_failure"
   | "tls_failure"
@@ -67,6 +74,8 @@ const SUMMARIES: Record<EgressFailureCode, string> = {
   url_userinfo: "Credentials in a destination URL are refused",
   policy_denied: "The operator egress policy does not permit this destination",
   dns_failure: "The destination could not be resolved",
+  dns_timeout:
+    "The destination could not be resolved within the permitted time",
   connect_timeout:
     "The connection attempt timed out before any request was sent",
   connect_failure: "The connection attempt failed before any request was sent",
@@ -93,6 +102,7 @@ const NOT_SENT: ReadonlySet<EgressFailureCode> = new Set<EgressFailureCode>([
   "url_userinfo",
   "policy_denied",
   "dns_failure",
+  "dns_timeout",
   "connect_timeout",
   "connect_failure",
   "tls_failure",
@@ -105,7 +115,7 @@ export class ProviderEgressError extends Error {
   readonly code: EgressFailureCode;
   readonly delivery_state: EgressDeliveryState;
   readonly summary: string;
-  /** Redacted destination identity: origin and path only, never userinfo/query. */
+  /** Redacted destination identity: scheme, host and port only. Never a path. */
   readonly destination: string | null;
 
   constructor(
@@ -147,6 +157,48 @@ export type EgressTransportDeps = {
   /** Test seam for the socket itself; the default dials the validated address. */
   dial?: TcpDialer;
 };
+
+/**
+ * One monotonic deadline shared by every phase of a request. Each phase may only
+ * spend what is LEFT of the total, so DNS + TCP + TLS + HTTP cannot each consume
+ * their own budget and blow the bound the caller asked for.
+ */
+export type EgressDeadline = {
+  expiresAt: number;
+  remaining: () => number;
+};
+
+export function egressDeadline(totalMs: number, now = Date.now()): EgressDeadline {
+  const expiresAt = now + Math.max(1, totalMs);
+  return { expiresAt, remaining: () => expiresAt - Date.now() };
+}
+
+/**
+ * Runs one phase under an explicit budget. The losing promise is discarded: a
+ * resolver that answers after the budget cannot hand its answer to the caller, so
+ * a late DNS result never proceeds to a dial.
+ */
+export async function runUnderBudget<T>(
+  work: Promise<T>,
+  budgetMs: number,
+  code: EgressFailureCode,
+): Promise<T> {
+  if (budgetMs <= 0) {
+    work.catch(() => undefined);
+    throw new ProviderEgressError(code);
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new ProviderEgressError(code)), budgetMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 const defaultResolve: DnsResolver = async (hostname) => {
   const answers = await dns.lookup(hostname, { all: true, verbatim: true });
@@ -202,16 +254,29 @@ export async function validatedDial(input: {
   allowed_ports?: number[];
   timeoutMs?: number;
   deps?: EgressTransportDeps;
+  /** Shared phase deadline. Created here when the caller did not supply one. */
+  deadline?: EgressDeadline;
 }): Promise<ValidatedDial> {
   const resolve = input.deps?.resolve ?? defaultResolve;
   const dial = input.deps?.dial ?? defaultDial;
   const host = String(input.host || "").trim();
+  const deadline =
+    input.deadline ??
+    egressDeadline(input.timeoutMs ?? EGRESS_TRANSPORT_LIMITS.total_timeout_ms);
   let answers: { address: string; family: number }[];
   try {
-    answers = await resolve(host);
-  } catch {
-    throw new ProviderEgressError("dns_failure");
+    answers = await runUnderBudget(
+      Promise.resolve().then(() => resolve(host)),
+      Math.min(EGRESS_TRANSPORT_LIMITS.dns_timeout_ms, deadline.remaining()),
+      "dns_timeout",
+    );
+  } catch (error) {
+    throw error instanceof ProviderEgressError
+      ? error
+      : new ProviderEgressError("dns_failure");
   }
+  // A late answer is never used, even when it arrived just inside the budget.
+  if (deadline.remaining() <= 0) throw new ProviderEgressError("dns_timeout");
   const decision = authorizeHostAndPort({
     host,
     port: Number(input.port),
@@ -231,7 +296,13 @@ export async function validatedDial(input: {
     address: decision.address,
     port: decision.port,
     family: decision.family,
-    timeoutMs: input.timeoutMs ?? EGRESS_TRANSPORT_LIMITS.connect_timeout_ms,
+    timeoutMs: Math.max(
+      1,
+      Math.min(
+        input.timeoutMs ?? EGRESS_TRANSPORT_LIMITS.connect_timeout_ms,
+        deadline.remaining(),
+      ),
+    ),
   });
   return {
     socket,
@@ -253,11 +324,15 @@ export async function validatedTlsConnect(input: {
   policy: EgressPolicy;
   allowed_ports?: number[];
   timeoutMs?: number;
-  servername?: string;
   deps?: EgressTransportDeps;
+  /** Shared phase deadline. Created by validatedDial when absent. */
+  deadline?: EgressDeadline;
 }): Promise<{ socket: TLSSocket; dial: ValidatedDial }> {
   const dialled = await validatedDial(input);
-  const servername = input.servername ?? dialled.servername;
+  // The TLS identity is ALWAYS the canonical approved host. There is deliberately
+  // no caller override: a caller-chosen SNI could verify a certificate for a name
+  // the policy never approved.
+  const servername = dialled.servername;
   try {
     const secure = await new Promise<TLSSocket>((resolve, reject) => {
       const socket = tlsConnect({
@@ -267,10 +342,19 @@ export async function validatedTlsConnect(input: {
         minVersion: "TLSv1.2",
         ...(input.policy.ca_pem ? { ca: input.policy.ca_pem } : {}),
       });
+      const budget = input.deadline
+        ? Math.max(
+            1,
+            Math.min(
+              EGRESS_TRANSPORT_LIMITS.tls_timeout_ms,
+              input.deadline.remaining(),
+            ),
+          )
+        : EGRESS_TRANSPORT_LIMITS.tls_timeout_ms;
       const timer = setTimeout(() => {
         socket.destroy();
         reject(new ProviderEgressError("tls_failure"));
-      }, EGRESS_TRANSPORT_LIMITS.tls_timeout_ms);
+      }, budget);
       socket.once("secureConnect", () => {
         clearTimeout(timer);
         resolve(socket);
@@ -362,6 +446,11 @@ export async function providerHttpRequest(input: {
   timeoutMs?: number;
   deps?: EgressTransportDeps;
 }): Promise<ProviderHttpResponse> {
+  // The bound covers DNS, TCP, TLS and HTTP together. It starts here, before any
+  // resolution, so a slow resolver can no longer extend the total.
+  const deadline = egressDeadline(
+    input.timeoutMs ?? EGRESS_TRANSPORT_LIMITS.total_timeout_ms,
+  );
   const parsed = parseDestination(input.url, {
     allowed_ports: input.allowed_ports,
   });
@@ -370,7 +459,6 @@ export async function providerHttpRequest(input: {
   const redacted = redactDestination({
     host: parsed.host,
     port: parsed.port,
-    path: parsed.path,
   });
   const body = input.body === undefined ? null : Buffer.from(input.body);
   if (body && body.byteLength > EGRESS_TRANSPORT_LIMITS.max_request_bytes)
@@ -385,6 +473,7 @@ export async function providerHttpRequest(input: {
     allowed_ports: input.allowed_ports,
     timeoutMs: input.timeoutMs,
     deps: input.deps,
+    deadline,
   }).catch((error) => {
     if (error instanceof ProviderEgressError)
       throw new ProviderEgressError(error.code, { destination: redacted });
@@ -403,11 +492,11 @@ export async function providerHttpRequest(input: {
         dialled.socket.destroy();
         reject(new ProviderEgressError(code, { destination: redacted }));
       };
-      const totalMs =
-        input.timeoutMs ?? EGRESS_TRANSPORT_LIMITS.total_timeout_ms;
+      // Only what is LEFT of the one request deadline: the phases above already
+      // spent their share of it.
       const totalTimer = setTimeout(
         () => fail(wrote ? "read_timeout" : "connect_timeout"),
-        totalMs,
+        Math.max(1, deadline.remaining()),
       );
       const headers: Record<string, string> = {};
       for (const [name, value] of Object.entries(input.headers || {})) {
@@ -472,7 +561,13 @@ export async function providerHttpRequest(input: {
       });
       // Idle/read ceiling: a provider that stops talking must not hold the worker.
       dialled.socket.setTimeout(
-        input.timeoutMs ?? EGRESS_TRANSPORT_LIMITS.read_timeout_ms,
+        Math.max(
+          1,
+          Math.min(
+            input.timeoutMs ?? EGRESS_TRANSPORT_LIMITS.read_timeout_ms,
+            deadline.remaining(),
+          ),
+        ),
         () => fail(wrote ? "read_timeout" : "connect_timeout"),
       );
       request.end(body ?? undefined);

@@ -826,7 +826,7 @@ export function buildFleetService(
   // audited with a bounded, non-secret detail.
   app.get("/egress", async (r, reply) => {
     if (!(await operator(r, reply))) return;
-    return { posture: egressPosture(egressPolicy()) };
+    return { posture: egressPosture(egressPolicy(), "fleet_local") };
   });
 
   app.get("/egress/diagnostic", async (r, reply) => {
@@ -834,7 +834,14 @@ export function buildFleetService(
     const query = (r.query ?? {}) as { host?: unknown; port?: unknown };
     const host = String(query.host ?? "").slice(0, 253);
     const port = Number(query.port ?? 0);
-    const readiness = await preflightEndpoint({ host, port, allowed_ports: [...EGRESS_PREFLIGHT_PORTS] });
+    // Declared fleet-local: this is the Fleet process's policy, not a customer
+    // deployment's, and the answer says so rather than implying otherwise.
+    const readiness = await preflightEndpoint({
+      host,
+      port,
+      allowed_ports: [...EGRESS_PREFLIGHT_PORTS],
+      scope: "fleet_local",
+    });
     // State first, so a bounded truncation always keeps the outcome readable. The
     // detail carries no raw address and never the policy body; an audit failure must
     // not break the read.

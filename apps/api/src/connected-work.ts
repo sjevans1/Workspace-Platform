@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import type { Actor } from "../../../packages/auth/index.ts";
 import {
   EGRESS_PREFLIGHT_PORTS,
+  PREFLIGHT_USE_CASES,
   adapterFor,
   adapterImplemented,
   canManageConnection,
@@ -89,6 +90,45 @@ export type ConnectedWorkRoute = (
   limits?: { max: number; timeWindow: string },
 ) => void;
 
+/**
+ * W29-P0/A2: the seam for a route that must NOT hold a tenant transaction across
+ * network work. The route wrapper opens no transaction of its own; the handler
+ * opens short-lived tenant transactions through `run` for authorization and lets
+ * them go before it resolves anything, so a slow resolver cannot occupy a pool
+ * connection. The actor still comes from the authenticated session, so tenant
+ * identity cannot be spoofed through the seam.
+ */
+export type TenantSeam = {
+  run: <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
+};
+
+export type ConnectedWorkSeamRoute = (
+  m: "POST",
+  p: string,
+  summary: string,
+  h: (seam: TenantSeam, a: Actor, r: any) => Promise<any>,
+  options: { rateLimit: { max: number; timeWindow: string } },
+) => void;
+
+/** The live membership and role check, re-read from the database. */
+async function assertActiveAdministrator(
+  q: Query,
+  actor: Pick<Actor, "tenant_id" | "user_id" | "role">,
+): Promise<void> {
+  const row = await one(
+    q,
+    "SELECT role, active FROM memberships WHERE tenant_id=$1 AND user_id=$2",
+    [actor.tenant_id, actor.user_id],
+  );
+  assert(
+    Boolean(row) &&
+      row.active === true &&
+      ["owner", "admin"].includes(String(row.role)),
+    403,
+    "Administrator access required to check provider endpoints",
+  );
+}
+
 /** Connector management and automation authoring are human-session features. */
 function humanSession(a: Actor): void {
   assert(!a.scopes, 403, "Connector management requires a signed-in session");
@@ -130,6 +170,9 @@ const preflightBody = z
     // hostname is a request-shape error, not a policy question.
     host: z.string().min(1).max(253),
     port: z.number().int().min(1).max(65535),
+    // The use case is not decoration: it selects the port vocabulary the check may
+    // consider and the guidance the answer carries back to the administrator.
+    use_case: z.enum(PREFLIGHT_USE_CASES).optional(),
   })
   .strict();
 
@@ -174,7 +217,10 @@ async function recentEvents(q: Query, tenant: string, connectionId: string) {
  * unauthenticated ingress registration below, which resolves its tenant through a
  * SECURITY DEFINER lookup.
  */
-export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
+export function connectedWorkRoutes(
+  route: ConnectedWorkRoute,
+  seamRoute: ConnectedWorkSeamRoute,
+): void {
   route("GET", "/connectors/catalog", "List connector providers and capabilities", async () => {
     const providers = providerCatalog().map((definition) => ({
       ...definition,
@@ -339,27 +385,31 @@ export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
    * own bounded budget. It resolves the hostname and evaluates the SAME policy a
    * real provider connection uses, and it NEVER opens a socket to the destination:
    * a blocked endpoint is not contacted to produce its denial, and the check cannot
-   * be used as an arbitrary port probe (the port vocabulary is fixed).
+   * be used as an arbitrary port probe (the port vocabulary is fixed per use case).
+   *
+   * It runs on the seam, not inside a tenant transaction: authorization is a short
+   * tenant transaction that is released BEFORE the resolution starts, and both the
+   * resolution and the whole check are bounded.
    */
-  route(
+  seamRoute(
     "POST",
     "/connectors/endpoints/preflight",
     "Check whether a provider endpoint may be reached",
-    async (q, a, r) => {
+    async (seam, a, r) => {
       humanSession(a);
       assert(isTenantAdministrator(a), 403, "Administrator access required to check provider endpoints");
       const body = preflightBody.parse(r.body ?? {});
+      await seam.run((q) => assertActiveAdministrator(q, a));
       const readiness = await preflightEndpoint({
         host: body.host,
         port: body.port,
-        allowed_ports: [...EGRESS_PREFLIGHT_PORTS],
+        use_case: body.use_case,
       });
       return { readiness };
     },
-    undefined,
     // Bounded per minute. The route is a human-driven readiness check, and the
     // limiter keys a POST by network identity, so this also bounds a shared NAT.
-    { max: 30, timeWindow: "1 minute" },
+    { rateLimit: { max: 30, timeWindow: "1 minute" } },
   );
 
   route("GET", "/automations/catalog", "List triggers, actions and condition operators", async () => ({

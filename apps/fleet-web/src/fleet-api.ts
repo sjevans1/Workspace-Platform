@@ -211,6 +211,8 @@ export type FleetClient = {
 // W29-P0/A2: the read-only posture the fleet API reports for outbound provider egress,
 // and the canonical readiness answer it shares with the customer endpoint check.
 export type FleetEgressPosture = {
+  scope: string;
+  scope_note: string;
   policy: { fingerprint: string; version: string; internal_rules: number; public_pinned: boolean; public_rules: number; internal_trust_chain: boolean };
   never_reachable: string[];
   overridable: string[];
@@ -219,6 +221,8 @@ export type FleetEgressPosture = {
 };
 
 export type FleetEgressReadiness = {
+  scope: string;
+  scope_note: string;
   state: string;
   code: string;
   summary: string;

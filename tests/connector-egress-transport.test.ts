@@ -154,7 +154,7 @@ before(async () => {
             location: `https://169.254.169.254/latest/meta-data/`,
           })
           .end();
-      if (req.url === "/big") {
+      if (String(req.url).startsWith("/big")) {
         res.writeHead(200, { "content-type": "text/plain" });
         for (let index = 0; index < 40; index += 1)
           res.write("x".repeat(32 * 1024));
@@ -277,10 +277,8 @@ test("A2 transport: an allowed destination connects with the hostname, not the I
     "the caller's header is sent",
   );
   assert.equal(response.redirect, false);
-  assert.equal(
-    response.destination.redacted,
-    `https://${HOST}:${serverPort}/ok`,
-  );
+  // Blocker 4 (review): the redacted destination is scheme, host and port only.
+  assert.equal(response.destination.redacted, `https://${HOST}:${serverPort}`);
 });
 
 test("A2 transport: a redirect is recorded as metadata and never followed", async () => {
@@ -516,9 +514,12 @@ test("A2 transport: a provider that never answers times out as unknown", async (
 // Redaction.
 // ---------------------------------------------------------------------------
 
-test("A2 transport: no error field carries a credential, URL or raw exception", async () => {
+test("A2 transport: no error field carries a credential, a path or a raw exception", async () => {
+  // Secret-looking PATH segments with no query string at all: the classic way a
+  // "redacted URL" leaks a bearer token or a reset key into evidence.
+  const pathSecret = "eyJhbGciOiJIUzI1NiJ9.PATH.SECRET";
   const error = await request({
-    url: `https://${HOST}:${serverPort}/big`,
+    url: `https://${HOST}:${serverPort}/big/${pathSecret}/reset/bd4f8a2c1111222233334444`,
     headers: { authorization: `Bearer ${FAKE_SECRET}` },
   }).catch((caught) => caught);
   const serialized = JSON.stringify({
@@ -533,6 +534,11 @@ test("A2 transport: no error field carries a credential, URL or raw exception", 
     "the credential must not appear",
   );
   assert.ok(!serialized.includes("Bearer"), "the header value must not appear");
+  for (const fragment of [pathSecret, "reset", "/big"])
+    assert.ok(
+      !serialized.includes(fragment),
+      `a path fragment reached an error field: ${fragment}`,
+    );
   assert.equal(
     error.message,
     error.summary,
@@ -545,5 +551,99 @@ test("A2 transport: no error field carries a credential, URL or raw exception", 
     "ENOTFOUND",
   ])
     assert.ok(!serialized.includes(raw), `raw exception text leaked: ${raw}`);
-  assert.equal(error.destination, `https://${HOST}:${serverPort}/big`);
+  assert.equal(error.destination, `https://${HOST}:${serverPort}`);
+});
+
+test("A2 transport: DNS is bounded by the shared request deadline", async () => {
+  // A resolver that never answers must not hold the request: the phase budget ends
+  // it, nothing is dialled, and the failure is a pre-send category.
+  let dialled = 0;
+  const started = Date.now();
+  const stalled = await request({
+    url: `https://${HOST}:${serverPort}/ok`,
+    deps: {
+      resolve: () => new Promise(() => {}),
+      dial: async () => {
+        dialled += 1;
+        throw new Error("must not be dialled");
+      },
+    },
+  }).catch((caught) => caught);
+  const elapsed = Date.now() - started;
+  assert.equal(stalled.code, "dns_timeout");
+  assert.equal(stalled.delivery_state, "not_sent");
+  assert.equal(dialled, 0, "a stalled resolution never reaches a socket");
+  assert.ok(
+    elapsed < EGRESS_TRANSPORT_LIMITS.dns_timeout_ms + 2_000,
+    `resolution must be bounded (took ${elapsed}ms)`,
+  );
+});
+
+test("A2 transport: a late DNS answer never proceeds to a dial", async () => {
+  let dialled = 0;
+  const late = await request({
+    url: `https://${HOST}:${serverPort}/ok`,
+    timeoutMs: 300,
+    deps: {
+      resolve: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        return [{ address: PUBLIC_IP, family: 4 }];
+      },
+      dial: async () => {
+        dialled += 1;
+        throw new Error("must not be dialled");
+      },
+    },
+  }).catch((caught) => caught);
+  assert.equal(late.code, "dns_timeout");
+  assert.equal(dialled, 0, "a late answer is never dialled");
+  // Let the losing promise settle, so the process sees no unhandled rejection.
+  await new Promise((resolve) => setTimeout(resolve, 900));
+});
+
+test("A2 transport: one deadline covers DNS, TCP, TLS and HTTP together", async () => {
+  const started = Date.now();
+  const error = await request({
+    url: `https://${HOST}:${serverPort}/ok`,
+    timeoutMs: 700,
+    deps: {
+      resolve: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return [{ address: PUBLIC_IP, family: 4 }];
+      },
+      dial: async ({ timeoutMs }: { timeoutMs: number }) => {
+        assert.ok(
+          timeoutMs <= 250,
+          `the dial may only spend the remainder (got ${timeoutMs}ms)`,
+        );
+        throw new Error("connect failed");
+      },
+    },
+  }).catch((caught) => caught);
+  const elapsed = Date.now() - started;
+  assert.equal(error.code, "connect_failure");
+  assert.ok(
+    elapsed < 1_400,
+    `the whole request must stay inside the caller's bound (took ${elapsed}ms)`,
+  );
+});
+
+test("A2 transport: TLS identity is the approved host and cannot be overridden", async () => {
+  seen.length = 0;
+  const { socket, dial } = await validatedTlsConnect({
+    host: HOST,
+    port: serverPort,
+    policy: policyWithCa(),
+    allowed_ports: [serverPort],
+    deps: { resolve: resolverFor([PUBLIC_IP]), dial: dialTo(serverPort) },
+    // Deliberately hostile: an unapproved name the policy never evaluated.
+    ...({ servername: "attacker.example.test" } as unknown as Record<never, never>),
+  });
+  assert.equal(dial.servername, HOST, "the dial carries the approved host");
+  assert.equal(
+    (socket as unknown as { servername?: string }).servername,
+    HOST,
+    "the TLS handshake verified the approved host, not the caller's name",
+  );
+  socket.destroy();
 });

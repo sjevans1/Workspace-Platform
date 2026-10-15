@@ -122,6 +122,12 @@ export type ProviderDefinition = {
   polling: boolean;
   incremental_sync: boolean;
   health_check: boolean;
+  /**
+   * W29-P0/A2: whether connecting this provider needs a network endpoint at all.
+   * The synthetic acceptance provider does not, and the Connections surface uses
+   * this to decide whether it shows endpoint fields or says so plainly.
+   */
+  endpoint_required: boolean;
   default_poll_interval_seconds: number;
   /** Adapter-declared ceiling for the bounded event metadata it will accept. */
   max_event_metadata_bytes: number;
@@ -172,6 +178,7 @@ const SYNTHETIC_PROVIDER: ProviderDefinition = {
   polling: true,
   incremental_sync: true,
   health_check: true,
+  endpoint_required: false,
   default_poll_interval_seconds: 300,
   max_event_metadata_bytes: 2048,
 };

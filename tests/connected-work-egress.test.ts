@@ -31,6 +31,8 @@ let member: { cookie: string; csrf: string };
 /** A second administrator, so the rate-limit case has its own budget. */
 let secondAdmin: { cookie: string; csrf: string };
 let tenant = "";
+/** Tenant transactions open right now, observed by the instrumented database. */
+let openTenantTransactions = 0;
 
 /**
  * A fresh administrator session. The readiness route is deliberately rate limited
@@ -55,16 +57,26 @@ async function freshAdmin(): Promise<{ cookie: string; csrf: string }> {
 
 const PUBLIC_IP = "93.184.216.34";
 
+let networkCounter = 0;
+
 async function preflight(
   body: unknown,
   session?: { cookie: string; csrf: string },
+  remoteAddress?: string,
 ): Promise<{ status: number; json: any; text: string }> {
   // A fresh administrator per call keeps each check inside its own per-principal
-  // budget, so the suite does not depend on execution order.
+  // budget, and a distinct client network per call keeps each check inside its own
+  // per-network budget (a POST is network-keyed by the product limiter). Neither
+  // changes the product's limits: the suite simply does not share one client's
+  // allowance across independent cases.
   const caller = session ?? (await freshAdmin());
+  networkCounter += 1;
+  const network =
+    remoteAddress ?? `198.51.100.${(networkCounter % 250) + 1}`;
   const response = await app.inject({
     method: "POST",
     url: "/api/v1/connectors/endpoints/preflight",
+    remoteAddress: network,
     headers: {
       cookie: caller.cookie,
       "x-csrf-token": caller.csrf,
@@ -100,6 +112,20 @@ before(async () => {
     applicationUrl = runtimeUrl.toString();
   }
   db = new Database(applicationUrl, { serialize: pg.emulated });
+  // W29-P0/A2: count open tenant transactions, so a test can prove the readiness
+  // check holds none while it resolves.
+  const realTenant = db.tenant.bind(db);
+  (db as unknown as { tenant: typeof db.tenant }).tenant = (async (
+    tenantId: string,
+    fn: (q: any) => Promise<any>,
+  ) => {
+    openTenantTransactions += 1;
+    try {
+      return await realTenant(tenantId, fn);
+    } finally {
+      openTenantTransactions -= 1;
+    }
+  }) as typeof db.tenant;
   app = await buildApp(db, undefined, false, null);
 
   const setup = await app.inject({
@@ -317,12 +343,158 @@ test("A2 preflight: a diagnostic never contacts the destination", async () => {
 test("A2 preflight: the check is rate limited per principal", async () => {
   setEgressResolverForTesting(async () => [{ address: PUBLIC_IP, family: 4 }]);
   let limited = 0;
+  // One fixed client network, deliberately over its own budget.
   for (let index = 0; index < 40; index += 1) {
     const result = await preflight(
       { host: "mail.example.test", port: 443 },
       secondAdmin,
+      "198.51.100.250",
     );
     if (result.status === 429) limited += 1;
   }
   assert.ok(limited > 0, "the readiness route must be rate limited");
+});
+
+// ---------------------------------------------------------------------------
+// Blocker 2 (review): no tenant transaction is held across resolution.
+// ---------------------------------------------------------------------------
+
+test("A2 preflight: resolution runs with no tenant transaction open", async () => {
+  const session = await freshAdmin();
+  let observedDuringResolution = -1;
+  let resolutions = 0;
+  setEgressResolverForTesting(async () => {
+    resolutions += 1;
+    // Sample the pool state WHILE the resolver is in flight.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    observedDuringResolution = openTenantTransactions;
+    return [{ address: PUBLIC_IP, family: 4 }];
+  });
+  const result = await preflight(
+    { host: "mail.example.test", port: 443 },
+    session,
+  );
+  assert.equal(result.status, 200, result.text);
+  assert.equal(result.json.readiness.state, "ready");
+  assert.equal(resolutions, 1);
+  assert.equal(
+    observedDuringResolution,
+    0,
+    "no tenant transaction may be open while resolving",
+  );
+  assert.equal(openTenantTransactions, 0, "and none is left open afterwards");
+});
+
+test("A2 preflight: a stalled resolver is bounded and never dials", async () => {
+  const session = await freshAdmin();
+  let resolutions = 0;
+  setEgressResolverForTesting(() => {
+    resolutions += 1;
+    return new Promise(() => {});
+  });
+  const started = Date.now();
+  const result = await preflight(
+    { host: "mail.example.test", port: 443 },
+    session,
+  );
+  const elapsed = Date.now() - started;
+  assert.equal(result.status, 200, result.text);
+  assert.equal(result.json.readiness.state, "dns_failure");
+  assert.equal(result.json.readiness.contacted, false);
+  assert.ok(
+    elapsed < 8_000,
+    `the check must be bounded even when resolution stalls (took ${elapsed}ms)`,
+  );
+  assert.equal(resolutions, 1);
+  assert.equal(openTenantTransactions, 0);
+});
+
+test("A2 preflight: the use case shapes the port vocabulary and the guidance", async () => {
+  const session = await freshAdmin();
+  setEgressResolverForTesting(async () => [{ address: PUBLIC_IP, family: 4 }]);
+
+  // An IMAP use case cannot check an HTTPS port.
+  const wrongPort = await preflight(
+    { host: "mail.example.test", port: 443, use_case: "custom_imap" },
+    session,
+  );
+  assert.equal(wrongPort.status, 200, wrongPort.text);
+  assert.equal(wrongPort.json.readiness.state, "unsupported_port");
+  assert.equal(wrongPort.json.readiness.use_case, "custom_imap");
+
+  const imap = await preflight(
+    { host: "mail.example.test", port: 993, use_case: "custom_imap" },
+    session,
+  );
+  assert.equal(imap.json.readiness.state, "ready");
+  assert.match(imap.json.readiness.guidance, /IMAP over TLS on port 993/);
+
+  const https = await preflight(
+    { host: "api.example.test", port: 443, use_case: "https" },
+    session,
+  );
+  assert.equal(https.json.readiness.state, "ready");
+  assert.match(https.json.readiness.guidance, /API token/);
+  assert.equal(https.json.readiness.use_case, "https");
+
+  // An unknown use case is a request-shape error, not a silent default.
+  const unknown = await preflight(
+    { host: "mail.example.test", port: 993, use_case: "imap_plain" },
+    session,
+  );
+  assert.equal(unknown.status, 400);
+
+  // Without a use case the full vocabulary still applies.
+  const plain = await preflight({ host: "mail.example.test", port: 993 }, session);
+  assert.equal(plain.json.readiness.state, "ready");
+  assert.equal(plain.json.readiness.use_case, null);
+  assert.equal(plain.json.readiness.guidance, null);
+});
+
+test("A2 preflight: authorization is re-read live, not taken from the session", async () => {
+  const session = await freshAdmin();
+  setEgressResolverForTesting(async () => [{ address: PUBLIC_IP, family: 4 }]);
+  const allowed = await preflight({ host: "mail.example.test", port: 443 }, session);
+  assert.equal(allowed.status, 200, allowed.text);
+
+  const me = await app.inject({
+    method: "GET",
+    url: "/api/v1/me",
+    headers: { cookie: session.cookie },
+  });
+  const userId = me.json().user.id;
+
+  // A role downgrade must take effect immediately: the same cookie can no longer
+  // check endpoints, because the live membership is re-read inside the short tenant
+  // transaction the seam opens before any resolution happens.
+  await db.tenant(tenant, (q) =>
+    q.query("UPDATE memberships SET role='member' WHERE tenant_id=$1 AND user_id=$2", [
+      tenant,
+      userId,
+    ]),
+  );
+  const downgraded = await preflight(
+    { host: "mail.example.test", port: 443 },
+    session,
+  );
+  assert.equal(downgraded.status, 403, downgraded.text);
+  assert.match(String(downgraded.json?.error || ""), /Administrator access/);
+
+  // And a deactivated membership is refused outright, never answered with a
+  // readiness result: the session layer invalidates it before the handler runs.
+  await db.tenant(tenant, (q) =>
+    q.query("UPDATE memberships SET active=false WHERE tenant_id=$1 AND user_id=$2", [
+      tenant,
+      userId,
+    ]),
+  );
+  const deactivated = await preflight(
+    { host: "mail.example.test", port: 443 },
+    session,
+  );
+  assert.ok(
+    [401, 403].includes(deactivated.status),
+    `a revoked membership must be refused (got ${deactivated.status})`,
+  );
+  assert.equal(deactivated.json?.readiness, undefined);
 });
