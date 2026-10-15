@@ -109,10 +109,13 @@ import {
 import { instantiateTemplate } from "./template-instantiate.ts";
 import {
   connectedWorkRoutes,
+  enableOAuthTestProvider,
   registerConnectorIngress,
+  registerOAuthTestProviderRoutes,
   type ConnectedWorkSeamRoute,
   type TenantSeam,
 } from "./connected-work.ts";
+import { oauthRegistry } from "../../../packages/connectors/oauth-provider.ts";
 import { linkedWorkspaceResources } from "../../../packages/editor/links.ts";
 import { syncWorkspaceResourceLinks } from "../../../packages/editor/link-index.ts";
 import {
@@ -711,12 +714,15 @@ export async function buildApp(
       },
       config: { rateLimit: options.rateLimit },
       preHandler: auth,
-      handler: async (req) => {
+      handler: async (req, reply) => {
         const r = req as Request;
         const seam: TenantSeam = {
           run: (fn) => db.tenant(r.actor.tenant_id, fn),
+          // The initiating browser session, for the non-reversible binding an
+          // authorization attempt records. It is never stored or returned.
+          session_token: String((r.cookies as Record<string, string>)?.workspace_session ?? ""),
         };
-        return h(seam, r.actor, r);
+        return h(seam, r.actor, r, reply);
       },
     });
   const dependencyReadiness = async () => {
@@ -2774,6 +2780,13 @@ export async function buildApp(
   // provider ingress endpoint is registered separately because, unlike every other
   // route here, it carries no session.
   connectedWorkRoutes(route, seamRoute);
+  // W29-P0/A3: the deterministic acceptance OAuth provider exists only when the
+  // deployment enabled test wiring, which production refuses at registry load. In
+  // production nothing is registered here and no fake provider route is mounted.
+  if (oauthRegistry().test_provider_enabled) {
+    enableOAuthTestProvider();
+    registerOAuthTestProviderRoutes(app);
+  }
   registerConnectorIngress(app, db);
   await registerScim(app, db);
   app.addHook("onClose", async () => {

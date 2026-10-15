@@ -23,3 +23,6 @@ export * from "./egress-policy.ts";
 export * from "./egress-transport.ts";
 export * from "./egress-runtime.ts";
 export * from "./connection-config.ts";
+export * from "./oauth-provider.ts";
+export * from "./oauth.ts";
+export * from "./oauth-test-provider.ts";

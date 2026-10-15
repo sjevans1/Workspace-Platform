@@ -22,12 +22,27 @@ import { randomUUID } from "node:crypto";
 import type { Actor } from "../../../packages/auth/index.ts";
 import {
   CREDENTIAL_METADATA_KEYS,
+  OAUTH_TEST_PROVIDER_KEY,
+  completeAuthorizationAttempt,
+  consumeAuthorizationAttempt,
+  exchangeAuthorizationCode,
+  failAuthorizationAttempt,
+  oauthDescriptorFor,
+  oauthRegistry,
+  issueTestCode,
+  oauthStatusFor,
+  providerKeys,
+  registerOAuthTestProvider,
+  resetOAuthTestProvider,
+  startAuthorizationAttempt,
+  testOAuthTransport,
   EGRESS_PREFLIGHT_PORTS,
   PREFLIGHT_USE_CASES,
   adapterFor,
   buildConnectionConfig,
   adapterImplemented,
   canManageConnection,
+  canReadConnection,
   CAPABILITY_CATEGORY,
   CAPABILITY_VOCABULARY_VERSION,
   CONNECTOR_CAPABILITIES,
@@ -102,13 +117,19 @@ export type ConnectedWorkRoute = (
  */
 export type TenantSeam = {
   run: <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
+  /**
+   * The initiating browser session's token. It is used ONLY to derive the
+   * non-reversible session digest an authorization attempt is bound to; it is never
+   * stored, returned or logged.
+   */
+  session_token: string;
 };
 
 export type ConnectedWorkSeamRoute = (
-  m: "POST",
+  m: "GET" | "POST",
   p: string,
   summary: string,
-  h: (seam: TenantSeam, a: Actor, r: any) => Promise<any>,
+  h: (seam: TenantSeam, a: Actor, r: any, reply: any) => Promise<any>,
   options: { rateLimit: { max: number; timeWindow: string } },
 ) => void;
 
@@ -183,6 +204,29 @@ const secretBody = z.object({
 
 const enabledBody = z.object({ enabled: z.boolean() });
 
+const oauthStartBody = z
+  .object({
+    capabilities: z.array(z.string()).max(16).optional().default([]),
+  })
+  .strict();
+
+/**
+ * The transport for one descriptor. Production uses A2's governed HTTPS client; the
+ * acceptance fixture is answered in-process, and it exists only when the deployment
+ * enabled test wiring (which production refuses at load).
+ */
+function oauthTransportFor(descriptor: { key: string; test_only: boolean }) {
+  if (descriptor.test_only) {
+    assert(
+      descriptor.key === OAUTH_TEST_PROVIDER_KEY,
+      500,
+      "Only the acceptance provider may use the acceptance transport",
+    );
+    return testOAuthTransport(descriptor as never);
+  }
+  return undefined;
+}
+
 const preflightBody = z
   .object({
     // Bounded before it ever reaches the resolver: a long or control-character
@@ -236,6 +280,123 @@ async function recentEvents(q: Query, tenant: string, connectionId: string) {
  * unauthenticated ingress registration below, which resolves its tenant through a
  * SECURITY DEFINER lookup.
  */
+/**
+ * W29-P0/A3: installs the deterministic acceptance OAuth provider. The caller is the
+ * deployment's startup path, and it only calls this when the environment enables test
+ * wiring: `loadOAuthRegistry` refuses that in production, and this function is never
+ * reached there, so a production deployment has no fake provider key, descriptor,
+ * adapter or browser route.
+ */
+export function enableOAuthTestProvider(): void {
+  // Idempotent: a process may build more than one application (tests, workers).
+  if (!providerKeys().includes(OAUTH_TEST_PROVIDER_KEY)) registerOAuthTestProvider();
+  resetOAuthTestProvider();
+}
+
+/**
+ * The acceptance provider's BROWSER half: a real consent page the administrator is
+ * redirected to, with Approve and Deny. It is mounted only when the deployment
+ * enabled test wiring (production refuses that at load), it validates every
+ * parameter against the registered descriptor, and it never redirects anywhere but
+ * the exact registered callback, so it cannot become an open redirect.
+ */
+export function registerOAuthTestProviderRoutes(app: FastifyInstance): void {
+  const escape = (value: string) =>
+    value.replace(/[&<>"']/g, (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!,
+    );
+
+  app.get("/api/v1/oauth-test/authorize", async (r, reply) => {
+    const descriptor = oauthDescriptorFor(OAUTH_TEST_PROVIDER_KEY);
+    if (!descriptor) return reply.code(404).send("Not available");
+    const query = (r.query ?? {}) as Record<string, string>;
+    if (
+      String(query.client_id ?? "") !== descriptor.client_id ||
+      String(query.redirect_uri ?? "") !== descriptor.redirect_uri ||
+      String(query.response_type ?? "") !== "code" ||
+      String(query.code_challenge_method ?? "") !== "S256" ||
+      !String(query.code_challenge ?? "") ||
+      !String(query.state ?? "")
+    )
+      return reply.code(400).send("This authorization request is not registered");
+    const scopes = String(query.scope ?? "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((scope) => descriptor.scopes.some((entry) => entry.scope === scope));
+    if (!scopes.length) return reply.code(400).send("No registered scope was requested");
+    const hidden = [
+      "client_id",
+      "redirect_uri",
+      "response_type",
+      "code_challenge",
+      "code_challenge_method",
+      "state",
+      "scope",
+    ]
+      .map(
+        (name) =>
+          `<input type="hidden" name="${name}" value="${escape(String(query[name] ?? ""))}" />`,
+      )
+      .join("\n      ");
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(`<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Acceptance OAuth provider (test only)</title></head>
+<body>
+<main>
+  <h1>Acceptance OAuth provider</h1>
+  <p>This page is part of the deterministic acceptance fixture. It is not a real provider and it exists only when a deployment explicitly enables test wiring.</p>
+  <p><strong>Workspace is asking for:</strong> ${scopes.map(escape).join(", ")}</p>
+  <p><strong>Account:</strong> operations@example.test</p>
+  <form method="post" action="/api/v1/oauth-test/approve">
+      ${hidden}
+    <button type="submit" name="decision" value="approve">Approve</button>
+    <button type="submit" name="decision" value="deny">Deny</button>
+  </form>
+</main>
+</body>
+</html>`);
+  });
+
+  app.post("/api/v1/oauth-test/approve", async (r, reply) => {
+    const descriptor = oauthDescriptorFor(OAUTH_TEST_PROVIDER_KEY);
+    if (!descriptor) return reply.code(404).send("Not available");
+    const body = (r.body ?? {}) as Record<string, string>;
+    if (
+      String(body.client_id ?? "") !== descriptor.client_id ||
+      String(body.redirect_uri ?? "") !== descriptor.redirect_uri ||
+      String(body.code_challenge_method ?? "") !== "S256" ||
+      !String(body.code_challenge ?? "")
+    )
+      return reply.code(400).send("This authorization request is not registered");
+    const state = String(body.state ?? "");
+    if (!state) return reply.code(400).send("A state is required");
+    const scopes = String(body.scope ?? "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((scope) => descriptor.scopes.some((entry) => entry.scope === scope));
+    const redirect = new URL(descriptor.redirect_uri);
+    if (String(body.decision ?? "") !== "approve") {
+      redirect.searchParams.set("error", "access_denied");
+      redirect.searchParams.set("state", state);
+      return reply.redirect(redirect.toString(), 303);
+    }
+    const issued = issueTestCode({
+      descriptor_key: descriptor.key,
+      redirect_uri: descriptor.redirect_uri,
+      scopes,
+      challenge: String(body.code_challenge ?? ""),
+      method: "S256",
+      behaviour: "approve",
+    });
+    redirect.searchParams.set("code", issued.code);
+    redirect.searchParams.set("state", state);
+    return reply.redirect(redirect.toString(), 303);
+  });
+}
+
 export function connectedWorkRoutes(
   route: ConnectedWorkRoute,
   seamRoute: ConnectedWorkSeamRoute,
@@ -256,6 +417,22 @@ export function connectedWorkRoutes(
       // The keys a connection configuration may actually carry: anything else would
       // be dropped by persistence, so the guided form refuses it instead.
       config_keys: [...CREDENTIAL_METADATA_KEYS],
+      // Registered OAuth descriptors, in the customer's language. `connectable` is
+      // true only when this deployment has an executable authorization path: a
+      // provider that is merely declared never offers a Connect control.
+      oauth: [...oauthRegistry().descriptors.values()].map((descriptor) => ({
+        provider_key: descriptor.key,
+        display_name: descriptor.display_name,
+        test_only: descriptor.test_only,
+        connectable: true,
+        refresh_rotation: descriptor.refresh_rotation,
+        scopes: descriptor.scopes.map((entry) => ({
+          scope: entry.scope,
+          capability: entry.capability,
+          label: entry.label,
+          description: entry.description,
+        })),
+      })),
       limits: {
         max_connections_per_tenant: CONNECTOR_LIMITS.max_connections_per_tenant,
         max_user_connections_per_user: CONNECTOR_LIMITS.max_user_connections_per_user,
@@ -435,6 +612,283 @@ export function connectedWorkRoutes(
     // Bounded per minute. The route is a human-driven readiness check, and the
     // limiter keys a POST by network identity, so this also bounds a shared NAT.
     { rateLimit: { max: 30, timeWindow: "1 minute" } },
+  );
+
+  /**
+   * W29-P0/A3: the authorization journey's API.
+   *
+   * `start` and the callback run on the seam, because both span a network step: the
+   * short tenant transaction creates or consumes the attempt, the provider exchange
+   * happens with NO transaction held, and a second short transaction commits the
+   * fenced outcome. Nothing in these routes holds a pool connection across I/O.
+   */
+  seamRoute(
+    "POST",
+    "/connectors/connections/:id/oauth/start",
+    "Start an external account authorization",
+    async (seam, a, r) => {
+      humanSession(a);
+      const body = oauthStartBody.parse(r.body ?? {});
+      const id = connectionParam(r);
+      const prepared = await seam.run(async (q) => {
+        const connection = await getConnection(q, a, id);
+        assert(
+          canManageConnection(a, connection as any),
+          403,
+          "You cannot authorize this connection",
+        );
+        const descriptor = oauthDescriptorFor(String(connection.provider_key));
+        assert(
+          descriptor,
+          409,
+          "This provider is not available for authorization in this deployment",
+        );
+        const started = await startAuthorizationAttempt(q, {
+          tenant: a.tenant_id,
+          connection: {
+            id: String(connection.id),
+            provider_key: String(connection.provider_key),
+            status: String(connection.status),
+            enabled: connection.enabled !== false,
+          },
+          descriptor,
+          initiated_by: a.user_id,
+          session_token: seam.session_token,
+          requested_capabilities: body.capabilities,
+        });
+        return {
+          authorization_url: started.authorization_url,
+          expires_at: started.expires_at,
+          provider: descriptor.key,
+        };
+      });
+      // Only the registered authorization URL leaves the server: no state, verifier
+      // or client material is exposed as a JSON value.
+      return { authorization: prepared };
+    },
+    { rateLimit: { max: 20, timeWindow: "5 minutes" } },
+  );
+
+  seamRoute(
+    "POST",
+    "/connectors/connections/:id/oauth/reconnect",
+    "Reconnect an external account after a lost grant",
+    async (seam, a, r) => {
+      humanSession(a);
+      const body = oauthStartBody.parse(r.body ?? {});
+      const id = connectionParam(r);
+      const prepared = await seam.run(async (q) => {
+        const connection = await getConnection(q, a, id);
+        assert(
+          canManageConnection(a, connection as any),
+          403,
+          "You cannot authorize this connection",
+        );
+        // A revoked connection is terminal: reconnecting it would resurrect a
+        // withdrawn grant, so a fresh connection is required instead.
+        assert(
+          String(connection.status) !== "revoked",
+          409,
+          "A revoked connection cannot be reconnected",
+        );
+        const descriptor = oauthDescriptorFor(String(connection.provider_key));
+        assert(
+          descriptor,
+          409,
+          "This provider is not available for authorization in this deployment",
+        );
+        const started = await startAuthorizationAttempt(q, {
+          tenant: a.tenant_id,
+          connection: {
+            id: String(connection.id),
+            provider_key: String(connection.provider_key),
+            status: String(connection.status),
+            enabled: connection.enabled !== false,
+          },
+          descriptor,
+          initiated_by: a.user_id,
+          session_token: seam.session_token,
+          requested_capabilities: body.capabilities.length
+            ? body.capabilities
+            : (connection.capabilities_requested as string[]) || [],
+        });
+        return {
+          authorization_url: started.authorization_url,
+          expires_at: started.expires_at,
+          provider: descriptor.key,
+        };
+      });
+      return { authorization: prepared };
+    },
+    { rateLimit: { max: 20, timeWindow: "5 minutes" } },
+  );
+
+  /**
+   * The provider callback. It is a top-level browser GET, so the session cookie is
+   * SameSite=Lax compatible; the state, not a CSRF header, is the binding. Every
+   * outcome ends in a 303 to a CLEAN application URL: no code, state, error
+   * description or token ever appears in the address the browser keeps.
+   */
+  seamRoute(
+    "GET",
+    "/connectors/oauth/callback",
+    "Complete an external account authorization",
+    async (seam, a, r, reply) => {
+      humanSession(a);
+      const query = (r.query ?? {}) as Record<string, unknown>;
+      const appUrl = String(process.env.APP_URL || "").replace(/\/$/, "") || "";
+      const clean = (outcome: string, connection?: string | null) =>
+        `${appUrl}/?oauth=${outcome}${connection ? `&connection=${connection}` : ""}`;
+      const state = String(query.state ?? "").slice(0, 200);
+      const code = String(query.code ?? "").slice(0, 4096);
+      const providerError = query.error ? String(query.error).slice(0, 64) : "";
+
+      // A provider-side denial or error closes the attempt it belongs to. The
+      // attempt is resolved through the same binding proof as a success, so a
+      // forged `error` in the query cannot close someone else's authorization.
+      if (providerError) {
+        const closed = await seam.run((q) =>
+          consumeAuthorizationAttempt(q, {
+            tenant: a.tenant_id,
+            state,
+            session_token: seam.session_token,
+          }),
+        );
+        if (closed.ok)
+          await seam.run((q) =>
+            failAuthorizationAttempt(q, {
+              tenant: a.tenant_id,
+              attempt_id: closed.consumed.attempt.id,
+              category:
+                providerError === "access_denied" ? "provider_denied" : "exchange_failed",
+              status: "denied",
+            }),
+          );
+        return reply.redirect(clean("denied"), 303);
+      }
+      if (!state || !code) return reply.redirect(clean("invalid"), 303);
+
+      const consumed = await seam.run((q) =>
+        consumeAuthorizationAttempt(q, {
+          tenant: a.tenant_id,
+          state,
+          session_token: seam.session_token,
+        }),
+      );
+      if (!consumed.ok)
+        return reply.redirect(
+          clean(consumed.category === "provider_denied" ? "denied" : "error"),
+          303,
+        );
+
+      const attempt = consumed.consumed.attempt;
+      const descriptor = oauthDescriptorFor(attempt.provider_key);
+      if (!descriptor) {
+        await seam.run((q) =>
+          failAuthorizationAttempt(q, {
+            tenant: a.tenant_id,
+            attempt_id: attempt.id,
+            category: "unsupported_provider",
+          }),
+        );
+        return reply.redirect(clean("error", attempt.connection_id), 303);
+      }
+
+      // The exchange happens with NO tenant transaction held, through A2's governed
+      // transport (or, for the acceptance fixture only, its in-process transport).
+      const exchanged = await exchangeAuthorizationCode({
+        descriptor,
+        code,
+        verifier: consumed.consumed.verifier,
+        transport: oauthTransportFor(descriptor),
+      });
+      if (!exchanged.ok) {
+        await seam.run((q) =>
+          failAuthorizationAttempt(q, {
+            tenant: a.tenant_id,
+            attempt_id: attempt.id,
+            category: exchanged.category,
+            status: exchanged.category === "provider_denied" ? "denied" : "failed",
+          }),
+        );
+        return reply.redirect(
+          clean(
+            exchanged.category === "provider_denied" ? "denied" : "error",
+            attempt.connection_id,
+          ),
+          303,
+        );
+      }
+
+      // The fenced commit: a second short transaction that re-checks the attempt
+      // generation, the connection state and the grant before sealing anything.
+      try {
+        await seam.run((q) =>
+          completeAuthorizationAttempt(q, {
+            tenant: a.tenant_id,
+            attempt,
+            descriptor,
+            tokens: exchanged.outcome,
+          }),
+        );
+      } catch (error) {
+        const category = String((error as { category?: string }).category ?? "exchange_failed");
+        await seam
+          .run((q) =>
+            failAuthorizationAttempt(q, {
+              tenant: a.tenant_id,
+              attempt_id: attempt.id,
+              category: category as never,
+            }),
+          )
+          .catch(() => undefined);
+        return reply.redirect(clean("error", attempt.connection_id), 303);
+      }
+      return reply.redirect(clean("connected", attempt.connection_id), 303);
+    },
+    { rateLimit: { max: 60, timeWindow: "5 minutes" } },
+  );
+
+  /** The safe, non-secret OAuth status of one connection. */
+  route(
+    "GET",
+    "/connectors/connections/:id/oauth/status",
+    "Read the OAuth status of one connection",
+    async (q, a, r) => {
+      humanSession(a);
+      const connection = await getConnection(q, a, connectionParam(r));
+      assert(
+        canReadConnection(a, connection as any),
+        403,
+        "You cannot read this connection",
+      );
+      const descriptor = oauthDescriptorFor(String(connection.provider_key));
+      const status = await oauthStatusFor(q, a.tenant_id, String(connection.id));
+      const credentials = await credentialsFor(q, a.tenant_id, String(connection.id));
+      return {
+        oauth: {
+          ...status,
+          provider_registered: Boolean(descriptor),
+          provider_display_name: descriptor?.display_name ?? null,
+          test_only: descriptor?.test_only ?? false,
+          scopes: (descriptor?.scopes ?? []).map((entry) => ({
+            scope: entry.scope,
+            capability: entry.capability,
+            label: entry.label,
+            description: entry.description,
+          })),
+          grant: credentials
+            .filter((row) => ["oauth_access", "oauth_refresh"].includes(String(row.kind)))
+            .map((row) => ({
+              kind: row.kind,
+              key_version: row.key_version,
+              rotated_at: row.rotated_at,
+              scopes: (row.metadata as Record<string, unknown>)?.scopes ?? [],
+              expires_at: (row.metadata as Record<string, unknown>)?.expires_at ?? null,
+            })),
+        },
+      };
+    },
   );
 
   route("GET", "/automations/catalog", "List triggers, actions and condition operators", async () => ({
