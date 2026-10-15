@@ -27,7 +27,23 @@ export default defineConfig({
   outputDir: "test-results/connected-work",
   retries: 0,
   forbidOnly: !!process.env.CI,
-  reporter: [["list"]],
+  // #224: traces and screenshots are retained only on failure, so a GREEN run
+  // used to leave this directory empty and the connected-work-results artifact
+  // was never published. The evidence reporter writes a tiny deterministic
+  // manifest into the same directory for every outcome, so a passing lane leaves
+  // its own evidence behind. It reports only; it never changes a verdict.
+  reporter: [
+    ["list"],
+    [
+      "./e2e-connected-work/evidence-reporter.ts",
+      {
+        outputFile: "test-results/connected-work/connected-work-evidence.json",
+        lane: "connected-work-and-automations",
+        retries: 0,
+        expectedTests: 7,
+      },
+    ],
+  ],
   use: {
     baseURL: process.env.E2E_BASE_URL || "http://localhost:3000",
     headless: true,

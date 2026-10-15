@@ -630,6 +630,11 @@ jobs:
           # the deployment job, and traces/screenshots land in
           # test-results/connected-work, uploaded as their own artifact below.
           npx playwright test --config=playwright.connected-work.config.ts
+          # #224: on a GREEN run no traces or screenshots are retained, so the
+          # lane's own deterministic evidence manifest is the artifact the
+          # deployment job publishes. If it is missing the evidence contract is
+          # broken, so fail here rather than upload nothing and report success.
+          test -s test-results/connected-work/connected-work-evidence.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
