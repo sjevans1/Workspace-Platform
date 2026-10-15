@@ -19,12 +19,15 @@ import type { Database, Query } from "../database/index.ts";
 import { one } from "../database/index.ts";
 import type { Actor } from "../auth/index.ts";
 import {
+  FAILURE_CATEGORIES,
   RETRY_POLICY,
   backoffSeconds,
   classifyStepFailure,
+  isRetryableCategory,
   isTenantAdministrator,
   markEventDispatched,
   pendingConnectorEvents,
+  type FailureCategory,
 } from "../connectors/index.ts";
 import {
   WORKFLOW_LIMITS,
@@ -1324,9 +1327,25 @@ function classifyActionFailure(error: unknown): {
   category: string;
   retryable: boolean;
 } {
-  const details = (error as { details?: { fatal?: boolean } })?.details;
+  const details = (
+    error as { details?: { fatal?: boolean; category?: string } }
+  )?.details;
   const statusCode = (error as { statusCode?: number })?.statusCode;
   const message = String((error as Error)?.message || "");
+  // W29-P0/A1: a terminal external-effect state names its own category, so run
+  // history can distinguish an ordinary failure from `outcome_unknown`, where the
+  // provider may already hold the action and only a human may re-attempt it.
+  if (
+    details?.category &&
+    FAILURE_CATEGORIES.includes(details.category as FailureCategory)
+  )
+    return {
+      category: details.category,
+      retryable:
+        details.fatal === true
+          ? false
+          : isRetryableCategory(details.category as FailureCategory),
+    };
   if (
     statusCode === 403 &&
     details?.fatal === true &&
@@ -1691,7 +1710,22 @@ async function executeRun(
       const until = Number(
         Date.parse(String(previous.retry_state?.waiting_until || "")),
       );
-      if (Number.isFinite(until) && until > clock(deps).getTime()) {
+      // W29-P0/A1: a step parked on a durable EXTERNAL EFFECT must re-enter its
+      // action once its poll deadline passes, because only the action can read the
+      // effect's committed outcome. A plain wait (workflow.delay) completes here,
+      // exactly as before.
+      const awaitingEffectId = previous.retry_state?.external_effect_id
+        ? String(previous.retry_state.external_effect_id)
+        : null;
+      if (
+        Number.isFinite(until) &&
+        until > clock(deps).getTime() &&
+        // An external-effect step is gated by the RUN's own next_attempt_at (and a
+        // terminal effect wakes that run), so it re-enters its action as soon as it
+        // is claimed: the action either settles from the durable state or parks
+        // again with a fresh poll deadline.
+        !awaitingEffectId
+      ) {
         // The deadline has not passed. Restore the waiting state and stop, so an
         // early claim (a recovered lease, a forced retry) cannot re-arm the wait
         // with a fresh deadline or add a spurious attempt.
@@ -1702,7 +1736,7 @@ async function executeRun(
         );
         return "waiting";
       }
-      if (Number.isFinite(until)) {
+      if (Number.isFinite(until) && !awaitingEffectId) {
         await recordStep(
           q,
           tenant,
@@ -1800,9 +1834,29 @@ async function executeRun(
         "Action node is missing from the revision",
       );
     }
-    const attempt = (previous ? Number(previous.attempt) : 0) + 1;
+    const awaitingEffect =
+      previous &&
+      previous.status === "waiting" &&
+      previous.retry_state?.external_effect_id
+        ? String(previous.retry_state.external_effect_id)
+        : null;
+    // Polling a durable external effect must not consume the retry budget, so a
+    // re-entry keeps the attempt it parked with; a genuine retry still increments.
+    const attempt = awaitingEffect
+      ? Number(previous.attempt)
+      : (previous ? Number(previous.attempt) : 0) + 1;
     const definitionAction = actionFor(step.operation);
-    await recordStep(q, tenant, run.id, step, "running", attempt, {}, null, {});
+    await recordStep(
+      q,
+      tenant,
+      run.id,
+      step,
+      "running",
+      attempt,
+      {},
+      null,
+      awaitingEffect ? { external_effect_id: awaitingEffect } : {},
+    );
     try {
       // The service-principal allowlist is enforced HERE, at the one place every
       // step passes through, so no action can bypass it, and INSIDE the step's own
@@ -1837,6 +1891,11 @@ async function executeRun(
       );
       assertNonSecret(outcome.result || {});
       if (outcome.waiting_until) {
+        // A step parked on a durable external effect carries the effect id, so the
+        // next tick re-enters the action instead of completing the step.
+        const effectId = (
+          outcome.result as { external_effect?: { id?: string } } | undefined
+        )?.external_effect?.id;
         await recordStep(
           q,
           tenant,
@@ -1848,6 +1907,7 @@ async function executeRun(
           null,
           {
             waiting_until: outcome.waiting_until.toISOString(),
+            ...(effectId ? { external_effect_id: String(effectId) } : {}),
           },
         );
         await q.query(

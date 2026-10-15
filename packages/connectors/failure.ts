@@ -22,7 +22,13 @@ export type FailureCategory =
   | "connector_attention_required"
   | "capability_missing"
   | "not_found"
-  | "conflict";
+  | "conflict"
+  /**
+   * W29-P0/A1: an external effect may have reached the provider but its outcome
+   * cannot be proven. It is deliberately NOT retryable: a blind retry could send
+   * the same message twice, so only an explicit human decision may re-attempt it.
+   */
+  | "outcome_unknown";
 
 export const FAILURE_CATEGORIES: FailureCategory[] = [
   "transient",
@@ -37,6 +43,7 @@ export const FAILURE_CATEGORIES: FailureCategory[] = [
   "capability_missing",
   "not_found",
   "conflict",
+  "outcome_unknown",
 ];
 
 /** Retry is bounded and only ever applies to a genuinely transient condition. */

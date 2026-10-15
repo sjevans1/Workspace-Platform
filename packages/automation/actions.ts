@@ -17,6 +17,19 @@ import { emit } from "../events/index.ts";
 import { requireAccess } from "../permissions/index.ts";
 import { isCapability, type Capability } from "../connectors/index.ts";
 import {
+  connectorReachDenial,
+  isRetryableCategory,
+  providerActionIdempotent,
+  type FailureCategory,
+} from "../connectors/index.ts";
+import {
+  EFFECT_LIMITS,
+  ensureExternalEffect,
+  externalEffectEvidence,
+  externalEffectForRunStep,
+  type ExternalEffectRow,
+} from "./effects.ts";
+import {
   createRecord,
   updateRecordCanonical,
 } from "../../apps/api/src/domain.ts";
@@ -25,8 +38,14 @@ import type { RunAuthority } from "./engine.ts";
 
 /**
  * The port the engine uses to reach the connector plane without the automation
- * package importing a provider adapter. It is intentionally narrow: inspect a
- * connection's authority facts, then invoke one declared action.
+ * package importing a provider adapter.
+ *
+ * W29-P0/A1: it is deliberately INSPECT-ONLY. The engine plans a durable external
+ * effect and a worker executes it outside every tenant transaction, so there is no
+ * longer any way for a workflow step to perform provider I/O while a database
+ * transaction is held. Provider invocation lives behind
+ * `invokeProviderAction` in the connectors package, which the external-effect
+ * worker phase calls with no transaction open.
  */
 export type ConnectorActionPort = {
   inspect(input: {
@@ -43,13 +62,6 @@ export type ConnectorActionPort = {
     capabilities_granted: string[];
     provider_key: string;
   } | null>;
-  invoke(input: {
-    tenant_id: string;
-    connection_id: string;
-    action: string;
-    capability: string;
-    payload: Record<string, unknown>;
-  }): Promise<Record<string, unknown>>;
 };
 
 export type ActionExecutionContext = {
@@ -411,10 +423,12 @@ const connectorInvoke: ActionDefinition = {
     return parsed;
   },
   async run(context) {
-    const { config, authority, actor, connectorPort, tenant_id } = context;
+    const { q, config, authority, actor, connectorPort, tenant_id, run, step } =
+      context;
     const connectionId = String(config.connection_id);
     const capability = config.capability as Capability;
     const action = String(config.action);
+    const payload = (config.payload as Record<string, unknown>) || {};
 
     const denied = (reason: string): HttpError => {
       const error = new HttpError(403, `Connector access denied: ${reason}`);
@@ -426,6 +440,43 @@ const connectorInvoke: ActionDefinition = {
       return error;
     };
 
+    // W29-P0/A1: a durable effect that already reached a terminal state is
+    // reconciled FIRST, before any live connection authorization is applied.
+    // Settling an effect the provider already performed is bookkeeping, not
+    // another external action: a connection revoked after the provider call must
+    // never rewrite a successful outcome into a failure. Live authorization is
+    // enforced on NEW work (planning a first effect, or re-arming a retry) and at
+    // the worker's pre-I/O boundary, so a revoked connection still performs no
+    // further provider I/O.
+    const existing = await externalEffectForRunStep(
+      q,
+      tenant_id,
+      run.id,
+      step.seq,
+      connectorInvoke.key,
+    );
+    if (existing) {
+      const evidence = externalEffectEvidence(existing);
+      if (existing.status === "succeeded")
+        return {
+          result: boundedResult({
+            ...((existing.result as Record<string, unknown>) || {}),
+            external_effect: evidence,
+          }),
+        };
+      const terminal =
+        existing.status === "outcome_unknown" ||
+        existing.status === "cancelled" ||
+        (existing.status === "failed" &&
+          !isRetryableCategory(
+            (existing.error_category || "") as FailureCategory,
+          ));
+      // `planned`, `claimed` and a RETRYABLE failure all fall through to the live
+      // authorization check below, because re-arming or waiting on them is new
+      // work rather than reconciliation of a committed outcome.
+      if (terminal) throw effectFailure(existing);
+    }
+
     const inspected = await connectorPort.inspect({
       tenant_id,
       connection_id: connectionId,
@@ -433,36 +484,113 @@ const connectorInvoke: ActionDefinition = {
       user_id: authority.user_id ?? actor.user_id ?? null,
     });
     if (!inspected || !inspected.exists) throw denied("connection not found");
-    if (!inspected.enabled) throw denied("connection is disabled");
-    if (inspected.status !== "connected")
-      throw denied("connection is not connected");
-    if (!inspected.capabilities_granted.includes(capability))
-      throw denied("connection does not hold the required capability");
+    // The reach rule is one pure function, shared with the worker phase that
+    // re-checks it immediately before provider I/O.
+    const reachDenial = connectorReachDenial({
+      facts: inspected,
+      capability,
+      authority_kind: authority.kind,
+      authority_user_id: authority.user_id ?? actor.user_id ?? null,
+      actor_role: actor.role,
+    });
+    if (reachDenial) throw denied(reachDenial);
 
-    // Ownership decides reach. A user-owned connection belongs to exactly one
-    // delegated user; a tenant-shared connection is reachable by an administrator
-    // or by the tenant's own service principal. Everything else fails closed.
-    const ownsConnection =
-      inspected.ownership === "user" &&
-      inspected.owner_user_id === authority.user_id;
-    const sharedReachable =
-      inspected.ownership === "tenant" &&
-      (authority.kind === "service_principal" ||
-        actor.role === "owner" ||
-        actor.role === "admin");
-    if (!ownsConnection && !sharedReachable)
-      throw denied("connection is not available to this run's authority");
-
-    const result = await connectorPort.invoke({
-      tenant_id,
+    // W29-P0/A1: the provider is NOT invoked here. The action plans (or reuses) a
+    // durable external effect and the step parks until a worker has executed it
+    // outside every tenant transaction. See packages/automation/effects.ts.
+    const authorityUserId = authority.user_id ?? actor.user_id;
+    assert(
+      authorityUserId,
+      403,
+      "Connector action requires a resolved authority",
+    );
+    const effect = await ensureExternalEffect(q, tenant_id, {
+      run_id: run.id,
+      workflow_id: run.workflow_id,
+      revision: run.revision,
+      step_seq: step.seq,
+      step_attempt: step.attempt,
+      operation: connectorInvoke.key,
       connection_id: connectionId,
+      provider_key: inspected.provider_key,
       action,
       capability,
-      payload: (config.payload as Record<string, unknown>) || {},
+      provider_idempotent: providerActionIdempotent(
+        inspected.provider_key,
+        action,
+      ),
+      authority_kind: authority.kind,
+      authority_user_id: String(authorityUserId),
+      request: { connection_id: connectionId, action, capability, payload },
     });
-    return { result: boundedResult(result || {}) };
+
+    const evidence = externalEffectEvidence(effect);
+    if (effect.status === "succeeded")
+      return {
+        result: boundedResult({
+          ...((effect.result as Record<string, unknown>) || {}),
+          external_effect: evidence,
+        }),
+      };
+    if (
+      effect.status === "failed" ||
+      effect.status === "outcome_unknown" ||
+      effect.status === "cancelled"
+    )
+      throw effectFailure(effect);
+    // planned or claimed: the worker owns the outcome now, so the step waits for
+    // the durable state rather than holding the run's transaction open.
+    return {
+      result: { external_effect: evidence },
+      waiting_until: new Date(Date.now() + EFFECT_LIMITS.poll_seconds * 1000),
+    };
   },
 };
+
+/**
+ * Turns a terminal external-effect state into the step failure the engine
+ * records. `outcome_unknown` is never retryable and never reported as success:
+ * the provider may have received the action, so only a human may re-attempt it.
+ */
+function effectFailure(effect: ExternalEffectRow): HttpError {
+  const category = String(
+    effect.status === "cancelled"
+      ? effect.error_category || "authorization_revoked"
+      : effect.error_category || "outcome_unknown",
+  );
+  const summary =
+    effect.status === "cancelled"
+      ? String(
+          effect.error_summary ||
+            "The run was cancelled before the provider call",
+        )
+      : effect.status === "outcome_unknown"
+        ? "The provider may have received this action and its outcome cannot be proven"
+        : String(
+            effect.error_summary ||
+              "The provider action failed before any external effect",
+          );
+  const error = new HttpError(
+    409,
+    `External effect ${effect.status}: ${summary}`,
+  );
+  // A failure that provably never reached the provider is retryable under the
+  // engine's own bounded policy; an unprovable or cancelled effect is fatal, so no
+  // automatic retry can duplicate or obscure it.
+  const retryable =
+    effect.status === "failed" &&
+    isRetryableCategory(category as FailureCategory);
+  (
+    error as HttpError & {
+      details?: { fatal?: boolean; category?: string; effect_id?: string };
+    }
+  ).details = {
+    fatal: !retryable,
+    category: category === "outcome_unknown" ? "outcome_unknown" : category,
+    effect_id: String(effect.id),
+  };
+  return error;
+}
 
 const workflowDelay: ActionDefinition = {
   key: "workflow.delay",

@@ -45,6 +45,7 @@ import {
   dispatchConnectorEvent,
   enableWorkflow,
   engineTick,
+  externalEffectTick,
   evaluateCondition,
   evaluateConditions,
   getRunDetail,
@@ -231,12 +232,15 @@ const group = (
   id = `group_${kind}_${conditions.length}`,
 ): WorkflowCondition => ({ id, kind, conditions });
 
-/** A deterministic in-memory connector port: inspect returns fixed facts, invoke is scripted. */
+/**
+ * A deterministic in-memory connector port. W29-P0/A1: it is INSPECT-ONLY, because
+ * the engine no longer performs provider I/O inside the run transaction; the
+ * provider call is scripted on the external-effect phase instead.
+ */
 function stubPort(
   inspect: Awaited<ReturnType<ConnectorActionPort["inspect"]>>,
-  invoke: ConnectorActionPort["invoke"] = async () => ({ recorded: true }),
 ): ConnectorActionPort {
-  return { inspect: async () => inspect, invoke };
+  return { inspect: async () => inspect };
 }
 
 const deps = (
@@ -246,6 +250,47 @@ const deps = (
 
 const tickEngine = (tenant: string, engineDeps: EngineDeps) =>
   db.tenant(tenant, (q) => engineTick(q, tenant, engineDeps));
+
+type StubFacts = Awaited<ReturnType<ConnectorActionPort["inspect"]>>;
+type ScriptedProvider = (input: {
+  provider_key: string;
+  action: string;
+  capability: string;
+  payload: Record<string, unknown>;
+  effect: { idempotency_key: string; attempt: number };
+}) => Promise<Record<string, unknown>>;
+
+/**
+ * The provider-I/O phase, with a scriptable provider and the same deterministic
+ * connection facts the connector port returns, so the worker's pre-I/O re-check
+ * sees the connection the test described.
+ */
+const tickEffects = (
+  tenant: string,
+  facts: StubFacts,
+  invokeProvider?: ScriptedProvider,
+) =>
+  externalEffectTick(db, tenant, {
+    ...(invokeProvider ? { invokeProvider } : {}),
+    inspectConnection: async () => facts,
+  });
+
+/**
+ * One full connector-action cycle: the engine plans and parks the step, the worker
+ * phase performs the provider I/O outside every transaction, and a second engine
+ * pass settles the step from the durable effect state.
+ */
+const connectorCycle = async (
+  tenant: string,
+  runId: string,
+  facts: StubFacts,
+  invokeProvider?: ScriptedProvider,
+) => {
+  await tickEngine(tenant, deps(stubPort(facts)));
+  await tickEffects(tenant, facts, invokeProvider);
+  await forceClaimable(tenant, runId);
+  await tickEngine(tenant, deps(stubPort(facts)));
+};
 
 const forceClaimable = (tenant: string, runId: string) =>
   db.tenant(tenant, (q) =>
@@ -261,6 +306,15 @@ const runRow = (tenant: string, runId: string) =>
       tenant,
       runId,
     ]),
+  );
+
+const effectCount = (tenant: string, runId: string) =>
+  db.tenant(tenant, (q) =>
+    one(
+      q,
+      "SELECT count(*)::int AS c FROM workflow_external_effects WHERE tenant_id=$1 AND run_id=$2",
+      [tenant, runId],
+    ).then((row: any) => Number(row?.c || 0)),
   );
 
 const latestActionStep = (tenant: string, runId: string, operation: string) =>
@@ -1024,20 +1078,20 @@ test("W30-A idempotency: duplicate connector events, repeated manual keys, retry
 test("W30-A recovery: retryable backoff, dead letter, restart persistence, delay waiting and cancel", async () => {
   const { tenant, actors } = await freshTenantAndActors("owner");
   const owner = actors[0];
-  const transient = stubPort(
-    {
-      exists: true,
-      enabled: true,
-      status: "connected",
-      ownership: "tenant",
-      owner_user_id: null,
-      capabilities_granted: ["message.send"],
-      provider_key: SYNTHETIC_PROVIDER_KEY,
-    },
-    async () => {
-      throw new Error("upstream transient failure");
-    },
-  );
+  const connectedFacts = {
+    exists: true as const,
+    enabled: true,
+    status: "connected",
+    ownership: "tenant",
+    owner_user_id: null,
+    capabilities_granted: ["message.send"],
+    provider_key: SYNTHETIC_PROVIDER_KEY,
+  };
+  // W29-P0/A1: the provider failure is scripted on the external-effect phase, not
+  // on the engine port, because the engine no longer performs provider I/O.
+  const transient = async () => {
+    throw new Error("upstream transient failure");
+  };
 
   // A retryable failure leaves the step failed with the category, persists the
   // attempt, and leaves the run queued with a bounded backoff.
@@ -1057,8 +1111,7 @@ test("W30-A recovery: retryable backoff, dead letter, restart persistence, delay
     triggerManualRun(q, owner, workflow.workflow.id, {}),
   );
 
-  const tickOne = await tickEngine(tenant, deps(transient));
-  assert.equal(tickOne.claimed, 1);
+  await connectorCycle(tenant, run.id, connectedFacts, transient);
   const afterFirst = await runRow(tenant, run.id);
   assert.equal(
     afterFirst.status,
@@ -1085,8 +1138,7 @@ test("W30-A recovery: retryable backoff, dead letter, restart persistence, delay
   // Worker restart: clearing the lease and re-ticking never re-executes the
   // durably succeeded action and never resets the persisted attempt count.
   await forceClaimable(tenant, run.id);
-  const tickTwo = await tickEngine(tenant, deps(transient));
-  assert.equal(tickTwo.claimed, 1);
+  await connectorCycle(tenant, run.id, connectedFacts, transient);
   assert.equal(
     await outboxCount(tenant, "workflow.first"),
     1,
@@ -1107,7 +1159,7 @@ test("W30-A recovery: retryable backoff, dead letter, restart persistence, delay
   // Exhausting RETRY_POLICY.max_attempts moves the step and run to dead_letter.
   for (let attempt = 3; attempt <= RETRY_POLICY.max_attempts; attempt++) {
     await forceClaimable(tenant, run.id);
-    await tickEngine(tenant, deps(transient));
+    await connectorCycle(tenant, run.id, connectedFacts, transient);
     const step = await latestActionStep(
       tenant,
       run.id,
@@ -1471,10 +1523,12 @@ test("W30-A authority: a service principal is bounded by the operator allowlist 
   assert.equal(narrow.configured, true);
 
   let invocations = 0;
-  const countingPort = stubPort(await shared.inspect({} as any), async () => {
+  const sharedFacts = await shared.inspect({} as any);
+  const countingPort = stubPort(sharedFacts);
+  const countingProvider: ScriptedProvider = async () => {
     invocations += 1;
     return { recorded: true };
-  });
+  };
 
   const denied = await insertServiceWorkflow("Outside the allowlist");
   const deniedRun = await db.tenant(tenant, (q) =>
@@ -1489,6 +1543,11 @@ test("W30-A authority: a service principal is bounded by the operator allowlist 
     0,
     "an unlisted action must never reach the connector",
   );
+  assert.equal(
+    await effectCount(tenant, deniedRun.id),
+    0,
+    "an unlisted action must not even plan an external effect",
+  );
 
   // Widening the allowlist lets the same workflow run, and the run records exactly
   // the provisioned capability and the provisioned identity, not the nominated one.
@@ -1501,7 +1560,7 @@ test("W30-A authority: a service principal is bounded by the operator allowlist 
   const allowedRun = await db.tenant(tenant, (q) =>
     triggerManualRun(q, owner, allowed, { idempotency_key: "allowed-run" }),
   );
-  await tickEngine(tenant, deps(countingPort));
+  await connectorCycle(tenant, allowedRun.id, sharedFacts, countingProvider);
   const allowedRow = await runRow(tenant, allowedRun.id);
   assert.equal(allowedRow.status, "succeeded");
   const runAuthority = allowedRow.authority as RunAuthority;
@@ -1524,6 +1583,11 @@ test("W30-A authority: a service principal is bounded by the operator allowlist 
     invocations,
     1,
     "a deprovisioned identity must not reach the connector",
+  );
+  assert.equal(
+    await effectCount(tenant, orphanedRun.id),
+    0,
+    "a deprovisioned identity must not plan an external effect",
   );
 
   // Only an administrator may provision or use the authority.
@@ -1566,15 +1630,16 @@ test("W30-A authority: a service principal is bounded by the operator allowlist 
     enableWorkflow(q, member, delegated.workflow.id),
   );
 
-  const ownedPort = stubPort({
-    exists: true,
+  const ownedFacts = {
+    exists: true as const,
     enabled: true,
     status: "connected",
     ownership: "user",
     owner_user_id: member.user_id,
     capabilities_granted: ["message.send"],
     provider_key: SYNTHETIC_PROVIDER_KEY,
-  });
+  };
+  const ownedPort = stubPort(ownedFacts);
   const foreignPort = stubPort({
     exists: true,
     enabled: true,
@@ -1590,7 +1655,7 @@ test("W30-A authority: a service principal is bounded by the operator allowlist 
       idempotency_key: "owned",
     }),
   );
-  await tickEngine(tenant, deps(ownedPort));
+  await connectorCycle(tenant, ownedRun.id, ownedFacts);
   assert.equal((await runRow(tenant, ownedRun.id)).status, "succeeded");
 
   const foreignRun = await db.tenant(tenant, (q) =>

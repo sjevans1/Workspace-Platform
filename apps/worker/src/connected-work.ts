@@ -32,6 +32,7 @@ import {
   dispatchConnectorEvent,
   dispatchWorkspaceEvent,
   engineTick,
+  externalEffectTick,
   pruneRuns,
   scheduleTick,
   type ConnectorActionPort,
@@ -126,6 +127,15 @@ export async function automationTick(
   schedules: number;
   connector_runs: number;
   engine: { claimed: number; succeeded: number; failed: number; waiting: number };
+  effects: {
+    claimed: number;
+    succeeded: number;
+    failed: number;
+    refused: number;
+    outcome_unknown: number;
+    stale: number;
+    invoked: number;
+  };
   pruned: number;
 }> {
   const withPort = <T>(fn: (q: Query, deps: EngineDeps) => Promise<T>) =>
@@ -133,11 +143,23 @@ export async function automationTick(
   const schedules = await withPort((q, deps) => scheduleTick(q, tenant, deps));
   const connector = await withPort((q, deps) => dispatchConnectorEvent(q, tenant, deps));
   const engine = await withPort((q, deps) => engineTick(q, tenant, deps));
+  // W29-P0/A1: the provider-I/O phase runs AFTER the engine's transaction has
+  // committed, so a connector action is PLANNED inside the run's transaction and
+  // EXECUTED with no transaction and no row lock held. A terminal effect wakes its
+  // parked run, so one settle pass lets the step complete inside the SAME tick.
+  const effects = await externalEffectTick(db, tenant);
+  const settled = await withPort((q, deps) => engineTick(q, tenant, deps));
   const pruned = await withPort((q) => pruneRuns(q, tenant));
   return {
     schedules: schedules.fired,
     connector_runs: connector.runs.length,
-    engine,
+    engine: {
+      claimed: engine.claimed + settled.claimed,
+      succeeded: engine.succeeded + settled.succeeded,
+      failed: engine.failed + settled.failed,
+      waiting: engine.waiting + settled.waiting,
+    },
+    effects,
     pruned: pruned.deleted,
   };
 }

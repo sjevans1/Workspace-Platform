@@ -97,6 +97,14 @@ export type ConnectorActionDefinition = {
   /** The capability a connection must hold before this action may run. */
   requires_capability: Capability;
   retryable: boolean;
+  /**
+   * W29-P0/A1: true when the provider offers an idempotency primitive for this
+   * action, so a re-send carrying the same effect idempotency key cannot duplicate
+   * the external operation. It is the ONLY thing that makes a re-send after a
+   * reclaimed lease safe; an action that does not declare it is treated as
+   * at-most-once with an unknown outcome.
+   */
+  idempotent?: boolean;
 };
 
 export type ProviderDefinition = {
@@ -152,6 +160,10 @@ const SYNTHETIC_PROVIDER: ProviderDefinition = {
       display_name: "Record a synthetic connector action",
       requires_capability: "message.send",
       retryable: true,
+      // The fixture has no external side effect, and it derives a stable provider
+      // reference from the effect idempotency key, so a re-send with the same key
+      // is provably one logical operation.
+      idempotent: true,
     },
   ],
   credential_kinds: ["webhook_secret"],

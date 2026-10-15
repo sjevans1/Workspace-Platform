@@ -11,6 +11,7 @@ export class Database {
   pool: pg.Pool;
   private clients = new Set<pg.PoolClient>();
   private queue: Promise<unknown> = Promise.resolve();
+  private tenantTransactionsOpen = 0;
   constructor(
     url = process.env.DATABASE_URL,
     private options: { serialize?: boolean } = {},
@@ -50,6 +51,7 @@ export class Database {
   tenant<T>(id: string, fn: (q: Query) => Promise<T>) {
     return this.guard(async () => {
       const c = await this.pool.connect();
+      this.tenantTransactionsOpen += 1;
       try {
         await c.query("BEGIN");
         await c.query("SET LOCAL ROLE workspace_app");
@@ -61,9 +63,19 @@ export class Database {
         await c.query("ROLLBACK");
         throw e;
       } finally {
+        this.tenantTransactionsOpen -= 1;
         c.release();
       }
     });
+  }
+  /**
+   * W29-P0/A1: how many tenant transactions THIS instance currently holds open.
+   * The external-effect acceptance reads it from inside the provider call, so the
+   * claim "no provider I/O happens while a tenant transaction is held" is proven
+   * from the runtime instead of being asserted in documentation.
+   */
+  tenantTransactionsInFlight(): number {
+    return this.tenantTransactionsOpen;
   }
   async close() {
     await this.queue;
