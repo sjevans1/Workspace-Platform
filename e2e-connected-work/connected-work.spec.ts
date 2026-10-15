@@ -106,26 +106,6 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
 
   await openSettingsTab(page, "Connections");
 
-  await page.getByRole("button", { name: "New connection" }).click();
-  const createModal = page.getByRole("dialog", { name: "New connection" });
-  await expect(createModal).toBeVisible();
-  await createModal.getByLabel("Provider").selectOption(SYNTHETIC_PROVIDER_KEY);
-  await createModal.getByLabel("Label", { exact: true }).fill(label);
-  await createModal.getByLabel("Ownership").selectOption("user");
-  await createModal.getByRole("button", { name: "Create connection" }).click();
-
-  const connectModal = page.getByRole("dialog", {
-    name: `Connect ${label}`,
-  });
-  await expect(connectModal).toBeVisible();
-  await connectModal
-    .getByLabel("Credential (an operator-supplied token or secret)")
-    .fill(secret);
-  await connectModal
-    .getByRole("button", { name: "Connect", exact: true })
-    .click();
-  await expect(connectModal).toBeHidden();
-
   // W29-P0/A2 endpoint readiness: the guided check resolves and evaluates without
   // ever contacting the endpoint. "localhost" is not a canonical public hostname, so
   // the answer is deterministic and needs no DNS: this proves the form, the API call
@@ -151,9 +131,62 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
   await readiness.getByLabel("Use case").selectOption("https");
   await expect(readiness.getByRole("status")).toHaveCount(0);
   await expect(readiness.getByLabel("Port")).toHaveValue("443");
+
+  // Re-review: an answer still in flight when the administrator edits the form must
+  // never be restored. The first request is held for a deterministic 1.5s, the host
+  // is edited while it is outstanding, and the verdict must stay absent after the
+  // response has certainly landed.
+  let held = true;
+  await page.route("**/api/v1/connectors/endpoints/preflight", async (route) => {
+    if (held) {
+      held = false;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    await route.continue();
+  });
+  await readiness.getByLabel("Use case").selectOption("custom_imap");
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness
+    .getByRole("button", { name: "Check network readiness" })
+    .click();
+  await readiness.getByLabel("Host").fill("mail.internal.example");
+  await page.waitForTimeout(2500);
+  await expect(readiness.getByRole("status")).toHaveCount(0);
+  await page.unroute("**/api/v1/connectors/endpoints/preflight");
+  // A check for the current inputs still works, and editing clears it again. The
+  // host is the deterministic non-public one, so this never depends on DNS.
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness
+    .getByRole("button", { name: "Check network readiness" })
+    .click();
+  await expect(readiness.getByRole("status")).toContainText(
+    "Not a valid public hostname",
+  );
+  await readiness.getByLabel("Host").fill("mail.internal.example");
+  await expect(readiness.getByRole("status")).toHaveCount(0);
   // Selecting a provider or typing a host never mutates anything: the check is a
   // read-only question, and the connection below still does not exist.
   await expect(page.locator(".integration-row").filter({ hasText: label })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "New connection" }).click();
+  const createModal = page.getByRole("dialog", { name: "New connection" });
+  await expect(createModal).toBeVisible();
+  await createModal.getByLabel("Provider").selectOption(SYNTHETIC_PROVIDER_KEY);
+  await createModal.getByLabel("Label", { exact: true }).fill(label);
+  await createModal.getByLabel("Ownership").selectOption("user");
+  await createModal.getByRole("button", { name: "Create connection" }).click();
+
+  const connectModal = page.getByRole("dialog", {
+    name: `Connect ${label}`,
+  });
+  await expect(connectModal).toBeVisible();
+  await connectModal
+    .getByLabel("Credential (an operator-supplied token or secret)")
+    .fill(secret);
+  await connectModal
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
+  await expect(connectModal).toBeHidden();
 
   const row = page.locator(".integration-row").filter({ hasText: label });
   await expect(row).toBeVisible();

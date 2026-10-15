@@ -25,7 +25,7 @@ test("A2 config: supported keys are bound, and shaped exactly as persistence sto
   const built = buildConnectionConfig({
     advanced_json: JSON.stringify({
       label: "inbox",
-      scopes: ["mail.read", "mail.send", 7],
+      scopes: ["mail.read", "mail.send"],
     }),
     allowed_keys: ALLOWED,
   });
@@ -43,8 +43,8 @@ test("A2 config: an unsupported key is refused and named, never silently dropped
   });
   assert.equal(built.ok, false);
   const error = built.ok === false ? built.error : "";
-  assert.match(error, /mailbox/);
-  assert.match(error, /endpoint_host/);
+  assert.match(error, /mailbox \(not stored by this deployment\)/);
+  assert.match(error, /endpoint_host \(not stored by this deployment\)/);
   assert.match(error, /Supported keys:/);
 });
 
@@ -63,24 +63,49 @@ test("A2 config: malformed or non-object JSON is refused with a clear message", 
 });
 
 test("A2 config: a non-string, non-list value for a supported key is refused", () => {
-  const built = buildConnectionConfig({
-    advanced_json: JSON.stringify({ label: { nested: true } }),
-    allowed_keys: ALLOWED,
-  });
-  assert.equal(built.ok, false);
-  assert.match(built.ok === false ? built.error : "", /label/);
+  for (const value of [{ nested: true }, 42, true, null]) {
+    const built = buildConnectionConfig({
+      advanced_json: JSON.stringify({ label: value }),
+      allowed_keys: ALLOWED,
+    });
+    assert.equal(built.ok, false, JSON.stringify(value));
+    assert.match(built.ok === false ? built.error : "", /label/);
+  }
 });
 
-test("A2 config: values are bounded exactly as the persistence layer bounds them", () => {
-  const built = buildConnectionConfig({
+test("A2 config: an oversized or malformed value is refused, never trimmed", () => {
+  // A quietly truncated label or a silently dropped scope would tell the
+  // administrator something was stored that was not.
+  const cases: [Record<string, unknown>, RegExp][] = [
+    [{ label: "x".repeat(513) }, /label \(longer than 512 characters\)/],
+    [
+      { scopes: Array.from({ length: 33 }, (_value, index) => `scope-${index}`) },
+      /scopes \(more than 32 entries\)/,
+    ],
+    [{ scopes: ["mail.read", 7, "mail.send"] }, /scopes \(entry 2 is not a string\)/],
+    [{ label: { nested: true } }, /label \(must be a string or a list of strings\)/],
+    [{ scopes: [{ a: 1 }] }, /scopes \(entry 1 is not a string\)/],
+  ];
+  for (const [config, pattern] of cases) {
+    const built = buildConnectionConfig({
+      advanced_json: JSON.stringify(config),
+      allowed_keys: ALLOWED,
+    });
+    assert.equal(built.ok, false, JSON.stringify(config));
+    assert.match(built.ok === false ? built.error : "", pattern);
+  }
+
+  // Exactly at the bounds is accepted, unchanged.
+  const atBounds = buildConnectionConfig({
     advanced_json: JSON.stringify({
-      label: "x".repeat(900),
-      scopes: Array.from({ length: 40 }, (_value, index) => `scope-${index}`),
+      label: "x".repeat(512),
+      scopes: Array.from({ length: 32 }, (_value, index) => `scope-${index}`),
     }),
     allowed_keys: ALLOWED,
   });
-  assert.equal(built.ok, true);
-  const config = (built.ok && built.config) as Record<string, unknown>;
-  assert.equal(String(config.label).length, 512);
-  assert.equal((config.scopes as string[]).length, 32);
+  assert.equal(atBounds.ok, true);
+  const stored = (atBounds.ok && atBounds.config) as Record<string, unknown>;
+  assert.equal(String(stored.label).length, 512);
+  assert.equal((stored.scopes as string[]).length, 32);
+  assert.equal((stored.scopes as string[])[31], "scope-31");
 });

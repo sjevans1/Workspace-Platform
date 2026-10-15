@@ -35,6 +35,16 @@ export type ConnectionConfigResult =
  * that names it, and values are normalized to exactly the shapes the persistence
  * layer accepts (a bounded string, or a bounded list of strings).
  */
+/**
+ * The value bounds the persistence layer enforces. A value outside them is REFUSED
+ * here, never quietly trimmed: a truncated credential label or a silently dropped
+ * scope would tell the administrator something was stored that was not.
+ */
+export const CONNECTION_CONFIG_BOUNDS = Object.freeze({
+  max_string_length: 512,
+  max_list_entries: 32,
+});
+
 export function buildConnectionConfig(
   input: ConnectionConfigInput,
 ): ConnectionConfigResult {
@@ -50,23 +60,43 @@ export function buildConnectionConfig(
     return { ok: false, error: "Advanced configuration must be a JSON object." };
   const allowed = new Set(input.allowed_keys);
   const config: Record<string, unknown> = {};
-  const unknown: string[] = [];
+  const rejected: string[] = [];
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (!allowed.has(key)) {
-      unknown.push(key);
+      rejected.push(`${key} (not stored by this deployment)`);
+      continue;
+    }
+    if (typeof value === "string") {
+      if (value.length > CONNECTION_CONFIG_BOUNDS.max_string_length) {
+        rejected.push(
+          `${key} (longer than ${CONNECTION_CONFIG_BOUNDS.max_string_length} characters)`,
+        );
+        continue;
+      }
+      config[key] = value;
       continue;
     }
     if (Array.isArray(value)) {
-      config[key] = value.filter((item) => typeof item === "string").slice(0, 32);
+      if (value.length > CONNECTION_CONFIG_BOUNDS.max_list_entries) {
+        rejected.push(
+          `${key} (more than ${CONNECTION_CONFIG_BOUNDS.max_list_entries} entries)`,
+        );
+        continue;
+      }
+      const bad = value.findIndex((item) => typeof item !== "string");
+      if (bad >= 0) {
+        rejected.push(`${key} (entry ${bad + 1} is not a string)`);
+        continue;
+      }
+      config[key] = [...(value as string[])];
       continue;
     }
-    if (typeof value === "string") config[key] = value.slice(0, 512);
-    else unknown.push(key);
+    rejected.push(`${key} (must be a string or a list of strings)`);
   }
-  if (unknown.length)
+  if (rejected.length)
     return {
       ok: false,
-      error: `This deployment does not store: ${unknown.slice(0, 8).join(", ")}. Supported keys: ${[...allowed].join(", ")}.`,
+      error: `Refused: ${rejected.slice(0, 8).join(", ")}. Supported keys: ${[...allowed].join(", ")}.`,
     };
   return { ok: true, config };
 }

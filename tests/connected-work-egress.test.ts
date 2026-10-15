@@ -551,6 +551,36 @@ test("A2 config: the API stores supported configuration and refuses unsupported 
   assert.equal(refused.statusCode, 400, refused.body);
   assert.match(String(refused.json()?.error || ""), /mailbox/);
 
+  // An oversized or malformed SUPPORTED value is refused too: it must never be
+  // silently trimmed or have entries removed on its way to persistence.
+  for (const [config, pattern] of [
+    [{ label: "x".repeat(600) }, /label \(longer than 512 characters\)/],
+    [{ scopes: ["mail.read", 7] }, /scopes \(entry 2 is not a string\)/],
+    [
+      { scopes: Array.from({ length: 40 }, (_value, index) => `s-${index}`) },
+      /scopes \(more than 32 entries\)/,
+    ],
+  ] as const) {
+    const refused = await app.inject({
+      method: "POST",
+      url: "/api/v1/connectors/connections",
+      remoteAddress: "198.51.100.203",
+      headers: {
+        cookie: owner.cookie,
+        "x-csrf-token": owner.csrf,
+        "content-type": "application/json",
+      },
+      payload: {
+        provider_key: "synthetic-test",
+        label: "Guided configuration oversized",
+        ownership: "tenant",
+        config,
+      },
+    });
+    assert.equal(refused.statusCode, 400, JSON.stringify(config));
+    assert.match(String(refused.json()?.error || ""), pattern);
+  }
+
   // And the catalog publishes exactly the keys a configuration may carry.
   const catalog = await app.inject({
     method: "GET",

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Plus,
   RefreshCw,
@@ -147,6 +147,9 @@ export default function Connections({ me }: { me: any }) {
     policy: { fingerprint: string; version: string };
   } | null>(null);
   const [readinessBusy, setReadinessBusy] = useState(false);
+  // Bumped by every edit and by every check, so a response that arrives after the
+  // inputs changed is discarded instead of being shown for the wrong destination.
+  const readinessGeneration = useRef(0);
   // The use case is not decoration: it selects the ports the check may consider and
   // the guidance shown, and it is sent to the API, which answers for that use case.
   const [useCase, setUseCase] = useState("custom_imap");
@@ -305,13 +308,15 @@ export default function Connections({ me }: { me: any }) {
    * answer is a reference, never this deployment's verdict.
    *
    * A verdict is only ever shown for the inputs it was produced from: any edit to
-   * the host, port or use case clears it, and a failed check clears it too, so a
-   * previous "Ready" can never sit under newly typed values.
+   * the host, port or use case clears it, a failed check clears it, and an answer
+   * that arrives AFTER an edit is discarded rather than restored.
    */
   async function checkReadiness(form: HTMLFormElement) {
     const data = new FormData(form);
     const host = String(data.get("host") || "").trim();
     const port = Number(data.get("port"));
+    const generation = readinessGeneration.current + 1;
+    readinessGeneration.current = generation;
     setReadinessTarget(`${host}:${port}`);
     setReadinessBusy(true);
     setReadiness(null);
@@ -321,10 +326,12 @@ export default function Connections({ me }: { me: any }) {
         port,
         use_case: useCase,
       });
+      // A late answer belongs to inputs that no longer exist: it is dropped, so an
+      // in-flight response can never restore a verdict for an edited form.
+      if (readinessGeneration.current !== generation) return;
       setReadiness(result.readiness);
     } catch (error) {
-      // The failure is reported by the caller; no previous verdict may remain.
-      setReadiness(null);
+      if (readinessGeneration.current === generation) setReadiness(null);
       throw error;
     } finally {
       setReadinessBusy(false);
@@ -421,6 +428,7 @@ export default function Connections({ me }: { me: any }) {
                 value={useCase}
                 onChange={(e) => {
                   // A verdict belongs to the inputs it came from.
+                  readinessGeneration.current += 1;
                   setUseCase(e.target.value);
                   setReadiness(null);
                 }}
@@ -440,7 +448,10 @@ export default function Connections({ me }: { me: any }) {
                 required
                 placeholder="mail.example.com"
                 autoComplete="off"
-                onChange={() => setReadiness(null)}
+                onChange={() => {
+                  readinessGeneration.current += 1;
+                  setReadiness(null);
+                }}
               />
             </Field>
             <Field label="Port">
@@ -448,7 +459,10 @@ export default function Connections({ me }: { me: any }) {
                 name="port"
                 key={useCase}
                 defaultValue={String(USE_CASES.find((entry) => entry.key === useCase)?.ports[0])}
-                onChange={() => setReadiness(null)}
+                onChange={() => {
+                  readinessGeneration.current += 1;
+                  setReadiness(null);
+                }}
               >
                 {(USE_CASES.find((entry) => entry.key === useCase)?.ports || []).map(
                   (port) => (
