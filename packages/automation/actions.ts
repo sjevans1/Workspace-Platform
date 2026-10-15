@@ -26,6 +26,7 @@ import {
   EFFECT_LIMITS,
   ensureExternalEffect,
   externalEffectEvidence,
+  externalEffectForRunStep,
   type ExternalEffectRow,
 } from "./effects.ts";
 import {
@@ -438,6 +439,43 @@ const connectorInvoke: ActionDefinition = {
       };
       return error;
     };
+
+    // W29-P0/A1: a durable effect that already reached a terminal state is
+    // reconciled FIRST, before any live connection authorization is applied.
+    // Settling an effect the provider already performed is bookkeeping, not
+    // another external action: a connection revoked after the provider call must
+    // never rewrite a successful outcome into a failure. Live authorization is
+    // enforced on NEW work (planning a first effect, or re-arming a retry) and at
+    // the worker's pre-I/O boundary, so a revoked connection still performs no
+    // further provider I/O.
+    const existing = await externalEffectForRunStep(
+      q,
+      tenant_id,
+      run.id,
+      step.seq,
+      connectorInvoke.key,
+    );
+    if (existing) {
+      const evidence = externalEffectEvidence(existing);
+      if (existing.status === "succeeded")
+        return {
+          result: boundedResult({
+            ...((existing.result as Record<string, unknown>) || {}),
+            external_effect: evidence,
+          }),
+        };
+      const terminal =
+        existing.status === "outcome_unknown" ||
+        existing.status === "cancelled" ||
+        (existing.status === "failed" &&
+          !isRetryableCategory(
+            (existing.error_category || "") as FailureCategory,
+          ));
+      // `planned`, `claimed` and a RETRYABLE failure all fall through to the live
+      // authorization check below, because re-arming or waiting on them is new
+      // work rather than reconciliation of a committed outcome.
+      if (terminal) throw effectFailure(existing);
+    }
 
     const inspected = await connectorPort.inspect({
       tenant_id,

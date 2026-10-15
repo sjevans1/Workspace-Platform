@@ -496,13 +496,23 @@ then runs the I/O between two short transactions:
    `FOR UPDATE SKIP LOCKED`, sets `status='claimed'`, a fresh `lease_token`,
    `lease_expires_at = now() + 60 s` and `attempt = attempt + 1`, inside the
    caller's short tenant transaction;
-2. **mark** — `markExternalEffectIoStarted` records `io_started_at` and extends
-   the lease to 180 s, in its own short transaction, immediately BEFORE the call;
+2. **decide and mark** — `prepareExternalEffectIo` re-derives the request from the
+   immutable revision, re-checks the run, authority, membership, automation
+   principal and connection facts UNDER ROW LOCKS, and records `io_started_at`
+   (extending the lease to 180 s) — all in ONE short transaction immediately
+   BEFORE the call. The check and the mark must not be separate transactions: a
+   cancel or revocation committed between them would otherwise let the worker send
+   after the revocation had already landed. A revocation that commits first is
+   therefore always seen and nothing is sent; one that starts later waits for this
+   transaction and applies afterwards;
 3. **provider I/O** — `invokeProviderAction` runs with no tenant transaction and no
    row lock held, carrying the effect's stable `idempotency_key`;
 4. **commit** — `commitExternalEffectOutcome` re-reads the row `FOR UPDATE`, and
    writes the normalized outcome only while this worker's lease is still
    authoritative. A stale worker whose lease was reclaimed writes nothing.
+
+A run that has already reached a terminal state never starts a NEW external
+effect: only the work it was parked on can still be legitimately pending.
 
 Before the boundary the phase re-checks the run's authority and the connection:
 the authority user must still be an active member, a service principal must still
@@ -537,6 +547,23 @@ immutable pinned revision and checks it against the `request_digest` recorded at
 plan time, so run evidence carries identity and outcomes but never message
 content. A terminal effect wakes its parked run, so the engine settles the step in
 the same tick.
+
+Provider error text is UNTRUSTED and is never persisted: an exception can carry an
+SMTP password, an API token, an `Authorization` header, a recipient or message
+content. Effect, step and run evidence therefore hold only a bounded allowlisted
+summary per category (`effectFailureSummary`) plus the safe category, and a
+provider-supplied reference is stored only when it matches a conservative
+identifier shape. Nothing derived from `error.message` reaches the durable record.
+
+Reconciling an effect that already reached a terminal state is BOOKKEEPING, not
+another external action. `connector.action.invoke` therefore reads its durable
+effect first: a `succeeded` effect settles as succeeded, and an
+`outcome_unknown`/`cancelled`/non-retryable failure settles with its own honest
+category, regardless of what happened to the connection afterwards. Live
+connection and authority authorization is enforced when NEW work is planned (the
+first effect, or re-arming a retry) and at the pre-I/O boundary, so a revoked
+connection performs no further provider I/O while an effect the provider already
+performed is still reported truthfully.
 
 `outcome_unknown` and a cancelled run are both fatal for the step: the run records
 the honest category and stops. Only a human may re-attempt an effect whose outcome

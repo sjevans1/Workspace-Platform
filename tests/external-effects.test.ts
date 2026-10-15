@@ -40,6 +40,7 @@ import {
   deriveEffectRequest,
   effectAuthorityRefusal,
   effectDeliveryState,
+  effectFailureSummary,
   enableWorkflow,
   engineTick,
   ensureExternalEffect,
@@ -47,6 +48,7 @@ import {
   externalEffectTick,
   getRunDetail,
   markExternalEffectIoStarted,
+  prepareExternalEffectIo,
   parseWorkflowDefinition,
   requestDigest,
   triggerManualRun,
@@ -314,6 +316,8 @@ function fakeProvider(
   };
   return { ledger, invokeProvider };
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const effectTick = (
   tenant: string,

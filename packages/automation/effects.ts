@@ -561,7 +561,12 @@ export async function commitExternalEffectOutcome(
       "UPDATE workflow_external_effects SET status='failed',error_category=$3,error_summary=$4," +
         " lease_token=NULL,lease_expires_at=NULL,completed_at=now(),updated_at=now()" +
         " WHERE tenant_id=$1 AND id=$2",
-      [tenant, claim.id, failure.category, failure.summary],
+      [
+        tenant,
+        claim.id,
+        failure.category,
+        effectFailureSummary(failure.category),
+      ],
     );
     await wakeParkedRun(q, tenant, claim.run_id);
     return "failed";
@@ -573,7 +578,12 @@ export async function commitExternalEffectOutcome(
       "UPDATE workflow_external_effects SET status='failed',error_category=$3,error_summary=$4," +
         " lease_token=NULL,lease_expires_at=NULL,completed_at=now(),updated_at=now()" +
         " WHERE tenant_id=$1 AND id=$2",
-      [tenant, claim.id, failure.category, failure.summary],
+      [
+        tenant,
+        claim.id,
+        failure.category,
+        effectFailureSummary(failure.category),
+      ],
     );
     await wakeParkedRun(q, tenant, claim.run_id);
     return "failed";
@@ -601,8 +611,11 @@ export function providerReferenceOf(
     (result.idempotency_reference as unknown) ??
     (result.message_id as unknown);
   if (typeof value !== "string") return null;
+  // A provider reference is provider-supplied text. Only a conservative
+  // identifier shape is persisted, so an adapter cannot smuggle a token, a URL
+  // with userinfo or message content into durable evidence through this field.
   const bounded = value.slice(0, 200);
-  return bounded.length ? bounded : null;
+  return /^[A-Za-z0-9._:@/+=-]{1,200}$/.test(bounded) ? bounded : null;
 }
 
 function boundedEffectResult(
@@ -615,6 +628,19 @@ function boundedEffectResult(
     "External effect result is too large",
   );
   const parsed = JSON.parse(serialized) as Record<string, unknown>;
+  // Provider-supplied reference fields are sanitized BEFORE the evidence scan, so
+  // a hostile reference is dropped rather than failing the whole outcome, and it
+  // can never reach durable evidence in a raw form.
+  for (const key of [
+    "provider_reference",
+    "idempotency_reference",
+    "message_id",
+  ]) {
+    if (!(key in parsed)) continue;
+    const sanitized = providerReferenceOf({ [key]: parsed[key] });
+    if (sanitized === null) delete parsed[key];
+    else parsed[key] = sanitized;
+  }
   assertNonSecretEvidence(parsed);
   return parsed;
 }
@@ -632,10 +658,44 @@ export function assertNonSecretEvidence(value: unknown): void {
   );
 }
 
+/**
+ * W29-P0/A1: allowlisted, human-safe summaries per category.
+ *
+ * A provider or transport exception is UNTRUSTED text: it can carry an SMTP
+ * password, an API token, an Authorization header, a recipient or message
+ * content. Nothing derived from `error.message` is ever persisted into effect,
+ * step or run evidence, so the durable record can only ever hold a bounded
+ * constant sentence plus the safe category.
+ */
+export function effectFailureSummary(category: FailureCategory): string {
+  const summaries: Record<string, string> = {
+    transient:
+      "The provider call failed transiently before the action was accepted",
+    rate_limited:
+      "The provider rate limited the request before the action was accepted",
+    provider_unavailable:
+      "The provider was unavailable before the action was accepted",
+    credential_expired: "The provider rejected the credential",
+    permission_revoked: "The provider rejected the permission",
+    permanent: "The provider rejected the request",
+    validation: "The request was rejected as invalid",
+    authorization_revoked: "The run's authority is no longer valid",
+    connector_attention_required: "The connection requires attention",
+    capability_missing: "Connector access was denied",
+    not_found: "The referenced object no longer exists",
+    conflict: "The provider reported a conflicting state",
+    outcome_unknown:
+      "The provider may have received this action and its outcome cannot be proven",
+  };
+  return (summaries[category] || "The provider call failed").slice(
+    0,
+    EFFECT_LIMITS.max_summary,
+  );
+}
+
 function classifyEffectError(error: unknown): {
   category: FailureCategory;
   retryable: boolean;
-  summary: string;
 } {
   const status = (error as { statusCode?: number })?.statusCode;
   const message = String((error as Error)?.message || "");
@@ -644,44 +704,24 @@ function classifyEffectError(error: unknown): {
     return {
       category: classified.category,
       retryable: classified.retryable,
-      summary: classified.summary.slice(0, EFFECT_LIMITS.max_summary),
     };
   }
   if (/timeout|ETIMEDOUT|ECONNRESET/i.test(message))
-    return {
-      category: "transient",
-      retryable: true,
-      summary: "Provider connection timeout".slice(
-        0,
-        EFFECT_LIMITS.max_summary,
-      ),
-    };
+    return { category: "transient", retryable: true };
   if (/fetch failed|ENOTFOUND|ECONNREFUSED|EAI_AGAIN/i.test(message))
-    return {
-      category: "transient",
-      retryable: true,
-      summary: "Provider connection failure".slice(
-        0,
-        EFFECT_LIMITS.max_summary,
-      ),
-    };
+    return { category: "transient", retryable: true };
   const explicit = (error as { details?: { category?: string } })?.details
     ?.category;
   if (explicit && explicit !== "outcome_unknown")
     return {
       category: explicit as FailureCategory,
       retryable: isRetryableCategory(explicit as FailureCategory),
-      summary: message.slice(0, EFFECT_LIMITS.max_summary),
     };
   // An adapter error with no status and no declared category is classified the way
   // the engine has always classified one: as a retryable transient condition. What
   // decides whether it may ACTUALLY be retried is the delivery state and the
   // provider's idempotency primitive, never this label.
-  return {
-    category: "transient",
-    retryable: true,
-    summary: message.slice(0, EFFECT_LIMITS.max_summary),
-  };
+  return { category: "transient", retryable: true };
 }
 
 /**
@@ -717,6 +757,16 @@ export async function deriveEffectRequest(
       ok: false,
       category: "authorization_revoked",
       summary: "The run was cancelled before the provider call",
+      cancelled: true,
+    };
+  if (!["queued", "running", "waiting"].includes(String(run.status)))
+    // A run that already reached a terminal state must not start a NEW external
+    // effect: only the work it was parked on could still be legitimately pending.
+    return {
+      ok: false,
+      category: "authorization_revoked",
+      summary:
+        "The run is no longer active, so no new external effect may start",
       cancelled: true,
     };
   const revision = await one(
@@ -784,22 +834,33 @@ export async function effectAuthorityRefusal(
   q: Query,
   tenant: string,
   claim: ExternalEffectClaim,
-  inspectConnection: (
-    q: Query,
-    tenant: string,
-    connectionId: string,
-  ) => Promise<ConnectionActionFacts | null> = connectionActionFacts,
+  inspectConnection:
+    | ((
+        q: Query,
+        tenant: string,
+        connectionId: string,
+      ) => Promise<ConnectionActionFacts | null>)
+    | undefined = undefined,
+  options: { lock?: boolean } = {},
 ): Promise<{ category: FailureCategory; summary: string } | null> {
+  // W29-P0/A1: as the FINAL pre-I/O eligibility check this runs with `lock`, so
+  // the run, connection, membership and automation-principal rows are locked for
+  // the duration of the boundary transaction: a cancel or revocation that commits
+  // first is visible here, and one that starts later cannot slip in between the
+  // check and the mark. The transaction never spans the provider call.
+  const lock = options.lock === true;
   const run = await one(
     q,
-    "SELECT authority FROM workflow_runs WHERE tenant_id=$1 AND id=$2",
+    "SELECT authority FROM workflow_runs WHERE tenant_id=$1 AND id=$2" +
+      (lock ? " FOR UPDATE" : ""),
     [tenant, claim.run_id],
   );
   if (!run)
     return { category: "not_found", summary: "The run no longer exists" };
   const membership = await one(
     q,
-    "SELECT role FROM memberships WHERE tenant_id=$1 AND user_id=$2 AND active",
+    "SELECT role FROM memberships WHERE tenant_id=$1 AND user_id=$2 AND active" +
+      (lock ? " FOR UPDATE" : ""),
     [tenant, claim.authority_user_id],
   );
   if (!membership)
@@ -810,7 +871,8 @@ export async function effectAuthorityRefusal(
   if (claim.authority_kind === "service_principal") {
     const principal = await one(
       q,
-      "SELECT capabilities FROM tenant_automation_principals WHERE tenant_id=$1",
+      "SELECT capabilities FROM tenant_automation_principals WHERE tenant_id=$1" +
+        (lock ? " FOR UPDATE" : ""),
       [tenant],
     );
     const granted: string[] = Array.isArray(principal?.capabilities)
@@ -823,7 +885,11 @@ export async function effectAuthorityRefusal(
           "The tenant automation identity no longer holds the connector action capability",
       };
   }
-  const facts = await inspectConnection(q, tenant, claim.connection_id);
+  // The default read is the shipped one, and it LOCKS the connection row when this
+  // is the boundary decision; an injected read is the caller's own seam.
+  const facts = inspectConnection
+    ? await inspectConnection(q, tenant, claim.connection_id)
+    : await connectionActionFacts(q, tenant, claim.connection_id, { lock });
   if (!facts)
     return {
       category: "not_found",
@@ -842,6 +908,76 @@ export async function effectAuthorityRefusal(
       summary: `Connector access denied: ${denial}`,
     };
   return null;
+}
+
+/**
+ * W29-P0/A1: the FINAL pre-I/O eligibility check and the boundary mark, in ONE
+ * short tenant transaction.
+ *
+ * They must not be separate transactions. A cancel or a revocation committed
+ * between an earlier read and the mark would otherwise let the worker send after
+ * the revocation had already landed. Here the locked re-check and the mark commit
+ * together, so either the revocation is visible and nothing is sent, or the
+ * boundary is committed first and the effect is treated as possibly delivered.
+ * The provider call itself still happens with NO transaction held.
+ */
+export async function prepareExternalEffectIo(
+  q: Query,
+  tenant: string,
+  claim: ExternalEffectClaim,
+  options: {
+    inspectConnection?: (
+      q: Query,
+      tenant: string,
+      connectionId: string,
+    ) => Promise<ConnectionActionFacts | null>;
+  } = {},
+): Promise<
+  | { ok: true; request: EffectRequest }
+  | {
+      ok: false;
+      category: FailureCategory;
+      summary: string;
+      cancelled: boolean;
+    }
+  | { ok: false; stale: true }
+> {
+  const derived = await deriveEffectRequest(q, tenant, claim);
+  if (!derived.ok) {
+    await refuseExternalEffectBeforeIo(q, tenant, claim, {
+      category: derived.category,
+      summary: derived.summary,
+      cancelled: derived.cancelled === true,
+    });
+    return {
+      ok: false,
+      category: derived.category,
+      summary: derived.summary,
+      cancelled: derived.cancelled === true,
+    };
+  }
+  const denial = await effectAuthorityRefusal(
+    q,
+    tenant,
+    claim,
+    options.inspectConnection,
+    { lock: true },
+  );
+  if (denial) {
+    await refuseExternalEffectBeforeIo(q, tenant, claim, {
+      category: denial.category,
+      summary: denial.summary,
+    });
+    return {
+      ok: false,
+      category: denial.category,
+      summary: denial.summary,
+      cancelled: false,
+    };
+  }
+  const marked = await markExternalEffectIoStarted(q, tenant, claim);
+  if (!marked) return { ok: false, stale: true };
+  return { ok: true, request: derived.request };
 }
 
 export type ExternalEffectDeps = {
@@ -915,44 +1051,23 @@ export async function externalEffectTick(
     invoked = 0;
 
   for (const claim of claims) {
-    // 1. The request is re-derived from the immutable revision (no content stored).
-    const derived = await db.tenant(tenant, (q) =>
-      deriveEffectRequest(q, tenant, claim),
+    // 1. ONE short transaction: re-derive the request from the immutable revision,
+    //    re-check live authorization under row locks, and mark the I/O boundary.
+    //    A cancel or revocation that committed first is always seen, and one that
+    //    starts later cannot slip in between the check and the mark.
+    const prepared = await db.tenant(tenant, (q) =>
+      prepareExternalEffectIo(q, tenant, claim, {
+        inspectConnection: deps.inspectConnection,
+      }),
     );
-    if (!derived.ok) {
-      await db.tenant(tenant, (q) =>
-        refuseExternalEffectBeforeIo(q, tenant, claim, {
-          category: derived.category,
-          summary: derived.summary,
-          cancelled: derived.cancelled === true,
-        }),
-      );
-      refused += 1;
+    if (!prepared.ok) {
+      if ("stale" in prepared && prepared.stale === true) stale += 1;
+      else refused += 1;
       continue;
     }
-    // 2. Live authority and connection reach are re-checked before the boundary.
-    const denial = await db.tenant(tenant, (q) =>
-      effectAuthorityRefusal(q, tenant, claim, deps.inspectConnection),
-    );
-    if (denial) {
-      await db.tenant(tenant, (q) =>
-        refuseExternalEffectBeforeIo(q, tenant, claim, {
-          category: denial.category,
-          summary: denial.summary,
-        }),
-      );
-      refused += 1;
-      continue;
-    }
-    // 3. Mark the boundary in its own short transaction. After this point the
-    //    outcome is either committed honestly or reported as unknown.
-    const marked = await db.tenant(tenant, (q) =>
-      markExternalEffectIoStarted(q, tenant, claim),
-    );
-    if (!marked) {
-      stale += 1;
-      continue;
-    }
+    const request = prepared.request;
+    // After the committed boundary the outcome is either committed honestly or
+    // reported as unknown; it is never silently retried.
     // 4. Provider I/O with no transaction and no row lock held.
     let outcome: EffectIoOutcome;
     invoked += 1;
@@ -963,7 +1078,7 @@ export async function externalEffectTick(
           provider_key: claim.provider_key,
           action: claim.action,
           capability: claim.capability,
-          payload: derived.request.payload,
+          payload: request.payload,
           effect: {
             idempotency_key: claim.idempotency_key,
             attempt: claim.attempt,

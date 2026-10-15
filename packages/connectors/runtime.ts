@@ -1028,11 +1028,16 @@ export async function connectionActionFacts(
   q: Query,
   tenant: string,
   connectionId: string,
+  options: { lock?: boolean } = {},
 ): Promise<ConnectionActionFacts | null> {
   const row = await one(
     q,
     "SELECT id,provider_key,status,enabled,ownership,owner_user_id,capabilities_granted" +
-      " FROM connector_connections WHERE tenant_id=$1 AND id=$2",
+      " FROM connector_connections WHERE tenant_id=$1 AND id=$2" +
+      // W29-P0/A1: the external-effect boundary locks the connection row so a
+      // concurrent disable or revoke cannot commit between the final eligibility
+      // check and the boundary mark.
+      (options.lock ? " FOR UPDATE" : ""),
     [tenant, connectionId],
   );
   if (!row) return null;
