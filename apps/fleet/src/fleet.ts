@@ -26,6 +26,12 @@ import {
 } from "../../../packages/operations/telemetry-transport.ts";
 import { OPERATOR_TELEMETRY_SUPPORTED_SCHEMAS, isCanonicalDeploymentId, validateOperatorTelemetryV1 } from "../../../packages/operations/operator-telemetry.ts";
 import {
+  EGRESS_PREFLIGHT_PORTS,
+  egressPolicy,
+  egressPosture,
+  preflightEndpoint,
+} from "../../../packages/connectors/egress-runtime.ts";
+import {
   FLEET_RATE_LIMIT_RULES,
   RateLimiter,
   clientKey,
@@ -809,6 +815,31 @@ export function buildFleetService(
     }
     reply.code(200).send({ id, state: target });
     return { id, state: target };
+  });
+
+  // ---- outbound provider egress (read-only operator plane) ----
+  // The deployment's effective egress posture, and a guarded diagnostic that answers
+  // "would this destination be allowed?" with the SAME evaluator and resolver contract
+  // a real provider connection uses, so the two planes can never disagree. Neither
+  // route opens a socket to the destination: a blocked endpoint is not contacted to
+  // produce its denial. Both consume the operator read budget, and the diagnostic is
+  // audited with a bounded, non-secret detail.
+  app.get("/egress", async (r, reply) => {
+    if (!(await operator(r, reply))) return;
+    return { posture: egressPosture(egressPolicy()) };
+  });
+
+  app.get("/egress/diagnostic", async (r, reply) => {
+    if (!(await operator(r, reply))) return;
+    const query = (r.query ?? {}) as { host?: unknown; port?: unknown };
+    const host = String(query.host ?? "").slice(0, 253);
+    const port = Number(query.port ?? 0);
+    const readiness = await preflightEndpoint({ host, port, allowed_ports: [...EGRESS_PREFLIGHT_PORTS] });
+    // State first, so a bounded truncation always keeps the outcome readable. The
+    // detail carries no raw address and never the policy body; an audit failure must
+    // not break the read.
+    await fleetAudit(pool, "egress.diagnostic", null, `${readiness.state} ${host}:${Number.isFinite(port) ? port : 0}`);
+    return { readiness };
   });
 
   app.get("/health", async () => ({ status: "ok" }));

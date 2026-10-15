@@ -206,6 +206,8 @@ type Route = (
   summary: string,
   h: Handler,
   s?: string,
+  /** Optional route-level budget for a sensitive read/write surface. */
+  limits?: { max: number; timeWindow: string },
 ) => void;
 const body = <T>(s: z.ZodType<T>, r: FastifyRequest) => s.parse(r.body),
   params = (r: FastifyRequest) => r.params as Record<string, string>,
@@ -667,7 +669,7 @@ export async function buildApp(
       );
     }
   };
-  const route: Route = (method, p, summary, h, s) =>
+  const route: Route = (method, p, summary, h, s, limits) =>
     app.route({
       method,
       url: `/api/v1${p}`,
@@ -677,6 +679,9 @@ export async function buildApp(
         security: [{ session: [] }, { serviceToken: [] }],
         ...(integrationOpenApi[`${method} ${p}`] || {}),
       },
+      // W29-P0/A2: a route may carry its own bounded budget, so a sensitive
+      // readiness check is rate limited without inventing a second limiter.
+      ...(limits ? { config: { rateLimit: limits } } : {}),
       preHandler: auth,
       handler: async (req, reply) => {
         const r = req as Request;

@@ -21,6 +21,7 @@ import { one } from "../../../packages/database/index.ts";
 import { randomUUID } from "node:crypto";
 import type { Actor } from "../../../packages/auth/index.ts";
 import {
+  EGRESS_PREFLIGHT_PORTS,
   adapterFor,
   adapterImplemented,
   canManageConnection,
@@ -39,6 +40,7 @@ import {
   isTenantAdministrator,
   listConnections,
   normalizeCapabilities,
+  preflightEndpoint,
   providerCatalog,
   providerDefinition,
   revokeConnection,
@@ -84,6 +86,7 @@ export type ConnectedWorkRoute = (
   summary: string,
   h: Handler,
   s?: string,
+  limits?: { max: number; timeWindow: string },
 ) => void;
 
 /** Connector management and automation authoring are human-session features. */
@@ -120,6 +123,15 @@ const secretBody = z.object({
 });
 
 const enabledBody = z.object({ enabled: z.boolean() });
+
+const preflightBody = z
+  .object({
+    // Bounded before it ever reaches the resolver: a long or control-character
+    // hostname is a request-shape error, not a policy question.
+    host: z.string().min(1).max(253),
+    port: z.number().int().min(1).max(65535),
+  })
+  .strict();
 
 /**
  * The connector action port the deterministic engine consumes. It reads live
@@ -320,6 +332,34 @@ export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
       // connector activity from these counters.
       return connectorMetricsForTenant(q, a.tenant_id);
     },
+  );
+
+  /**
+   * W29-P0/A2 endpoint readiness. Owner/admin only, human session only, with its
+   * own bounded budget. It resolves the hostname and evaluates the SAME policy a
+   * real provider connection uses, and it NEVER opens a socket to the destination:
+   * a blocked endpoint is not contacted to produce its denial, and the check cannot
+   * be used as an arbitrary port probe (the port vocabulary is fixed).
+   */
+  route(
+    "POST",
+    "/connectors/endpoints/preflight",
+    "Check whether a provider endpoint may be reached",
+    async (q, a, r) => {
+      humanSession(a);
+      assert(isTenantAdministrator(a), 403, "Administrator access required to check provider endpoints");
+      const body = preflightBody.parse(r.body ?? {});
+      const readiness = await preflightEndpoint({
+        host: body.host,
+        port: body.port,
+        allowed_ports: [...EGRESS_PREFLIGHT_PORTS],
+      });
+      return { readiness };
+    },
+    undefined,
+    // Bounded per minute. The route is a human-driven readiness check, and the
+    // limiter keys a POST by network identity, so this also bounds a shared NAT.
+    { max: 30, timeWindow: "1 minute" },
   );
 
   route("GET", "/automations/catalog", "List triggers, actions and condition operators", async () => ({

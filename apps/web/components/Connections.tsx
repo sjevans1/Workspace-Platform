@@ -83,6 +83,26 @@ export default function Connections({ me }: { me: any }) {
     id: string;
     rows: ConnectorEvent[];
   } | null>(null);
+  // W29-P0/A2: the guided endpoint-readiness check. Selecting a provider or typing
+  // a host only updates this local state; nothing is sent until the administrator
+  // presses the check button, and the check never contacts the endpoint.
+  const [readiness, setReadiness] = useState<{
+    state: string;
+    summary: string;
+    next_action: string;
+    host: string | null;
+    port: number;
+    address_class: string | null;
+    destination_digest: string;
+    policy: { fingerprint: string; version: string };
+  } | null>(null);
+  const [readinessBusy, setReadinessBusy] = useState(false);
+  // A mutating action is confirmed in a dialog before it is sent, so a click can
+  // never disable or revoke a connection by accident.
+  const [confirm, setConfirm] = useState<{
+    connection: Connection;
+    action: "disable" | "enable" | "revoke";
+  } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -220,6 +240,46 @@ export default function Connections({ me }: { me: any }) {
     }
   }
 
+  /**
+   * The readiness check asks the server whether this host and port could be
+   * reached. The answer comes from the deployment's egress policy, so the same
+   * question answered in the fleet console gives the same result.
+   */
+  async function checkReadiness(form: HTMLFormElement) {
+    const data = new FormData(form);
+    setReadinessBusy(true);
+    try {
+      const result = await api("/connectors/endpoints/preflight", "POST", {
+        host: String(data.get("host") || "").trim(),
+        port: Number(data.get("port")),
+      });
+      setReadiness(result.readiness);
+    } finally {
+      setReadinessBusy(false);
+    }
+  }
+
+  /** Runs a confirmed mutation, then reloads so the screen reflects the server. */
+  async function applyConfirmed() {
+    if (!confirm) return;
+    const { connection, action } = confirm;
+    setBusy(connection.id);
+    try {
+      if (action === "revoke") {
+        await api(`/connectors/connections/${connection.id}/revoke`, "POST", {});
+        notify("Connection revoked and its credential destroyed.");
+      } else {
+        await api(`/connectors/connections/${connection.id}/enabled`, "POST", {
+          enabled: action === "enable",
+        });
+      }
+      setConfirm(null);
+      await load();
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function viewEvents(connection: Connection) {
     if (events && events.id === connection.id) {
       setEvents(null);
@@ -272,6 +332,87 @@ export default function Connections({ me }: { me: any }) {
           Declared but not implemented in this release:{" "}
           {declared.map((d) => d.key).join(", ")}. They cannot be connected yet.
         </p>
+      )}
+
+      {admin && (
+        <div className="endpoint-readiness">
+          <h3>Endpoint readiness</h3>
+          <p className="muted small-text">
+            Check whether this deployment may reach a provider endpoint. The check
+            resolves the hostname and applies the deployment egress policy. It does
+            not contact the endpoint, so it cannot be used to scan a network.
+          </p>
+          <form className="form readiness-form" onSubmit={submit(checkReadiness)}>
+            <Field label="Provider or use case">
+              <select name="use_case" defaultValue="custom">
+                {providers
+                  .filter((p) => p.implemented)
+                  .map((p) => (
+                    <option key={p.key} value={p.key}>
+                      {p.display_name}
+                    </option>
+                  ))}
+                <option value="custom">Custom mail endpoint (IMAP/SMTP)</option>
+              </select>
+            </Field>
+            <Field label="Host">
+              <input
+                name="host"
+                type="text"
+                required
+                placeholder="mail.example.com"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Port">
+              <select name="port" defaultValue="993">
+                <option value="443">443 (HTTPS)</option>
+                <option value="993">993 (IMAP over TLS)</option>
+                <option value="465">465 (SMTP over TLS)</option>
+                <option value="587">587 (SMTP submission)</option>
+              </select>
+            </Field>
+            <div className="modal-actions">
+              <button className="button primary" disabled={readinessBusy}>
+                {readinessBusy ? "Checking…" : "Check network readiness"}
+              </button>
+            </div>
+          </form>
+          {readiness && (
+            <div
+              className={
+                readiness.state === "ready"
+                  ? "readiness-result readiness-ready"
+                  : "readiness-result readiness-blocked"
+              }
+              role="status"
+            >
+              <p className="readiness-state">
+                {readiness.state === "ready"
+                  ? "Ready"
+                  : readiness.state === "private_requires_approval"
+                    ? "Requires operator approval"
+                    : readiness.state === "blocked_by_operator_policy"
+                      ? "Blocked by operator policy"
+                      : readiness.state === "dns_not_safe"
+                        ? "DNS not safe"
+                        : readiness.state === "dns_failure"
+                          ? "Hostname could not be resolved"
+                          : readiness.state === "invalid_destination"
+                            ? "Not a valid public hostname"
+                            : readiness.state === "unsupported_port"
+                              ? "Port not supported"
+                              : label(readiness.state)}
+              </p>
+              <p>{readiness.summary}</p>
+              <p className="muted small-text">{readiness.next_action}</p>
+              <p className="muted small-text">
+                Policy {readiness.policy.fingerprint} · checked{" "}
+                {readiness.host || "—"}:{readiness.port} · no endpoint contact
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       {error && (
@@ -442,15 +583,9 @@ export default function Connections({ me }: { me: any }) {
                     className="button"
                     disabled={busy === c.id}
                     onClick={() =>
-                      run(async () => {
-                        await api(
-                          `/connectors/connections/${c.id}/enabled`,
-                          "POST",
-                          {
-                            enabled: !c.enabled,
-                          },
-                        );
-                        await load();
+                      setConfirm({
+                        connection: c,
+                        action: c.enabled ? "disable" : "enable",
                       })
                     }
                   >
@@ -472,17 +607,7 @@ export default function Connections({ me }: { me: any }) {
                     className="button quiet danger"
                     disabled={busy === c.id}
                     onClick={() =>
-                      run(async () => {
-                        await api(
-                          `/connectors/connections/${c.id}/revoke`,
-                          "POST",
-                          {},
-                        );
-                        await load();
-                        notify(
-                          "Connection revoked and its credential destroyed.",
-                        );
-                      })
+                      setConfirm({ connection: c, action: "revoke" })
                     }
                   >
                     <Trash size={15} />
@@ -493,6 +618,83 @@ export default function Connections({ me }: { me: any }) {
             </div>
           );
         })}
+
+      {confirm && (
+        <Modal
+          title={
+            confirm.action === "revoke"
+              ? `Revoke ${confirm.connection.label}?`
+              : confirm.action === "disable"
+                ? `Disable ${confirm.connection.label}?`
+                : `Enable ${confirm.connection.label}?`
+          }
+          close={() => setConfirm(null)}
+        >
+          <div className="form">
+            {confirm.action === "revoke" ? (
+              <>
+                <p>
+                  Revoking destroys the stored credential and withdraws every
+                  granted capability. Workflows and sync that use this connection
+                  stop, and it cannot be re-enabled: a new connection and a new
+                  credential are required.
+                </p>
+                <p className="muted small-text">
+                  Provider: {confirm.connection.provider_display_name} · ownership:{" "}
+                  {confirm.connection.ownership_label} · capabilities granted:{" "}
+                  {confirm.connection.capabilities_granted.length || "none"}
+                </p>
+              </>
+            ) : confirm.action === "disable" ? (
+              <>
+                <p>
+                  Disabling stops sync and workflow actions for this connection
+                  until it is enabled again. The stored credential is kept.
+                </p>
+                <p className="muted small-text">
+                  Provider: {confirm.connection.provider_display_name} · status:{" "}
+                  {label(confirm.connection.status)}
+                </p>
+              </>
+            ) : (
+              <>
+                <p>
+                  Enabling resumes sync and workflow actions for this connection.
+                </p>
+                <p className="muted small-text">
+                  Provider: {confirm.connection.provider_display_name} · status:{" "}
+                  {label(confirm.connection.status)}
+                </p>
+              </>
+            )}
+            <div className="modal-actions">
+              <button
+                className="button"
+                type="button"
+                onClick={() => setConfirm(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className={
+                  confirm.action === "revoke"
+                    ? "button danger"
+                    : "button primary"
+                }
+                type="button"
+                disabled={busy === confirm.connection.id}
+                onClick={() => run(applyConfirmed)}
+              >
+                {confirm.action === "revoke"
+                  ? "Revoke connection"
+                  : confirm.action === "disable"
+                    ? "Disable connection"
+                    : "Enable connection"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {modal === "create" && (
         <Modal title="New connection" close={() => setModal("")}>

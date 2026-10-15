@@ -126,6 +126,20 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
     .click();
   await expect(connectModal).toBeHidden();
 
+  // W29-P0/A2 endpoint readiness: the guided check resolves and evaluates without
+  // ever contacting the endpoint. "localhost" is not a canonical public hostname, so
+  // the answer is deterministic and needs no DNS: this proves the form, the API call
+  // and the shared readiness vocabulary are wired, not the runner's resolver.
+  const readiness = page.locator(".endpoint-readiness");
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness.getByRole("button", { name: "Check network readiness" }).click();
+  const readinessResult = readiness.getByRole("status");
+  await expect(readinessResult).toContainText("Not a valid public hostname");
+  await expect(readinessResult).toContainText("no endpoint contact");
+  // Selecting a provider or typing a host never mutates anything: the check is a
+  // read-only question, and the connection below still does not exist.
+  await expect(page.locator(".integration-row").filter({ hasText: label })).toHaveCount(0);
+
   const row = page.locator(".integration-row").filter({ hasText: label });
   await expect(row).toBeVisible();
   await expect(row).toContainText("Synthetic test provider");
@@ -149,22 +163,42 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
   );
   await expect(row.getByRole("status")).toContainText("Next attempt");
 
-  // Disable, then re-enable.
+  // Disable, then re-enable. Both are deliberate: the button opens a review dialog
+  // that names the consequence, and only the confirm button calls the API.
   await row.getByRole("button", { name: "Disable", exact: true }).click();
+  const disableDialog = page.getByRole("dialog", { name: `Disable ${label}?` });
+  await expect(disableDialog).toBeVisible();
+  await expect(disableDialog).toContainText("stored credential is kept");
+  // Cancelling changes nothing.
+  await disableDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(disableDialog).toBeHidden();
+  await expect(row.locator(".tag")).toHaveText("connected");
+  await row.getByRole("button", { name: "Disable", exact: true }).click();
+  await disableDialog.getByRole("button", { name: "Disable connection" }).click();
+  await expect(disableDialog).toBeHidden();
   await expect(
     row.getByRole("button", { name: "Enable", exact: true }),
   ).toBeVisible();
   await expect(row.locator(".tag")).toHaveText("disabled");
   await expect(row.getByRole("button", { name: "Sync now" })).toHaveCount(0);
   await row.getByRole("button", { name: "Enable", exact: true }).click();
+  const enableDialog = page.getByRole("dialog", { name: `Enable ${label}?` });
+  await enableDialog.getByRole("button", { name: "Enable connection" }).click();
+  await expect(enableDialog).toBeHidden();
   await expect(row.locator(".tag")).toHaveText("connected");
   await expect(row.getByRole("button", { name: "Sync now" })).toBeVisible();
 
   // The supplied secret is nowhere the browser or the API can reach.
   await expectSecretAbsent(page, secret);
 
-  // Revoke destroys the credential and the granted capabilities.
+  // Revoke destroys the credential and the granted capabilities. It states the
+  // consequence before it acts, because it cannot be undone.
   await row.getByRole("button", { name: "Revoke", exact: true }).click();
+  const revokeDialog = page.getByRole("dialog", { name: `Revoke ${label}?` });
+  await expect(revokeDialog).toBeVisible();
+  await expect(revokeDialog).toContainText("cannot be re-enabled");
+  await revokeDialog.getByRole("button", { name: "Revoke connection" }).click();
+  await expect(revokeDialog).toBeHidden();
   await expect(row.locator(".tag")).toHaveText("revoked");
   await expect(row).toContainText("Capabilities granted: none");
   await expect(row).toContainText(
