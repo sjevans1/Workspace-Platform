@@ -140,6 +140,16 @@ export function testOAuthTransport(
       "The acceptance transport only serves the acceptance provider",
     );
     const form = input.form;
+    // The fixture accepts BOTH declared client authentication methods, so a
+    // regression can prove the substrate sends what the descriptor declares.
+    const basic = String(input.headers?.authorization ?? "");
+    if (basic.startsWith("Basic ")) {
+      const [id, secret] = Buffer.from(basic.slice(6), "base64")
+        .toString("utf8")
+        .split(":");
+      form.client_id = id;
+      form.client_secret = secret;
+    }
     if (input.url === descriptor.token_url) {
       if (form.grant_type === "authorization_code") {
         const entry = codes.get(String(form.code ?? ""));

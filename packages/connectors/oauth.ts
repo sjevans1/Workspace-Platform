@@ -133,6 +133,20 @@ export function openAttemptVerifier(
   return openCredential(oauthAttemptAad(tenant, connection, attempt), sealed);
 }
 
+/**
+ * W29-P0/A3: redacts OAuth material from anything that might be logged, echoed in a
+ * diagnostic or captured in a failing test. The callback URL, a provider error body
+ * and a bearer header all carry material that must never reach a log or an artifact.
+ */
+export function redactOAuthMaterial(text: unknown): string {
+  return String(text ?? "")
+    .replace(/([?&](?:code|state|code_verifier|access_token|refresh_token|id_token|error_description)=)[^&\s"']+/gi, "$1[redacted]")
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{6,}/gi, "$1[redacted]")
+    .replace(/(Basic\s+)[A-Za-z0-9+/=]{6,}/gi, "$1[redacted]")
+    .replace(/(client_secret=)[^&\s"']+/gi, "$1[redacted]")
+    .replace(/test-(?:access|refresh)-[0-9a-f-]{8,}/gi, "test-credential-[redacted]");
+}
+
 /** Constant-time comparison for two digests. */
 export function digestEquals(a: string, b: string): boolean {
   const left = Buffer.from(String(a));
@@ -185,7 +199,13 @@ export async function startAuthorizationAttempt(
   q: Query,
   input: {
     tenant: string;
-    connection: { id: string; provider_key: string; status: string; enabled: boolean };
+    connection: {
+      id: string;
+      provider_key: string;
+      status: string;
+      enabled: boolean;
+      capabilities_requested?: string[];
+    };
     descriptor: OAuthProviderDescriptor;
     initiated_by: string;
     session_token: string;
@@ -204,7 +224,18 @@ export async function startAuthorizationAttempt(
     409,
     "A revoked connection cannot be authorized again",
   );
-  const capabilities = input.requested_capabilities.slice(0, 16);
+  // A caller may only ask for capabilities the CONNECTION was created with: the
+  // request is intersected with the connection's approved set, so an authorization
+  // attempt can never widen what the connection is allowed to use.
+  const approved = new Set(input.connection.capabilities_requested ?? []);
+  const capabilities = input.requested_capabilities
+    .filter((capability) => approved.has(capability))
+    .slice(0, 16);
+  assert(
+    capabilities.length > 0,
+    400,
+    "Choose at least one capability this connection was created with",
+  );
   const requested = input.descriptor.scopes
     .filter(
       (entry) =>
@@ -393,18 +424,66 @@ export async function completeAuthorizationAttempt(
     attempt: OAuthAttemptRow;
     descriptor: OAuthProviderDescriptor;
     tokens: TokenOutcome;
+    /** The authorizing human, re-checked against live membership at commit. */
+    authority?: { user_id: string };
     now?: Date;
   },
 ): Promise<{ capabilities: string[]; scopes: string[]; account_hint: string | null }> {
   const now = input.now ?? new Date();
+  // The connection row is LOCKED for the duration of this short transaction, so a
+  // concurrent revoke, disable or competing callback is serialized against the
+  // commit instead of racing it.
   const current = (await one(
     q,
-    "SELECT status,enabled,generation FROM connector_connections c," +
-      " (SELECT COALESCE(MAX(generation),0) AS generation FROM connector_oauth_attempts WHERE tenant_id=$1 AND connection_id=$2) g" +
-      " WHERE c.tenant_id=$1 AND c.id=$2",
+    "SELECT c.status,c.enabled,c.capabilities_requested,c.ownership,c.owner_user_id," +
+      " (SELECT COALESCE(MAX(generation),0) FROM connector_oauth_attempts WHERE tenant_id=$1 AND connection_id=$2) AS generation" +
+      " FROM connector_connections c WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c",
     [input.tenant, input.attempt.connection_id],
-  )) as { status: string; enabled: boolean; generation: number } | undefined;
+  )) as
+    | {
+        status: string;
+        enabled: boolean;
+        capabilities_requested: string[];
+        ownership: string;
+        owner_user_id: string | null;
+        generation: number;
+      }
+    | undefined;
   assert(current, 404, "Connection not found");
+  // Live membership and role are re-read here, not trusted from the request: a
+  // membership that was deactivated or downgraded during the redirect cannot commit.
+  if (input.authority) {
+    const membership = (await one(
+      q,
+      "SELECT role,active FROM memberships WHERE tenant_id=$1 AND user_id=$2",
+      [input.tenant, input.authority.user_id],
+    )) as { role: string; active: boolean } | undefined;
+    assert(
+      Boolean(membership) && membership!.active === true,
+      403,
+      "The authorizing membership is no longer active",
+    );
+    // The same rule the connection surface applies, re-evaluated on the locked row:
+    // a shared connection needs an owner or administrator, a delegated connection
+    // needs the authorizing user to own it (or to be an administrator).
+    const administrator = ["owner", "admin"].includes(String(membership!.role));
+    const permitted =
+      current.ownership === "tenant"
+        ? administrator
+        : administrator || current.owner_user_id === input.authority.user_id;
+    assert(
+      permitted,
+      403,
+      "The authorizing membership no longer holds this authority",
+    );
+  }
+  assert(
+    current.enabled,
+    409,
+    "This connection was disabled during authorization",
+  );
+  // The grant can only ever be a subset of what the connection was created with.
+  const approved = new Set(current.capabilities_requested ?? []);
   const attempt = (await one(
     q,
     "SELECT status,generation FROM connector_oauth_attempts WHERE tenant_id=$1 AND id=$2",
@@ -428,7 +507,14 @@ export async function completeAuthorizationAttempt(
 
   const grant = effectiveGrant({
     descriptor: input.descriptor,
-    requested_scopes: input.attempt.requested_scopes,
+    requested_scopes: input.attempt.requested_scopes.filter((scope) =>
+      input.descriptor.scopes.some(
+        (entry) =>
+          entry.scope === scope &&
+          entry.capability !== null &&
+          approved.has(entry.capability),
+      ),
+    ),
     granted_scopes: input.tokens.granted_scopes,
   });
   if (!grant.complete) {
@@ -499,6 +585,8 @@ export type OAuthHttpTransport = (input: {
   descriptor: OAuthProviderDescriptor;
   url: string;
   form: Record<string, string>;
+  /** Allowlisted request headers (used for `client_secret_basic`). */
+  headers?: Record<string, string>;
   policy: EgressPolicy;
 }) => Promise<{ status: number; body: string }>;
 
@@ -514,12 +602,41 @@ export const governedOAuthTransport: OAuthHttpTransport = async (input) => {
     headers: {
       "content-type": "application/x-www-form-urlencoded",
       accept: "application/json",
+      ...(input.headers ?? {}),
     },
     body,
     policy: input.policy,
   });
   return { status: response.status, body: response.body.toString("utf8") };
 };
+
+/**
+ * Applies the descriptor's declared client authentication. Both supported methods
+ * are implemented: a declared method that is not implemented is refused at load, so
+ * a descriptor can never claim one thing and send another.
+ */
+function clientAuth(descriptor: OAuthProviderDescriptor): {
+  form: Record<string, string>;
+  headers: Record<string, string>;
+} {
+  if (descriptor.client_auth === "client_secret_basic") {
+    const credentials = Buffer.from(
+      `${descriptor.client_id}:${descriptor.client_secret}`,
+      "utf8",
+    ).toString("base64");
+    return {
+      form: {},
+      headers: { authorization: `Basic ${credentials}` },
+    };
+  }
+  return {
+    form: {
+      client_id: descriptor.client_id,
+      client_secret: descriptor.client_secret,
+    },
+    headers: {},
+  };
+}
 
 function parseTokenResponse(
   status: number,
@@ -576,27 +693,22 @@ export async function exchangeAuthorizationCode(input: {
 }): Promise<{ ok: true; outcome: TokenOutcome } | { ok: false; category: OAuthFailureCategory }> {
   const transport = input.transport ?? governedOAuthTransport;
   const policy = input.policy ?? egressPolicy();
+  const auth = clientAuth(input.descriptor);
   const form: Record<string, string> = {
     grant_type: "authorization_code",
     code: input.code,
     redirect_uri: input.descriptor.redirect_uri,
+    ...auth.form,
   };
-  if (input.descriptor.client_auth === "client_secret_post") {
-    form.client_id = input.descriptor.client_id;
-    form.client_secret = input.descriptor.client_secret;
-  }
-  if (input.verifier) {
-    form.code_verifier = input.verifier;
-  }
-  const headers: Record<string, string> = {};
+  if (input.verifier) form.code_verifier = input.verifier;
   try {
     const response = await transport({
       descriptor: input.descriptor,
       url: input.descriptor.token_url,
       form,
+      headers: auth.headers,
       policy,
     });
-    void headers;
     return parseTokenResponse(response.status, response.body, input.descriptor);
   } catch {
     return { ok: false, category: "provider_unreachable" };
@@ -612,19 +724,18 @@ export async function refreshGrant(input: {
 }): Promise<{ ok: true; outcome: TokenOutcome } | { ok: false; category: OAuthFailureCategory }> {
   const transport = input.transport ?? governedOAuthTransport;
   const policy = input.policy ?? egressPolicy();
+  const auth = clientAuth(input.descriptor);
   const form: Record<string, string> = {
     grant_type: "refresh_token",
     refresh_token: input.refresh_token,
+    ...auth.form,
   };
-  if (input.descriptor.client_auth === "client_secret_post") {
-    form.client_id = input.descriptor.client_id;
-    form.client_secret = input.descriptor.client_secret;
-  }
   try {
     const response = await transport({
       descriptor: input.descriptor,
       url: input.descriptor.token_url,
       form,
+      headers: auth.headers,
       policy,
     });
     return parseTokenResponse(response.status, response.body, input.descriptor);
@@ -644,19 +755,18 @@ export async function revokeProviderGrant(input: {
     return { attempted: false, category: null };
   const transport = input.transport ?? governedOAuthTransport;
   const policy = input.policy ?? egressPolicy();
+  const auth = clientAuth(input.descriptor);
   const form: Record<string, string> = {
     token: input.refresh_token,
     token_type_hint: "refresh_token",
+    ...auth.form,
   };
-  if (input.descriptor.client_auth === "client_secret_post") {
-    form.client_id = input.descriptor.client_id;
-    form.client_secret = input.descriptor.client_secret;
-  }
   try {
     const response = await transport({
       descriptor: input.descriptor,
       url: input.descriptor.revoke_url,
       form,
+      headers: auth.headers,
       policy,
     });
     return {
@@ -751,7 +861,7 @@ export async function completeRefresh(
     tokens: TokenOutcome;
     now?: Date;
   },
-): Promise<{ rotated: boolean }> {
+): Promise<{ rotated: boolean; attention?: "refresh_unknown_outcome" }> {
   const now = input.now ?? new Date();
   const claim = (await one(
     q,
@@ -808,20 +918,22 @@ export async function completeRefresh(
     rotated = true;
   } else if (input.descriptor.refresh_rotation !== "static") {
     // The provider did not return a refresh token. When its contract does not
-    // promise that the previous one stays valid, replaying it would be a guess.
+    // promise that the previous one stays valid, replaying it would be a guess, so
+    // the honest outcome is recorded and COMMITTED here: `unknown` means the
+    // provider may have rotated the token while the local commit did not land. The
+    // caller receives that outcome rather than an exception, because throwing would
+    // roll this state back and lose it.
     await q.query(
-      "UPDATE connector_oauth_refresh_claims SET status='failed',failure_category='refresh_unknown_outcome',completed_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2",
-      [input.tenant, input.claim.id],
+      "UPDATE connector_oauth_refresh_claims SET status='failed',failure_category='refresh_unknown_outcome',completed_at=now(),updated_at=now()" +
+        " WHERE tenant_id=$1 AND id=$2 AND claim_token=$3",
+      [input.tenant, input.claim.id, input.claim.claim_token],
     );
     await q.query(
       "UPDATE connector_connections SET status='attention_required',attention_reason='refresh_unknown_outcome',last_error_at=now(),last_error_category='refresh_unknown_outcome',updated_at=now()" +
         " WHERE tenant_id=$1 AND id=$2 AND status<>'revoked'",
       [input.tenant, input.claim.connection_id],
     );
-    throw Object.assign(new Error("The provider did not confirm the new grant"), {
-      statusCode: 409,
-      category: "refresh_unknown_outcome" as OAuthFailureCategory,
-    });
+    return { rotated: false, attention: "refresh_unknown_outcome" as const };
   }
   await q.query(
     "UPDATE connector_oauth_refresh_claims SET status='completed',completed_at=now(),updated_at=now() WHERE tenant_id=$1 AND id=$2",
@@ -845,10 +957,12 @@ export async function failRefresh(
     reason?: string;
   },
 ): Promise<void> {
+  // Fenced by the claim token: a worker whose lease was reclaimed can no longer
+  // write a failure over the newer claimant's claim.
   await q.query(
     "UPDATE connector_oauth_refresh_claims SET status='failed',failure_category=$3,completed_at=now(),updated_at=now()" +
-      " WHERE tenant_id=$1 AND id=$2",
-    [input.tenant, input.claim.id, input.category],
+      " WHERE tenant_id=$1 AND id=$2 AND status='claimed' AND claim_token=$4",
+    [input.tenant, input.claim.id, input.category, input.claim.claim_token],
   );
   if (!input.attention) return;
   await q.query(

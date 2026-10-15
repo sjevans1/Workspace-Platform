@@ -239,6 +239,42 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
   // The supplied secret is nowhere the browser or the API can reach.
   await expectSecretAbsent(page, secret);
 
+  // W29-P0/A3: the deterministic OAuth journey, against the acceptance provider
+  // that exists only when a nonproduction deployment enables test wiring. Every step
+  // is a real state transition: review, a top-level redirect, provider approval, a
+  // clean callback landing, and a connection that is connected only after the grant
+  // is stored.
+  const oauthLabel = `OAuth acceptance ${randomUUID().slice(0, 8)}`;
+  await page.getByRole("button", { name: "New connection" }).click();
+  const oauthCreate = page.getByRole("dialog", { name: "New connection" });
+  await oauthCreate.getByLabel("Provider").selectOption("oauth-test-provider");
+  await oauthCreate.getByLabel("Label", { exact: true }).fill(oauthLabel);
+  await oauthCreate.getByLabel("Ownership").selectOption("tenant");
+  await oauthCreate.getByRole("button", { name: "Create connection" }).click();
+  const review = page.getByRole("dialog", { name: "Review permissions" });
+  await expect(review).toBeVisible();
+  await expect(review).toContainText("Workspace will request");
+  await expect(review).toContainText("Your provider may bill your own account");
+  await review.getByRole("button", { name: "Continue to provider" }).click();
+  // The provider's own consent page, on the deployment's origin.
+  await page.getByRole("heading", { name: "Acceptance OAuth provider" }).waitFor();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Connected" }),
+  ).toBeVisible();
+  // The address the browser keeps is clean: no code, state or token.
+  const landed = new URL(page.url());
+  for (const key of ["code", "state", "access_token", "error_description"])
+    expect(landed.searchParams.get(key)).toBeNull();
+  const oauthRow = page.locator(".integration-row").filter({ hasText: oauthLabel }).first();
+  await expect(oauthRow.locator(".tag")).toHaveText("connected");
+  await oauthRow.getByRole("button", { name: "View access" }).click();
+  await expect(oauthRow.locator(".oauth-detail")).toContainText("Approved permissions");
+  await expect(oauthRow.locator(".oauth-detail")).toContainText(
+    "Token values are never shown",
+  );
+  await expect(oauthRow.locator(".oauth-detail")).not.toContainText("test-access-");
+
   // Revoke destroys the credential and the granted capabilities. It states the
   // consequence before it acts, because it cannot be undone.
   await row.getByRole("button", { name: "Revoke", exact: true }).click();

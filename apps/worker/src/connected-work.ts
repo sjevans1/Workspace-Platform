@@ -18,13 +18,22 @@ import { randomUUID } from "node:crypto";
 import type { Database, Query } from "../../../packages/database/index.ts";
 import { one } from "../../../packages/database/index.ts";
 import {
+  OAUTH_TEST_PROVIDER_KEY,
+  activeCredential,
   adapterFor,
   backoffSeconds,
   claimDueSync,
+  claimRefresh,
   classifyProviderFailure,
+  completeRefresh,
   completeSync,
+  failRefresh,
   failSync,
+  oauthDescriptorFor,
+  oauthRegistry,
   recordConnectorEvent,
+  refreshGrant,
+  testOAuthTransport,
   type FailureCategory,
   type SyncClaim,
 } from "../../../packages/connectors/index.ts";
@@ -67,10 +76,114 @@ function providerFailureFrom(error: unknown) {
  * One bounded connector sync phase for a tenant. A sync that fails never advances
  * the cursor: the cursor is written only by `completeSync`.
  */
+/**
+ * W29-P0/A3: the operational refresh phase.
+ *
+ * Same discipline as the sync tick: a short transaction claims the lease, the
+ * provider call happens with NO transaction held, and a second short transaction
+ * commits the outcome under the fence. A crashed worker leaves a claim that expires
+ * and is reclaimed; a worker whose claim was reclaimed cannot commit; and a
+ * connection that was revoked or disabled while the refresh was in flight cannot be
+ * refreshed back to connected.
+ */
+function oauthTransportFor(descriptor: { key: string; test_only: boolean }) {
+  // The acceptance fixture is answered in-process and exists only when the
+  // deployment enabled test wiring, which production refuses at load.
+  return descriptor.test_only ? testOAuthTransport(descriptor as never) : undefined;
+}
+
+export async function oauthRefreshTick(
+  db: Database,
+  tenant: string,
+  options: { now?: Date; limit?: number } = {},
+): Promise<{ due: number; refreshed: number; attention: number }> {
+  const now = options.now ?? new Date();
+  const keys = [...oauthRegistry().descriptors.keys()];
+  if (!keys.length) return { due: 0, refreshed: 0, attention: 0 };
+  const candidates = await db.tenant(tenant, (q) =>
+    q.query(
+      "SELECT c.id,c.provider_key,rc.key_version AS refresh_version,rc.metadata AS access_metadata," +
+        " (SELECT COALESCE(MAX(key_version),0) FROM connector_credentials WHERE tenant_id=c.tenant_id AND connection_id=c.id AND kind='oauth_access' AND revoked_at IS NULL) AS access_version" +
+        " FROM connector_connections c" +
+        " JOIN connector_credentials rc ON rc.tenant_id=c.tenant_id AND rc.connection_id=c.id AND rc.kind='oauth_refresh' AND rc.revoked_at IS NULL" +
+        " WHERE c.tenant_id=$1 AND c.status='connected' AND c.enabled AND c.provider_key = ANY($2::text[])" +
+        " ORDER BY c.id LIMIT $3",
+      [tenant, keys, Math.max(1, Math.min(options.limit ?? 20, 50))],
+    ),
+  );
+  let refreshed = 0;
+  let attention = 0;
+  for (const row of candidates.rows as {
+    id: string;
+    provider_key: string;
+    refresh_version: number;
+    access_version: number;
+  }[]) {
+    const descriptor = oauthDescriptorFor(row.provider_key);
+    if (!descriptor) continue;
+    // Claim the lease in a short transaction.
+    const claim = await db.tenant(tenant, (q) =>
+      claimRefresh(q, {
+        tenant,
+        connection_id: row.id,
+        credential_version: Number(row.refresh_version),
+        now,
+      }),
+    );
+    if (!claim) continue;
+    // Read the refresh token, then release the transaction before any I/O.
+    const stored = await db.tenant(tenant, (q) =>
+      activeCredential(q, tenant, row.id, "oauth_refresh"),
+    );
+    if (!stored) continue;
+    const result = await refreshGrant({
+      descriptor,
+      refresh_token: stored.secret,
+      transport: oauthTransportFor(descriptor),
+    });
+    if (!result.ok) {
+      await db.tenant(tenant, (q) =>
+        failRefresh(q, {
+          tenant,
+          claim,
+          category: result.category,
+          // An invalid grant or an unreachable provider needs a human: the grant is
+          // unusable and further attempts cannot fix it.
+          attention: ["refresh_invalid_grant", "provider_unreachable"].includes(
+            result.category,
+          ),
+          reason: result.category,
+        }),
+      );
+      attention += 1;
+      continue;
+    }
+    const committed = await db.tenant(tenant, (q) =>
+      completeRefresh(q, {
+        tenant,
+        claim,
+        descriptor,
+        tokens: result.outcome,
+        now,
+      }),
+    ).catch(() => null);
+    if (!committed) {
+      attention += 1;
+      continue;
+    }
+    if (committed.attention) attention += 1;
+    else refreshed += 1;
+  }
+  return { due: candidates.rows.length, refreshed, attention };
+}
+
 export async function connectorTick(
   db: Database,
   tenant: string,
 ): Promise<{ claimed: number; succeeded: number; failed: number; events: number }> {
+  // The refresh phase runs before sync, so a grant that is about to expire is
+  // rotated before an adapter tries to use it.
+  await oauthRefreshTick(db, tenant).catch(() => undefined);
   const claims: SyncClaim[] = await db.tenant(tenant, (q) => claimDueSync(q, tenant));
   let succeeded = 0,
     failed = 0,

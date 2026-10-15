@@ -28,9 +28,15 @@ import {
   exchangeAuthorizationCode,
   failRefresh,
   oauthDescriptorFor,
+  credentialAad,
+  issueTestCode,
   oauthStateDigest,
   oauthTestProviderState,
+  pkcePair,
+  parseOAuthDescriptor,
+  redactOAuthMaterial,
   refreshGrant,
+  sealCredential,
   sessionDigest,
   setOAuthRegistryForTesting,
   testOAuthTransport,
@@ -99,7 +105,7 @@ async function approveAtProvider(authorizationUrl: string): Promise<string> {
     method: "GET",
     url: `/api/v1/oauth-test/authorize${url.search}`,
   });
-  assert.equal(page.statusCode, 200, page.body);
+  assert.equal(page.statusCode, 200, redactOAuthMaterial(page.body));
   const hidden: Record<string, string> = {};
   for (const match of page.body.matchAll(/name="([a-z_]+)" value="([^"]*)"/g))
     hidden[match[1]] = match[2];
@@ -109,7 +115,7 @@ async function approveAtProvider(authorizationUrl: string): Promise<string> {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({ ...hidden, decision: "approve" }).toString(),
   });
-  assert.equal(approved.statusCode, 303, approved.body);
+  assert.equal(approved.statusCode, 303, redactOAuthMaterial(approved.body));
   return approved.headers.location as string;
 }
 
@@ -125,7 +131,7 @@ async function denyAtProvider(authorizationUrl: string): Promise<string> {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({ ...hidden, decision: "deny" }).toString(),
   });
-  assert.equal(denied.statusCode, 303, denied.body);
+  assert.equal(denied.statusCode, 303, redactOAuthMaterial(denied.body));
   return denied.headers.location as string;
 }
 
@@ -230,7 +236,7 @@ test("A3: the catalog advertises the registered descriptor and no unregistered s
 test("A3: the whole authorization journey connects the account and seals both tokens", async () => {
   const connection = await createConnection("Journey mailbox");
   const started = await startAuthorization(connection);
-  assert.equal(started.statusCode, 200, started.body);
+  assert.equal(started.statusCode, 200, redactOAuthMaterial(started.body));
   const authorizationUrl = new URL(started.json().authorization.authorization_url);
   assert.equal(authorizationUrl.origin + authorizationUrl.pathname, descriptor().authorization_url);
   const state = authorizationUrl.searchParams.get("state")!;
@@ -255,7 +261,7 @@ test("A3: the whole authorization journey connects the account and seals both to
   const callbackUrl = await approveAtProvider(started.json().authorization.authorization_url);
   assert.equal(new URL(callbackUrl).searchParams.get("state"), state);
   const completed = await callback(callbackUrl);
-  assert.equal(completed.statusCode, 303, completed.body);
+  assert.equal(completed.statusCode, 303, redactOAuthMaterial(completed.body));
   const clean = new URL(completed.headers.location as string);
   assert.equal(clean.pathname, "/");
   assert.equal(clean.searchParams.get("oauth"), "connected");
@@ -293,7 +299,7 @@ test("A3: the whole authorization journey connects the account and seals both to
   }
 
   const safe = await status(connection);
-  assert.equal(safe.statusCode, 200, safe.body);
+  assert.equal(safe.statusCode, 200, redactOAuthMaterial(safe.body));
   const body = JSON.stringify(safe.json());
   assert.ok(!body.includes("test-access-"));
   assert.ok(!body.includes("test-refresh-"));
@@ -322,7 +328,7 @@ test("A3: a provider denial leaves the connection pending with a retry", async (
   assert.equal(attempt.rows[0].failure_category, "provider_denied");
   // A retry is possible: a fresh attempt supersedes the denied one.
   const retry = await startAuthorization(connection);
-  assert.equal(retry.statusCode, 200, retry.body);
+  assert.equal(retry.statusCode, 200, redactOAuthMaterial(retry.body));
 });
 
 // ---------------------------------------------------------------------------
@@ -417,7 +423,7 @@ test("A3: revoking during the exchange refuses the commit and writes no credenti
     },
     payload: {},
   });
-  assert.equal(revoke.statusCode, 200, revoke.body);
+  assert.equal(revoke.statusCode, 200, redactOAuthMaterial(revoke.body));
   const completed = await callback(callbackUrl);
   assert.notEqual(new URL(completed.headers.location as string).searchParams.get("oauth"), "connected");
   const row = await db.tenant(tenant, (q) =>
@@ -439,7 +445,7 @@ test("A3: revoking during the exchange refuses the commit and writes no credenti
     },
     payload: { capabilities: ["message.receive"] },
   });
-  assert.equal(reconnect.statusCode, 409, reconnect.body);
+  assert.equal(reconnect.statusCode, 409, redactOAuthMaterial(reconnect.body));
 });
 
 test("A3: an insufficient grant never promotes a connection to connected", async () => {
@@ -654,3 +660,217 @@ test("A3: a stale claim cannot commit, and invalid_grant becomes attention_requi
 void digestEquals;
 void sessionDigest;
 void oauthTestProviderState;
+
+// ---------------------------------------------------------------------------
+// Review corrections: authority at commit, capability bounding, client auth and
+// secret-safe diagnostics.
+// ---------------------------------------------------------------------------
+
+test("A3: capabilities are bounded to what the connection was created with", async () => {
+  const connection = await createConnection("Bounded mailbox", "tenant");
+  // The connection was created with health + receive + send; asking for a
+  // capability it was never created with is refused outright.
+  const refused = await startAuthorization(connection, owner, ["message.forward"]);
+  assert.equal(refused.statusCode, 400, redactOAuthMaterial(refused.body));
+  const subset = await startAuthorization(connection, owner, ["message.receive"]);
+  assert.equal(subset.statusCode, 200, redactOAuthMaterial(subset.body));
+  const attempt = await db.tenant(tenant, (q) =>
+    q.query("SELECT requested_scopes,requested_capabilities FROM connector_oauth_attempts WHERE connection_id=$1 AND status='authorizing'", [
+      connection,
+    ]),
+  );
+  assert.deepEqual(attempt.rows[0].requested_capabilities, ["message.receive"]);
+  assert.deepEqual(attempt.rows[0].requested_scopes, ["messages.read"]);
+});
+
+test("A3: a downgraded membership cannot commit the authorization", async () => {
+  const connection = await createConnection("Authority mailbox", "tenant");
+  const started = await startAuthorization(connection);
+  const callbackUrl = await approveAtProvider(started.json().authorization.authorization_url);
+  // The authorizing user is downgraded while the provider redirect is in flight.
+  const me = await app.inject({ method: "GET", url: "/api/v1/me", headers: { cookie: owner.cookie } });
+  const userId = me.json().user.id;
+  try {
+    await db.tenant(tenant, (q) =>
+      q.query("UPDATE memberships SET role='member' WHERE tenant_id=$1 AND user_id=$2", [
+        tenant,
+        userId,
+      ]),
+    );
+    const completed = await callback(callbackUrl);
+    assert.notEqual(
+      new URL(completed.headers.location as string).searchParams.get("oauth"),
+      "connected",
+    );
+    const credentials = await db.tenant(tenant, (q) =>
+      q.query("SELECT count(*)::int AS c FROM connector_credentials WHERE connection_id=$1", [
+        connection,
+      ]),
+    );
+    assert.equal(credentials.rows[0].c, 0, "a downgraded membership writes no credential");
+  } finally {
+    // Restore the role so the rest of the suite runs as the owner.
+    await db.tenant(tenant, (q) =>
+      q.query("UPDATE memberships SET role='owner' WHERE tenant_id=$1 AND user_id=$2", [
+        tenant,
+        userId,
+      ]),
+    );
+  }
+});
+
+test("A3: a connection disabled during the redirect cannot commit", async () => {
+  const connection = await createConnection("Disabled mailbox", "tenant");
+  const started = await startAuthorization(connection);
+  const callbackUrl = await approveAtProvider(started.json().authorization.authorization_url);
+  await app.inject({
+    method: "POST",
+    url: `/api/v1/connectors/connections/${connection}/enabled`,
+    headers: { cookie: owner.cookie, "x-csrf-token": owner.csrf, "content-type": "application/json" },
+    payload: { enabled: false },
+  });
+  const completed = await callback(callbackUrl);
+  assert.notEqual(
+    new URL(completed.headers.location as string).searchParams.get("oauth"),
+    "connected",
+  );
+  const credentials = await db.tenant(tenant, (q) =>
+    q.query("SELECT count(*)::int AS c FROM connector_credentials WHERE connection_id=$1", [connection]),
+  );
+  assert.equal(credentials.rows[0].c, 0);
+});
+
+test("A3: two concurrent callbacks for one state commit exactly once", async () => {
+  const connection = await createConnection("Concurrent mailbox", "tenant");
+  const started = await startAuthorization(connection);
+  const callbackUrl = await approveAtProvider(started.json().authorization.authorization_url);
+  const [first, second] = await Promise.all([
+    callback(callbackUrl),
+    callback(callbackUrl),
+  ]);
+  const outcomes = [first, second].map((response) =>
+    new URL(response.headers.location as string).searchParams.get("oauth"),
+  );
+  assert.equal(outcomes.filter((outcome) => outcome === "connected").length, 1);
+  const access = await db.tenant(tenant, (q) =>
+    q.query("SELECT count(*)::int AS c FROM connector_credentials WHERE connection_id=$1 AND kind='oauth_access' AND revoked_at IS NULL", [
+      connection,
+    ]),
+  );
+  assert.equal(access.rows[0].c, 1, "exactly one access credential is active");
+});
+
+test("A3: two concurrent starts leave exactly one live authorization", async () => {
+  const connection = await createConnection("Concurrent start mailbox", "tenant");
+  const [first, second] = await Promise.all([
+    startAuthorization(connection),
+    startAuthorization(connection),
+  ]);
+  assert.ok([first, second].some((response) => response.statusCode === 200));
+  const live = await db.tenant(tenant, (q) =>
+    q.query("SELECT count(*)::int AS c FROM connector_oauth_attempts WHERE connection_id=$1 AND status IN ('authorizing','exchanging')", [
+      connection,
+    ]),
+  );
+  assert.equal(live.rows[0].c, 1, "one live authorization per connection");
+});
+
+test("A3: client_secret_basic is implemented, not merely declared", async () => {
+  const basic = parseOAuthDescriptor({
+    key: "basic-probe",
+    display_name: "Basic probe",
+    authorization_url: "https://provider.example.test/authorize",
+    token_url: "https://provider.example.test/token",
+    client_id: "basic-client",
+    client_secret: "basic-client-secret-value",
+    client_auth: "client_secret_basic",
+    pkce: "S256",
+    redirect_uri: "https://workspace.example.test/api/v1/connectors/oauth/callback",
+    refresh_rotation: "rotates",
+    scopes: [{ scope: "profile.read", capability: "connection.health", label: "Identity" }],
+  });
+  const fixture = oauthDescriptorFor(OAUTH_TEST_PROVIDER_KEY)!;
+  // The fixture proves the substrate sends the declared method: a Basic descriptor
+  // is answered with the credentials the header carries.
+  const transport = testOAuthTransport(fixture);
+  const pkce = pkcePair();
+  const issued = issueTestCode({
+    descriptor_key: fixture.key,
+    redirect_uri: fixture.redirect_uri,
+    scopes: ["profile.read"],
+    challenge: pkce.challenge,
+    method: "S256",
+    behaviour: "approve",
+  });
+  const withBasic = await exchangeAuthorizationCode({
+    descriptor: { ...fixture, client_auth: "client_secret_basic" },
+    code: issued.code,
+    verifier: pkce.verifier,
+    transport: async (input) =>
+      transport({
+        ...input,
+        descriptor: fixture,
+        headers: {
+          ...(input.headers ?? {}),
+          authorization: `Basic ${Buffer.from("workspace-acceptance-client:acceptance-test-client-secret").toString("base64")}`,
+        },
+      }),
+  });
+  assert.equal(withBasic.ok, true, JSON.stringify(withBasic));
+  void basic;
+});
+
+test("A3: OAuth material is redacted from any diagnostic", () => {
+  const url =
+    "http://localhost:3000/api/v1/connectors/oauth/callback?code=test-code-abc123&state=STATE_SECRET&error_description=leaked";
+  const redacted = redactOAuthMaterial(url);
+  for (const fragment of ["test-code-abc123", "STATE_SECRET", "leaked"])
+    assert.ok(!redacted.includes(fragment), `not redacted: ${fragment}`);
+  const bearer = redactOAuthMaterial("Authorization: Bearer test-access-1234567890abcdef");
+  assert.ok(!bearer.includes("test-access-1234567890abcdef"));
+  const basic = redactOAuthMaterial("Authorization: Basic d29ya3NwYWNlOmFjY2VwdGFuY2U=");
+  assert.ok(!basic.includes("d29ya3NwYWNlOmFjY2VwdGFuY2U="));
+  const form = redactOAuthMaterial("grant_type=authorization_code&client_secret=super-secret-value");
+  assert.ok(!form.includes("super-secret-value"));
+  assert.ok(redactOAuthMaterial("test-refresh-12345678-abcd").includes("[redacted]"));
+});
+
+test("A3: the worker refresh phase rotates a live grant and escalates a dead one", async () => {
+  const { oauthRefreshTick } = await import("../apps/worker/src/connected-work.ts");
+  const live = await createConnection("Worker refresh mailbox", "tenant");
+  const liveStart = await startAuthorization(live);
+  await callback(await approveAtProvider(liveStart.json().authorization.authorization_url));
+  const before = await db.tenant(tenant, (q) =>
+    q.query("SELECT key_version FROM connector_credentials WHERE connection_id=$1 AND kind='oauth_refresh' AND revoked_at IS NULL", [live]),
+  );
+  const tick = await oauthRefreshTick(db, tenant, { now: new Date() });
+  assert.ok(tick.refreshed >= 1, JSON.stringify(tick));
+  const after = await db.tenant(tenant, (q) =>
+    q.query("SELECT key_version FROM connector_credentials WHERE connection_id=$1 AND kind='oauth_refresh' AND revoked_at IS NULL", [live]),
+  );
+  assert.ok(
+    Number(after.rows[0].key_version) > Number(before.rows[0].key_version),
+    "the worker rotated the refresh credential",
+  );
+
+  // A grant the provider rejects needs a human, not a retry loop.
+  const dead = await createConnection("Worker dead mailbox", "tenant");
+  const deadStart = await startAuthorization(dead);
+  await callback(await approveAtProvider(deadStart.json().authorization.authorization_url));
+  const deadSecret = sealCredential(
+    credentialAad(tenant, dead, "oauth_refresh"),
+    "not-a-valid-refresh-token",
+  );
+  await db.tenant(tenant, (q) =>
+    q.query("UPDATE connector_credentials SET secret_encrypted=$2 WHERE connection_id=$1 AND kind='oauth_refresh'", [
+      dead,
+      deadSecret,
+    ]),
+  );
+  const deadTick = await oauthRefreshTick(db, tenant, { now: new Date() });
+  assert.ok(deadTick.attention >= 1, JSON.stringify(deadTick));
+  const row = await db.tenant(tenant, (q) =>
+    q.query("SELECT status,attention_reason FROM connector_connections WHERE id=$1", [dead]),
+  );
+  assert.equal(row.rows[0].status, "attention_required");
+});

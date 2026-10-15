@@ -30,8 +30,10 @@ import {
   oauthDescriptorFor,
   oauthRegistry,
   issueTestCode,
+  activeCredential,
   oauthStatusFor,
   providerKeys,
+  revokeProviderGrant,
   registerOAuthTestProvider,
   resetOAuthTestProvider,
   startAuthorizationAttempt,
@@ -424,7 +426,12 @@ export function connectedWorkRoutes(
         provider_key: descriptor.key,
         display_name: descriptor.display_name,
         test_only: descriptor.test_only,
-        connectable: true,
+        // A descriptor is connectable only when this deployment has an EXECUTABLE
+        // authorization path for it. The acceptance fixture does (in acceptance
+        // environments only); a registered real provider does not yet, because the
+        // real adapters and the #234 activation gate are future work, so it is
+        // described but never offered with a Connect control.
+        connectable: descriptor.test_only,
         refresh_rotation: descriptor.refresh_rotation,
         scopes: descriptor.scopes.map((entry) => ({
           scope: entry.scope,
@@ -503,14 +510,34 @@ export function connectedWorkRoutes(
     },
   );
 
-  route(
+  seamRoute(
     "POST",
     "/connectors/connections/:id/revoke",
     "Revoke a connection and destroy its credentials",
-    async (q, a, r) => {
+    async (seam, a, r) => {
       humanSession(a);
-      return { connection: await revokeConnection(q, a, connectionParam(r)) };
+      const id = connectionParam(r);
+      // The LOCAL denial commits first, in its own short transaction: it is
+      // authoritative and never waits for a provider.
+      const connection = await seam.run((q) => revokeConnection(q, a, id));
+      const descriptor = oauthDescriptorFor(String(connection.provider_key));
+      if (descriptor) {
+        // Best effort, AFTER the commit and with no tenant transaction held: a
+        // provider that is slow or unreachable can neither delay nor undo the local
+        // denial, and a revoked connection is never refreshed back to connected.
+        const stored = await seam.run((q) =>
+          activeCredential(q, a.tenant_id, id, "oauth_refresh"),
+        );
+        if (stored)
+          await revokeProviderGrant({
+            descriptor,
+            refresh_token: stored.secret,
+            transport: oauthTransportFor(descriptor),
+          }).catch(() => undefined);
+      }
+      return { connection };
     },
+    { rateLimit: { max: 30, timeWindow: "5 minutes" } },
   );
 
   route("POST", "/connectors/connections/:id/test", "Run the connection health probe", async (q, a, r) => {
@@ -650,6 +677,8 @@ export function connectedWorkRoutes(
             provider_key: String(connection.provider_key),
             status: String(connection.status),
             enabled: connection.enabled !== false,
+            capabilities_requested:
+              (connection.capabilities_requested as string[]) ?? [],
           },
           descriptor,
           initiated_by: a.user_id,
@@ -704,6 +733,8 @@ export function connectedWorkRoutes(
             provider_key: String(connection.provider_key),
             status: String(connection.status),
             enabled: connection.enabled !== false,
+            capabilities_requested:
+              (connection.capabilities_requested as string[]) ?? [],
           },
           descriptor,
           initiated_by: a.user_id,
@@ -829,6 +860,8 @@ export function connectedWorkRoutes(
             attempt,
             descriptor,
             tokens: exchanged.outcome,
+            // Live membership and role are re-read inside the commit transaction.
+            authority: { user_id: a.user_id },
           }),
         );
       } catch (error) {
