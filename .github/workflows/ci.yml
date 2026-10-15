@@ -4,9 +4,26 @@ on:
     branches: [main]
   pull_request:
     # Pure Markdown PRs use docs-check.yml; code/workflow changes still run FAST.
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.mdx'
+    paths:
+      # Run FAST on all non-Markdown paths and protected governance documents.
+      - '**'
+      - '!**/*.md'
+      - '!**/*.mdx'
+      - '.github/**'
+      - 'doctrine/**'
+      - 'prompts/**'
+      - 'docs/security/**'
+      - 'docs/policy/**'
+      - 'docs/governance/**'
+      - 'docs/PLAN.md'
+      - 'docs/ACCEPTANCE.md'
+      - 'docs/CI_TIERS.md'
+      - 'docs/FRAMEWORK_ADOPTION.md'
+      - 'docs/SECURITY_POSTURE.md'
+      - 'docs/RELEASE_*.md'
+      - 'docs/POLICY_*.md'
+      - 'docs/SECURITY_*.md'
+      - 'SECURITY.md'
   # Reusable entrypoint for separately identified qualification runs.
   workflow_call:
     inputs:
