@@ -80,9 +80,43 @@ const ALERTS = [
   { deployment_id: "d-never", category: "deployment.never_seen", severity: "info" },
 ] as any[];
 
+// W29-P0/A2 fixtures: the read-only egress posture and one readiness answer.
+const EGRESS_POSTURE = {
+  scope: "fleet_local",
+  scope_note:
+    "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
+  policy: { fingerprint: "e3f1c0de9a7b4f2d8c6a1b0e", version: "1.0.0", internal_rules: 2, public_pinned: true, public_rules: 2, internal_trust_chain: false },
+  never_reachable: ["loopback", "link_local", "metadata", "carrier_grade"],
+  overridable: ["private", "unique_local"],
+  readiness_states: ["ready", "blocked_by_operator_policy"],
+  preflight: { dns_only: true, contacts_endpoint: false },
+};
+
+const EGRESS_READINESS = {
+  scope: "fleet_local",
+  scope_note:
+    "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
+  state: "private_requires_approval",
+  code: "address_not_permitted",
+  summary: "This destination resolves to private or unique-local space and no operator rule permits it.",
+  next_action: "An OpenJM operator must approve internal destinations. A workspace administrator cannot grant private-network reach.",
+  host: "mail.internal.example",
+  port: 993,
+  destination_digest: "0f1e2d3c4b5a69788796a5b4",
+  address_class: "private",
+  resolved_answers: 1,
+  contacted: false,
+  policy: { fingerprint: "e3f1c0de9a7b4f2d8c6a1b0e", version: "1.0.0" },
+};
+
 function stubClient(overrides: Partial<Record<string, any>> = {}) {
   return {
     listDeployments: async () => ({ ok: true, data: { deployments: DEPLOYMENTS } }),
+    egress: async () => (overrides.egress ? (overrides.egress as any)() : ({ ok: true, data: { posture: EGRESS_POSTURE } } as any)),
+    egressDiagnostic: async (host: string, port: number) =>
+      overrides.egressDiagnostic
+        ? (overrides.egressDiagnostic as any)(host, port)
+        : ({ ok: true, data: { readiness: { ...EGRESS_READINESS, host, port } } } as any),
     deployment: async (id: string) => {
       const deployment = DEPLOYMENTS.find((entry) => entry.id === id);
       if (!deployment) return { ok: false, error: "server_error", status: 404 };
@@ -482,6 +516,7 @@ test("the console exposes no mutation surface", async () => {
     "GET /audit",
     "GET /deployments",
     "GET /deployments/:id",
+    "GET /egress",
     "GET /login",
     "POST /login",
     "POST /logout",
@@ -818,4 +853,61 @@ test("production mode through either indicator yields a Secure session cookie wi
     assert.ok(!setCookie.includes(OPERATOR_TOKEN), `${JSON.stringify(env)}: no credential in the cookie`);
     await productionApp.close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// W29-P0/A2: outbound provider egress posture and diagnostic
+// ---------------------------------------------------------------------------
+test("the egress page renders posture and the diagnostic form without script", async () => {
+  const response = await get("/egress");
+  assert.equal(response.statusCode, 200, response.body);
+  const markup = response.body;
+  assert.match(markup, /Outbound provider egress/);
+  assert.match(markup, /e3f1c0de9a7b4f2d8c6a1b0e/, "the policy fingerprint is shown");
+  assert.match(markup, /Never reachable/);
+  assert.match(markup, /metadata/);
+  assert.match(markup, /DNS and policy only; the endpoint is never contacted/);
+  // Blocker 1 (review): the page must not present Fleet-local policy as a customer
+  // deployment's, and must say what is not implemented.
+  assert.match(markup, /Scope: Fleet service process \(local policy\)/);
+  assert.match(markup, /not the policy of any customer deployment/);
+  assert.match(markup, /Per-deployment effective-policy diagnosis is not implemented/);
+  // The diagnostic is an ordinary GET form: no script, no client bundle.
+  assert.match(markup, /<form method="get" action="\/egress"/);
+  assert.ok(!/<script/i.test(markup), "the console ships no client-side script");
+  assert.ok(!/token|Bearer/i.test(markup), "no operator credential is rendered");
+});
+
+test("the egress page renders a diagnostic answer and carries no raw address", async () => {
+  const response = await get("/egress?host=mail.internal.example&port=993");
+  assert.equal(response.statusCode, 200, response.body);
+  const markup = response.body;
+  assert.match(markup, /Requires operator approval/);
+  assert.match(markup, /operator must approve internal destinations/);
+  assert.match(markup, /endpoint contacted: no/);
+  assert.ok(!/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/.test(markup), "no raw address is rendered");
+});
+
+test("the egress page reports a service error without inventing posture", async () => {
+  const broken = buildFleetConsole(config, {
+    client: stubClient({ egress: async () => ({ ok: false, error: "unreachable" }) }),
+    verifier: async (token: string) => (token === OPERATOR_TOKEN ? { ok: true } : { ok: false, error: "unauthorized" }),
+  });
+  await broken.ready();
+  const response = await broken.inject({ method: "GET", url: "/egress", headers: { cookie: sessionCookie } });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.match(response.body, /unreachable|Fleet API/i);
+  assert.ok(!/e3f1c0de/.test(response.body), "no posture is fabricated");
+  await broken.close();
+});
+
+test("the console egress plane stays read-only and reachable only when signed in", async () => {
+  const anonymous = await app.inject({ method: "GET", url: "/egress" });
+  assert.equal(anonymous.statusCode, 303);
+  assert.equal(anonymous.headers.location, "/login");
+  const routes = app.printRoutes();
+  assert.ok(!/POST \/egress/.test(routes));
+  assert.ok(!/PUT|PATCH|DELETE/.test(routes));
+  const source = readFileSync(fileURLToPath(new URL("../apps/fleet-web/src/server.ts", import.meta.url)), "utf8");
+  assert.ok(!/method:\s*"POST"[^}]*egress/s.test(source), "no egress mutation is registered");
 });

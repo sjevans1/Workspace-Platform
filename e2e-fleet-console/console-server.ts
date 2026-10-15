@@ -43,6 +43,44 @@ const client: FleetClient = {
   },
   alerts: async () => ({ ok: true, data: { alerts: ALERTS } }),
   audit: async () => ({ ok: true, data: { audit: AUDIT } }),
+  // W29-P0/A2: the read-only egress posture and diagnostic, with deterministic
+  // fixtures so the console surface is proven without a live policy deployment.
+  egress: async () => ({
+    ok: true,
+    data: {
+      posture: {
+        scope: "fleet_local",
+        scope_note:
+          "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
+        policy: { fingerprint: "e3f1c0de9a7b4f2d8c6a1b0e", version: "1.0.0", internal_rules: 2, public_pinned: true, public_rules: 2, internal_trust_chain: false },
+        never_reachable: ["loopback", "link_local", "metadata", "carrier_grade"],
+        overridable: ["private", "unique_local"],
+        readiness_states: ["ready", "blocked_by_operator_policy", "private_requires_approval"],
+        preflight: { dns_only: true, contacts_endpoint: false },
+      },
+    },
+  }),
+  egressDiagnostic: async (host: string, port: number) => ({
+    ok: true,
+    data: {
+      readiness: {
+        scope: "fleet_local",
+        scope_note:
+          "Evaluated in the Fleet service process with the Fleet service's own egress configuration and resolver. This is not the policy of any customer deployment: a Ready answer here does not prove that a customer deployment would permit the destination.",
+        state: "private_requires_approval",
+        code: "address_not_permitted",
+        summary: "This destination resolves to private or unique-local space and no operator rule permits it.",
+        next_action: "An OpenJM operator must approve internal destinations. A workspace administrator cannot grant private-network reach.",
+        host,
+        port,
+        destination_digest: "0f1e2d3c4b5a69788796a5b4",
+        address_class: "private",
+        resolved_answers: 1,
+        contacted: false,
+        policy: { fingerprint: "e3f1c0de9a7b4f2d8c6a1b0e", version: "1.0.0" },
+      },
+    },
+  }),
   health: async () => ({ ok: true, data: { status: "ok" } }),
 };
 

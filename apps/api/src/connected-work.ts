@@ -21,7 +21,11 @@ import { one } from "../../../packages/database/index.ts";
 import { randomUUID } from "node:crypto";
 import type { Actor } from "../../../packages/auth/index.ts";
 import {
+  CREDENTIAL_METADATA_KEYS,
+  EGRESS_PREFLIGHT_PORTS,
+  PREFLIGHT_USE_CASES,
   adapterFor,
+  buildConnectionConfig,
   adapterImplemented,
   canManageConnection,
   CAPABILITY_CATEGORY,
@@ -39,6 +43,7 @@ import {
   isTenantAdministrator,
   listConnections,
   normalizeCapabilities,
+  preflightEndpoint,
   providerCatalog,
   providerDefinition,
   revokeConnection,
@@ -84,7 +89,64 @@ export type ConnectedWorkRoute = (
   summary: string,
   h: Handler,
   s?: string,
+  limits?: { max: number; timeWindow: string },
 ) => void;
+
+/**
+ * W29-P0/A2: the seam for a route that must NOT hold a tenant transaction across
+ * network work. The route wrapper opens no transaction of its own; the handler
+ * opens short-lived tenant transactions through `run` for authorization and lets
+ * them go before it resolves anything, so a slow resolver cannot occupy a pool
+ * connection. The actor still comes from the authenticated session, so tenant
+ * identity cannot be spoofed through the seam.
+ */
+export type TenantSeam = {
+  run: <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
+};
+
+export type ConnectedWorkSeamRoute = (
+  m: "POST",
+  p: string,
+  summary: string,
+  h: (seam: TenantSeam, a: Actor, r: any) => Promise<any>,
+  options: { rateLimit: { max: number; timeWindow: string } },
+) => void;
+
+/**
+ * W29-P0/A2: the authoritative validation for a connection configuration. The guided
+ * form uses the same builder in the browser; this is where a value is accepted, so a
+ * request built by anything else is held to exactly the same contract and nothing is
+ * silently dropped.
+ */
+function validateConnectionConfig(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const built = buildConnectionConfig({
+    advanced_json: JSON.stringify(config ?? {}),
+    allowed_keys: CREDENTIAL_METADATA_KEYS,
+  });
+  assert(built.ok, 400, built.ok ? "" : built.error);
+  return built.ok ? built.config : {};
+}
+
+/** The live membership and role check, re-read from the database. */
+async function assertActiveAdministrator(
+  q: Query,
+  actor: Pick<Actor, "tenant_id" | "user_id" | "role">,
+): Promise<void> {
+  const row = await one(
+    q,
+    "SELECT role, active FROM memberships WHERE tenant_id=$1 AND user_id=$2",
+    [actor.tenant_id, actor.user_id],
+  );
+  assert(
+    Boolean(row) &&
+      row.active === true &&
+      ["owner", "admin"].includes(String(row.role)),
+    403,
+    "Administrator access required to check provider endpoints",
+  );
+}
 
 /** Connector management and automation authoring are human-session features. */
 function humanSession(a: Actor): void {
@@ -120,6 +182,18 @@ const secretBody = z.object({
 });
 
 const enabledBody = z.object({ enabled: z.boolean() });
+
+const preflightBody = z
+  .object({
+    // Bounded before it ever reaches the resolver: a long or control-character
+    // hostname is a request-shape error, not a policy question.
+    host: z.string().min(1).max(253),
+    port: z.number().int().min(1).max(65535),
+    // The use case is not decoration: it selects the port vocabulary the check may
+    // consider and the guidance the answer carries back to the administrator.
+    use_case: z.enum(PREFLIGHT_USE_CASES).optional(),
+  })
+  .strict();
 
 /**
  * The connector action port the deterministic engine consumes. It reads live
@@ -162,7 +236,10 @@ async function recentEvents(q: Query, tenant: string, connectionId: string) {
  * unauthenticated ingress registration below, which resolves its tenant through a
  * SECURITY DEFINER lookup.
  */
-export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
+export function connectedWorkRoutes(
+  route: ConnectedWorkRoute,
+  seamRoute: ConnectedWorkSeamRoute,
+): void {
   route("GET", "/connectors/catalog", "List connector providers and capabilities", async () => {
     const providers = providerCatalog().map((definition) => ({
       ...definition,
@@ -176,6 +253,9 @@ export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
         key,
         category: CAPABILITY_CATEGORY[key],
       })),
+      // The keys a connection configuration may actually carry: anything else would
+      // be dropped by persistence, so the guided form refuses it instead.
+      config_keys: [...CREDENTIAL_METADATA_KEYS],
       limits: {
         max_connections_per_tenant: CONNECTOR_LIMITS.max_connections_per_tenant,
         max_user_connections_per_user: CONNECTOR_LIMITS.max_user_connections_per_user,
@@ -199,7 +279,10 @@ export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
         provider_key: input.provider_key,
         label: input.label,
         ownership: input.ownership,
-        config: input.config,
+        // The typed endpoint keys a guided form supplies are validated here, with
+        // the same canonicalization a real destination must pass: a value the
+        // browser pre-check accepted can never be stored unchecked.
+        config: input.config ? validateConnectionConfig(input.config) : undefined,
         capabilities: input.capabilities,
       });
       return { connection };
@@ -320,6 +403,38 @@ export function connectedWorkRoutes(route: ConnectedWorkRoute): void {
       // connector activity from these counters.
       return connectorMetricsForTenant(q, a.tenant_id);
     },
+  );
+
+  /**
+   * W29-P0/A2 endpoint readiness. Owner/admin only, human session only, with its
+   * own bounded budget. It resolves the hostname and evaluates the SAME policy a
+   * real provider connection uses, and it NEVER opens a socket to the destination:
+   * a blocked endpoint is not contacted to produce its denial, and the check cannot
+   * be used as an arbitrary port probe (the port vocabulary is fixed per use case).
+   *
+   * It runs on the seam, not inside a tenant transaction: authorization is a short
+   * tenant transaction that is released BEFORE the resolution starts, and both the
+   * resolution and the whole check are bounded.
+   */
+  seamRoute(
+    "POST",
+    "/connectors/endpoints/preflight",
+    "Check whether a provider endpoint may be reached",
+    async (seam, a, r) => {
+      humanSession(a);
+      assert(isTenantAdministrator(a), 403, "Administrator access required to check provider endpoints");
+      const body = preflightBody.parse(r.body ?? {});
+      await seam.run((q) => assertActiveAdministrator(q, a));
+      const readiness = await preflightEndpoint({
+        host: body.host,
+        port: body.port,
+        use_case: body.use_case,
+      });
+      return { readiness };
+    },
+    // Bounded per minute. The route is a human-driven readiness check, and the
+    // limiter keys a POST by network identity, so this also bounds a shared NAT.
+    { rateLimit: { max: 30, timeWindow: "1 minute" } },
   );
 
   route("GET", "/automations/catalog", "List triggers, actions and condition operators", async () => ({

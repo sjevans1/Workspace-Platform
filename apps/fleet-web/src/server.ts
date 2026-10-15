@@ -31,6 +31,7 @@ import {
   layout,
   renderAlerts,
   renderAudit,
+  renderEgress,
   renderDetail,
   renderInventory,
   renderLogin,
@@ -54,6 +55,7 @@ export const FLEET_CONSOLE_ROUTES = [
   "GET /deployments/:id",
   "GET /alerts",
   "GET /audit",
+  "GET /egress",
   "GET /assets/console.css",
 ] as const;
 
@@ -324,6 +326,41 @@ export function buildFleetConsole(
       "audit",
       "Operator audit",
       renderAudit(audit.data.audit, deployments.ok ? deployments.data.deployments : []),
+      new Date().toISOString(),
+    );
+  });
+
+  // W29-P0/A2: outbound provider egress posture and diagnostic. Still read-only: the
+  // page renders posture from the fleet API and, when a host is supplied, asks the
+  // fleet API to evaluate it. The console never talks to a provider endpoint itself,
+  // and there is no control that could change policy.
+  app.get("/egress", async (request, reply) => {
+    if (!session(request)) {
+      reply.code(303).header("location", "/login").send("");
+      return;
+    }
+    const query = request.query as Record<string, unknown>;
+    const host = String(query.host ?? "").trim().slice(0, 253);
+    const port = Number(query.port ?? 0);
+    const [posture, audit] = await Promise.all([client.egress(), client.audit()]);
+    if (!posture.ok) {
+      page(reply, request, 200, "egress", "Egress posture", renderServiceError(posture.error, "egress"));
+      return;
+    }
+    const diagnostics = (audit.ok ? audit.data.audit : []).filter((entry) => entry.action === "egress.diagnostic").slice(0, 20);
+    const result = host && Number.isFinite(port) && port > 0 ? await client.egressDiagnostic(host, port) : null;
+    page(
+      reply,
+      request,
+      200,
+      "egress",
+      "Egress posture",
+      renderEgress({
+        posture: posture.data.posture,
+        diagnostics,
+        query: { host, port: Number.isFinite(port) && port > 0 ? String(port) : "443" },
+        result: result && result.ok ? result.data.readiness : null,
+      }),
       new Date().toISOString(),
     );
   });

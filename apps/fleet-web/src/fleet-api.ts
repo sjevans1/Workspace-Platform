@@ -203,12 +203,42 @@ export type FleetClient = {
   deployment(id: string): Promise<FleetApiResult<FleetDeploymentDetail>>;
   alerts(): Promise<FleetApiResult<{ alerts: FleetAlert[] }>>;
   audit(): Promise<FleetApiResult<{ audit: FleetAuditEntry[] }>>;
+  egress(): Promise<FleetApiResult<{ posture: FleetEgressPosture }>>;
+  egressDiagnostic(host: string, port: number): Promise<FleetApiResult<{ readiness: FleetEgressReadiness }>>;
   health(): Promise<FleetApiResult<{ status: string }>>;
+};
+
+// W29-P0/A2: the read-only posture the fleet API reports for outbound provider egress,
+// and the canonical readiness answer it shares with the customer endpoint check.
+export type FleetEgressPosture = {
+  scope: string;
+  scope_note: string;
+  policy: { fingerprint: string; version: string; internal_rules: number; public_pinned: boolean; public_rules: number; internal_trust_chain: boolean };
+  never_reachable: string[];
+  overridable: string[];
+  readiness_states: string[];
+  preflight: { dns_only: boolean; contacts_endpoint: boolean };
+};
+
+export type FleetEgressReadiness = {
+  scope: string;
+  scope_note: string;
+  state: string;
+  code: string;
+  summary: string;
+  next_action: string;
+  host: string | null;
+  port: number;
+  destination_digest: string;
+  address_class: string | null;
+  resolved_answers: number;
+  contacted: boolean;
+  policy: { fingerprint: string; version: string };
 };
 
 // Only these read paths are ever called. The console has no code path to an OCP-2A
 // mutation endpoint.
-export const FLEET_READ_PATHS = ["/deployments", "/alerts", "/audit", "/health"] as const;
+export const FLEET_READ_PATHS = ["/deployments", "/alerts", "/audit", "/egress", "/egress/diagnostic", "/health"] as const;
 
 export function createFleetClient(options: {
   baseUrl: string;
@@ -246,6 +276,9 @@ export function createFleetClient(options: {
     deployment: (id: string) => get<FleetDeploymentDetail>(`/deployments/${encodeURIComponent(id)}`),
     alerts: () => get<{ alerts: FleetAlert[] }>("/alerts"),
     audit: () => get<{ audit: FleetAuditEntry[] }>("/audit"),
+    egress: () => get<{ posture: FleetEgressPosture }>("/egress"),
+    egressDiagnostic: (host: string, port: number) =>
+      get<{ readiness: FleetEgressReadiness }>(`/egress/diagnostic?host=${encodeURIComponent(host)}&port=${encodeURIComponent(String(port))}`),
     health: () => get<{ status: string }>("/health"),
   };
 }

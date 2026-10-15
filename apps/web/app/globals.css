@@ -2721,3 +2721,86 @@ textarea:focus-visible {
 :root[data-theme="dark"] .automations-status-skipped {
   color: #f4a596;
 }
+
+/* W29-P0/A2: the guided endpoint-readiness journey. The result is a real state
+   block, not body text: a ready answer is calm, a blocked answer is unmistakable,
+   and neither can be mistaken for helper copy. */
+.endpoint-readiness {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin: 22px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.endpoint-readiness h3 {
+  font-size: 14px;
+  margin: 0;
+}
+.endpoint-readiness > p {
+  margin: 0;
+  max-width: 66ch;
+}
+.readiness-form {
+  padding: 0;
+  gap: 14px;
+}
+.readiness-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.readiness-result {
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.readiness-result p {
+  margin: 0;
+}
+.readiness-result.readiness-blocked {
+  border-left-color: #b94736;
+  background: #fdf3f1;
+}
+.readiness-state {
+  font-weight: 600;
+  font-size: 13px;
+}
+.readiness-result.readiness-blocked .readiness-state {
+  color: #b94736;
+}
+:root[data-theme="dark"] .readiness-result.readiness-blocked {
+  background: #3a2a27;
+}
+:root[data-theme="dark"] .readiness-result.readiness-blocked .readiness-state {
+  color: #f49b88;
+}
+
+/* W29-P0/A2: the guided configuration block in the connection flow. Typed fields
+   are the primary surface; raw JSON is a deliberate, labelled fallback. */
+.guided-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.guided-config > p {
+  margin: 0;
+  max-width: 66ch;
+}
+.advanced {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+.advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.advanced[open] summary {
+  margin-bottom: 10px;
+}

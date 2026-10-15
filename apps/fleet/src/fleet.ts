@@ -26,6 +26,12 @@ import {
 } from "../../../packages/operations/telemetry-transport.ts";
 import { OPERATOR_TELEMETRY_SUPPORTED_SCHEMAS, isCanonicalDeploymentId, validateOperatorTelemetryV1 } from "../../../packages/operations/operator-telemetry.ts";
 import {
+  EGRESS_PREFLIGHT_PORTS,
+  egressPolicy,
+  egressPosture,
+  preflightEndpoint,
+} from "../../../packages/connectors/egress-runtime.ts";
+import {
   FLEET_RATE_LIMIT_RULES,
   RateLimiter,
   clientKey,
@@ -809,6 +815,50 @@ export function buildFleetService(
     }
     reply.code(200).send({ id, state: target });
     return { id, state: target };
+  });
+
+  // ---- outbound provider egress (read-only operator plane, Fleet-local) ----
+  // The Fleet process's own egress posture, and a guarded diagnostic that answers
+  // "would this destination be allowed under Fleet's policy?" with the SAME evaluator
+  // a real provider connection uses. The SCOPE differs from a customer deployment's:
+  // Fleet has its own configuration and resolver, so an answer here is not a statement
+  // about any customer deployment (per-deployment diagnosis is a separately gated
+  // requirement, tracked in issue #234). Neither route opens a socket to the
+  // destination: a blocked endpoint is not contacted to produce its denial. Both
+  // consume the operator read budget, and the diagnostic is audited with normalized,
+  // non-secret metadata only.
+  app.get("/egress", async (r, reply) => {
+    if (!(await operator(r, reply))) return;
+    return { posture: egressPosture(egressPolicy(), "fleet_local") };
+  });
+
+  app.get("/egress/diagnostic", async (r, reply) => {
+    if (!(await operator(r, reply))) return;
+    const query = (r.query ?? {}) as { host?: unknown; port?: unknown };
+    const host = String(query.host ?? "").slice(0, 253);
+    const port = Number(query.port ?? 0);
+    // Declared fleet-local: this is the Fleet process's policy, not a customer
+    // deployment's, and the answer says so rather than implying otherwise.
+    const readiness = await preflightEndpoint({
+      host,
+      port,
+      allowed_ports: [...EGRESS_PREFLIGHT_PORTS],
+      scope: "fleet_local",
+    });
+    // The audit detail is NORMALIZED METADATA ONLY: the state, the numeric port and
+    // the non-reversible destination digest. The operator-supplied hostname is
+    // untrusted text (it can carry credential-shaped labels, and it is refused by
+    // the evaluator only after being seen), so it never reaches a persistent record.
+    // An audit failure must not break the read.
+    await fleetAudit(
+      pool,
+      "egress.diagnostic",
+      null,
+      // state + numeric port + digest, which is at most 64 characters for every
+      // state in the vocabulary, so nothing is ever truncated away.
+      `${readiness.state} ${readiness.port} ${readiness.destination_digest}`,
+    );
+    return { readiness };
   });
 
   app.get("/health", async () => ({ status: "ok" }));

@@ -167,3 +167,20 @@ input[type="checkbox"] { width: 16px; height: 16px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* W29-P0/A2: outbound provider egress posture and diagnostic. */
+.badge--neutral {
+  background: #eef1f5;
+  color: #3c4759;
+  border: 1px solid #d6dbe3;
+}
+
+.badge--warn {
+  background: #fdf3e3;
+  color: #7a4d10;
+  border: 1px solid #f0d9b0;
+}
+
+.small {
+  font-size: 0.85rem;
+}

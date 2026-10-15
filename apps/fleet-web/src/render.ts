@@ -5,7 +5,7 @@
 // credential to leak into, interactions work without script, and the accessibility
 // baseline is straightforward to hold. State is carried in query parameters.
 
-import type { FleetAlert, FleetAuditEntry, FleetDeployment, FleetDeploymentDetail } from "./fleet-api.ts";
+import type { FleetAlert, FleetAuditEntry, FleetDeployment, FleetDeploymentDetail, FleetEgressPosture, FleetEgressReadiness } from "./fleet-api.ts";
 
 // ---------------------------------------------------------------------------
 // Honest unknown rendering.
@@ -18,6 +18,42 @@ import type { FleetAlert, FleetAuditEntry, FleetDeployment, FleetDeploymentDetai
 // ---------------------------------------------------------------------------
 export const UNKNOWN = "Unknown";
 export const NOT_REPORTED = "Not reported";
+
+/**
+ * W29-P0/A2: WHOSE policy this console is showing. The Fleet service evaluates its
+ * OWN configuration and resolver, which need not match any customer deployment, so
+ * the page says exactly that instead of implying it diagnoses a customer.
+ */
+function scopeLabel(scope: string): string {
+  return scope === "fleet_local"
+    ? "Fleet service process (local policy)"
+    : "Workspace deployment";
+}
+
+function scopeNotice(posture: { scope: string; scope_note: string }): string {
+  return `<div class="notice notice--error" role="status">
+  <p><strong>Scope: ${escapeHtml(scopeLabel(posture.scope))}.</strong></p>
+  <p>${escapeHtml(posture.scope_note)}</p>
+  <p class="muted small">Per-deployment effective-policy diagnosis is not implemented: it needs a trusted policy-identity channel from each Workspace deployment, which is gated separately before any real-provider activation.</p>
+</div>`;
+}
+
+/** W29-P0/A2: the canonical readiness vocabulary, in operator language. */
+export function readinessLabel(state: string): string {
+  const labels: Record<string, string> = {
+    ready: "Ready",
+    blocked_by_operator_policy: "Blocked by operator policy",
+    private_requires_approval: "Requires operator approval",
+    dns_not_safe: "DNS not safe",
+    dns_failure: "Hostname could not be resolved",
+    invalid_destination: "Not a valid public hostname",
+    unsupported_scheme: "Scheme not supported",
+    unsupported_port: "Port not supported",
+    tls_issue: "TLS verification failed",
+    unreachable: "Destination unreachable",
+  };
+  return labels[state] ?? state;
+}
 export const NEVER_SEEN = "Never seen";
 
 export function displayValue(value: unknown): string {
@@ -155,13 +191,14 @@ export function healthBadge(state: string | null | undefined): string {
 // ---------------------------------------------------------------------------
 // Layout and reusable fragments
 // ---------------------------------------------------------------------------
-export type NavKey = "overview" | "deployments" | "alerts" | "audit";
+export type NavKey = "overview" | "deployments" | "alerts" | "audit" | "egress";
 
 const NAV: { key: NavKey; href: string; label: string }[] = [
   { key: "overview", href: "/", label: "Fleet overview" },
   { key: "deployments", href: "/deployments", label: "Deployments" },
   { key: "alerts", href: "/alerts", label: "Alerts" },
   { key: "audit", href: "/audit", label: "Operator audit" },
+  { key: "egress", href: "/egress", label: "Egress posture" },
 ];
 
 export function layout(options: {
@@ -571,6 +608,99 @@ ${
     ? table(["When", "Action", "Canonical action", "Deployment", "Detail"], rows, { caption: "Fleet operator audit" })
     : `<p class="empty">No operator audit records yet.</p>`
 }
+</section>`;
+}
+
+/**
+ * W29-P0/A2: outbound provider egress posture plus a guarded diagnostic. Read-only by
+ * construction: the page shows the effective policy identity, the classes that can
+ * never be reached, the recent diagnostics this deployment answered, and a form that
+ * asks the fleet API whether a destination would be allowed. There is no control that
+ * could change policy from here, and no client-side script.
+ */
+export function renderEgress(options: {
+  posture: FleetEgressPosture;
+  diagnostics: { created_at: string; detail: string | null }[];
+  query: { host: string; port: string };
+  result: FleetEgressReadiness | null;
+}): string {
+  const { posture } = options;
+  const factsRows = [
+    ["Scope", scopeLabel(posture.scope)],
+    ["Policy fingerprint", `<code>${escapeHtml(posture.policy.fingerprint)}</code>`],
+    ["Policy vocabulary version", escapeHtml(posture.policy.version)],
+    [
+      "Configuration source",
+      posture.scope === "fleet_local"
+        ? "The Fleet service process's own environment"
+        : "Deployment configuration",
+    ],
+    [
+      "Public destinations",
+      posture.policy.public_pinned
+        ? `Pinned to an operator allowlist (${posture.policy.public_rules} rule${posture.policy.public_rules === 1 ? "" : "s"})`
+        : "Any public destination permitted by the policy",
+    ],
+    ["Internal operator rules", `${posture.policy.internal_rules} rule${posture.policy.internal_rules === 1 ? "" : "s"}`],
+    ["Internal trust chain", posture.policy.internal_trust_chain ? "Configured" : "Not configured"],
+    ["Diagnostic behaviour", posture.preflight.contacts_endpoint ? "Contacts the endpoint" : "DNS and policy only; the endpoint is never contacted"],
+  ];
+  const classes = posture.never_reachable.map((name) => `<span class="badge badge--neutral">${escapeHtml(name)}</span>`).join(" ");
+  const overridable = posture.overridable.map((name) => `<span class="badge badge--warn">${escapeHtml(name)}</span>`).join(" ");
+  const portOption = (value: string) => `<option value="${value}"${options.query.port === value ? " selected" : ""}>${value}</option>`;
+  const form = `<form method="get" action="/egress" class="filters">
+  <div class="filters__field">
+    <label for="host">Host</label>
+    <input id="host" name="host" type="text" value="${escapeHtml(options.query.host)}" maxlength="253" placeholder="mail.internal.example" autocomplete="off" />
+  </div>
+  <div class="filters__field">
+    <label for="port">Port</label>
+    <select id="port" name="port">${["443", "993", "465", "587"].map(portOption).join("")}</select>
+  </div>
+  <div class="filters__actions">
+    <button type="submit" class="button">Check destination</button>
+  </div>
+</form>`;
+  const result = options.result
+    ? `<div class="notice ${options.result.state === "ready" ? "" : "notice--error"}" role="status">
+  <p><strong>${escapeHtml(readinessLabel(options.result.state))}</strong></p>
+  <p>${escapeHtml(options.result.summary)}</p>
+  <p class="muted">${escapeHtml(options.result.next_action)}</p>
+  <p class="muted small">${escapeHtml(options.result.host ?? options.query.host)}:${options.result.port} · class ${escapeHtml(options.result.address_class ?? "unknown")} · ${escapeHtml(options.result.destination_digest)} · endpoint contacted: no</p>
+  <p class="muted small">Scope: ${escapeHtml(scopeLabel(options.result.scope))}. ${escapeHtml(options.result.scope_note)}</p>
+</div>`
+    : "";
+  const diagnostics = options.diagnostics.length
+    ? table(
+        ["When", "Destination and outcome"],
+        options.diagnostics.map((entry) => [escapeHtml(displayTimestamp(entry.created_at)), `<code>${escapeHtml(displayValue(entry.detail))}</code>`]),
+        { caption: "Recent egress diagnostics" },
+      )
+    : `<p class="empty">No diagnostics answered yet.</p>`;
+  return `<h1>Outbound provider egress</h1>
+${scopeNotice(posture)}
+<p class="lede">Read-only: policy is deployment configuration, and this console has no control that could change it.</p>
+<section aria-labelledby="egress-posture">
+<h2 id="egress-posture">Effective posture</h2>
+${table(["Fact", "Value"], factsRows, { caption: "Effective egress posture" })}
+</section>
+<section aria-labelledby="egress-never">
+<h2 id="egress-never">Never reachable</h2>
+<p class="lede">These address classes can never be reached, whatever a customer requests. An operator rule cannot approve them.</p>
+<p>${classes}</p>
+<h3>Operator-approvable classes</h3>
+<p class="lede">An operator rule may approve these, scoped to an exact host, port and range. A workspace administrator cannot grant private reach.</p>
+<p>${overridable}</p>
+</section>
+<section aria-labelledby="egress-diagnostic">
+<h2 id="egress-diagnostic">Destination diagnostic</h2>
+<p class="lede">Answers whether a destination would be allowed <strong>under this process's policy</strong>, using the same evaluator a real provider connection uses. The endpoint is never contacted, so a blocked destination is not probed to produce its denial.</p>
+${form}
+${result}
+</section>
+<section aria-labelledby="egress-recent">
+<h2 id="egress-recent">Recent diagnostics</h2>
+${diagnostics}
 </section>`;
 }
 

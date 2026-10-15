@@ -19,3 +19,7 @@ export * from "./adapter.ts";
 export * from "./failure.ts";
 export * from "./credentials.ts";
 export * from "./runtime.ts";
+export * from "./egress-policy.ts";
+export * from "./egress-transport.ts";
+export * from "./egress-runtime.ts";
+export * from "./connection-config.ts";

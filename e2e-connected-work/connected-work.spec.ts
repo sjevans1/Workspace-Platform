@@ -106,6 +106,68 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
 
   await openSettingsTab(page, "Connections");
 
+  // W29-P0/A2 endpoint readiness: the guided check resolves and evaluates without
+  // ever contacting the endpoint. "localhost" is not a canonical public hostname, so
+  // the answer is deterministic and needs no DNS: this proves the form, the API call
+  // and the shared readiness vocabulary are wired, not the runner's resolver.
+  const readiness = page.locator(".endpoint-readiness");
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness.getByRole("button", { name: "Check network readiness" }).click();
+  const readinessResult = readiness.getByRole("status");
+  await expect(readinessResult).toContainText("Not a valid public hostname");
+  await expect(readinessResult).toContainText("no endpoint contact");
+  // Re-review: a verdict belongs to the inputs it came from. Editing the host
+  // clears it, so a previous answer can never appear to describe the new value.
+  await readiness.getByLabel("Host").fill("mail.internal.example");
+  await expect(readiness.getByRole("status")).toHaveCount(0);
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness
+    .getByRole("button", { name: "Check network readiness" })
+    .click();
+  await expect(readiness.getByRole("status")).toContainText(
+    "Not a valid public hostname",
+  );
+  // Changing the use case clears it too, and the port list follows the use case.
+  await readiness.getByLabel("Use case").selectOption("https");
+  await expect(readiness.getByRole("status")).toHaveCount(0);
+  await expect(readiness.getByLabel("Port")).toHaveValue("443");
+
+  // Re-review: an answer still in flight when the administrator edits the form must
+  // never be restored. The first request is held for a deterministic 1.5s, the host
+  // is edited while it is outstanding, and the verdict must stay absent after the
+  // response has certainly landed.
+  let held = true;
+  await page.route("**/api/v1/connectors/endpoints/preflight", async (route) => {
+    if (held) {
+      held = false;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    await route.continue();
+  });
+  await readiness.getByLabel("Use case").selectOption("custom_imap");
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness
+    .getByRole("button", { name: "Check network readiness" })
+    .click();
+  await readiness.getByLabel("Host").fill("mail.internal.example");
+  await page.waitForTimeout(2500);
+  await expect(readiness.getByRole("status")).toHaveCount(0);
+  await page.unroute("**/api/v1/connectors/endpoints/preflight");
+  // A check for the current inputs still works, and editing clears it again. The
+  // host is the deterministic non-public one, so this never depends on DNS.
+  await readiness.getByLabel("Host").fill("localhost");
+  await readiness
+    .getByRole("button", { name: "Check network readiness" })
+    .click();
+  await expect(readiness.getByRole("status")).toContainText(
+    "Not a valid public hostname",
+  );
+  await readiness.getByLabel("Host").fill("mail.internal.example");
+  await expect(readiness.getByRole("status")).toHaveCount(0);
+  // Selecting a provider or typing a host never mutates anything: the check is a
+  // read-only question, and the connection below still does not exist.
+  await expect(page.locator(".integration-row").filter({ hasText: label })).toHaveCount(0);
+
   await page.getByRole("button", { name: "New connection" }).click();
   const createModal = page.getByRole("dialog", { name: "New connection" });
   await expect(createModal).toBeVisible();
@@ -149,22 +211,42 @@ test("creates, connects, tests, syncs, disables, re-enables and revokes a synthe
   );
   await expect(row.getByRole("status")).toContainText("Next attempt");
 
-  // Disable, then re-enable.
+  // Disable, then re-enable. Both are deliberate: the button opens a review dialog
+  // that names the consequence, and only the confirm button calls the API.
   await row.getByRole("button", { name: "Disable", exact: true }).click();
+  const disableDialog = page.getByRole("dialog", { name: `Disable ${label}?` });
+  await expect(disableDialog).toBeVisible();
+  await expect(disableDialog).toContainText("stored credential is kept");
+  // Cancelling changes nothing.
+  await disableDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(disableDialog).toBeHidden();
+  await expect(row.locator(".tag")).toHaveText("connected");
+  await row.getByRole("button", { name: "Disable", exact: true }).click();
+  await disableDialog.getByRole("button", { name: "Disable connection" }).click();
+  await expect(disableDialog).toBeHidden();
   await expect(
     row.getByRole("button", { name: "Enable", exact: true }),
   ).toBeVisible();
   await expect(row.locator(".tag")).toHaveText("disabled");
   await expect(row.getByRole("button", { name: "Sync now" })).toHaveCount(0);
   await row.getByRole("button", { name: "Enable", exact: true }).click();
+  const enableDialog = page.getByRole("dialog", { name: `Enable ${label}?` });
+  await enableDialog.getByRole("button", { name: "Enable connection" }).click();
+  await expect(enableDialog).toBeHidden();
   await expect(row.locator(".tag")).toHaveText("connected");
   await expect(row.getByRole("button", { name: "Sync now" })).toBeVisible();
 
   // The supplied secret is nowhere the browser or the API can reach.
   await expectSecretAbsent(page, secret);
 
-  // Revoke destroys the credential and the granted capabilities.
+  // Revoke destroys the credential and the granted capabilities. It states the
+  // consequence before it acts, because it cannot be undone.
   await row.getByRole("button", { name: "Revoke", exact: true }).click();
+  const revokeDialog = page.getByRole("dialog", { name: `Revoke ${label}?` });
+  await expect(revokeDialog).toBeVisible();
+  await expect(revokeDialog).toContainText("cannot be re-enabled");
+  await revokeDialog.getByRole("button", { name: "Revoke connection" }).click();
+  await expect(revokeDialog).toBeHidden();
   await expect(row.locator(".tag")).toHaveText("revoked");
   await expect(row).toContainText("Capabilities granted: none");
   await expect(row).toContainText(
