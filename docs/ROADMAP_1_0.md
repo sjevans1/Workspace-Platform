@@ -1,6 +1,8 @@
 # OpenJM Workspace — Standalone 1.0 delivery roadmap
 
-> **Authoritative release checkpoint — 2026-10-12 scope rebaseline:** W01–W28 baseline evidence is accepted through `main@d9f269e864ab217aca9fde910dfe1fabf3b53b65`. Shane has promoted the previously discussed **W29 Connected Work** and **W30 native deterministic workflows** into the Workspace 1.0 build. The fixed remaining path is **W29 [#215] -> W30 [#216] -> final NVDA [#211] -> W31 [#217] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older text that treats W29/W30 as post-1.0 is historical.
+> **Team handover (2026-10-26):** For current merged-versus-unmerged state and the first actions for maintainers, read [TEAM_HANDOVER.md](TEAM_HANDOVER.md). Historic checkpoints below are delivery records, not proof that later PRs have merged.
+
+> **Authoritative release checkpoint — 2026-10-12 scope rebaseline:** W01–W28 baseline evidence is accepted through `main@d9f269e864ab217aca9fde910dfe1fabf3b53b65`. The product owner has promoted the previously discussed **W29 Connected Work** and **W30 native deterministic workflows** into the Workspace 1.0 build. The fixed remaining path is **W29 [#215] -> W30 [#216] -> final NVDA [#211] -> W31 [#217] -> Workspace 1.0 tag/handover**. See [RELEASE_1_0_FINAL_GATES.md](RELEASE_1_0_FINAL_GATES.md). Older text that treats W29/W30 as post-1.0 is historical.
 
 
 **Current execution baseline:** 2026-10-06, `main` after merged W17 PR #158 (`6b7f60f422723ec19e8a5006f3033ab082d7e8b9`).  

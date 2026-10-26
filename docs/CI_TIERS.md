@@ -10,7 +10,6 @@ Runs:
 - exact repository checkout;
 - `npm ci`;
 - TypeScript/integration-client typecheck;
-- CI-orchestrator tests;
 - production frontend build.
 
 FAST is rapid deterministic feedback. It does not establish package or release acceptance.
@@ -23,7 +22,6 @@ The existing `backend` job remains the STANDARD authority and retains:
 - PostgreSQL + SeaweedFS services;
 - full native `npm test`;
 - mirrored-dependency guard;
-- CI-orchestrator verification;
 - production S3 acceptance;
 - production build.
 

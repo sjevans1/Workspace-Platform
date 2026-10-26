@@ -1,4 +1,4 @@
-# Hermes real-host acceptance runbook
+# Independent host deployment and recovery acceptance
 
 Use this runbook only on a disposable evaluation host or isolated WSL/Linux environment. Do not point it at a customer production database, production object bucket, or an existing Workspace volume.
 
@@ -314,8 +314,3 @@ Stop the affected phase and report immediately if:
 - TLS requires disabling certificate validation;
 - a command would delete an unknown volume, bucket or database.
 
-## Hermes handoff prompt
-
-Use the following instruction when handing this to Hermes:
-
-> Execute `docs/HERMES_HOST_ACCEPTANCE.md` against a fresh disposable clone of the OpenJM Workspace repository. Use `COMPOSE_PROJECT_NAME=openjm_workspace_source` for the source and `COMPOSE_PROJECT_NAME=openjm_workspace_recovery` for the separate recovery target; merely using separate directories is insufficient because compose.yaml has a fixed top-level project name. Follow the safety boundaries exactly. Work autonomously through non-destructive steps, but do not delete or overwrite unknown databases, Docker volumes, buckets or source data. Do not expose any secrets in your report. Use a separate recovery directory and separate recovery volumes/bucket. Record PASS / FAIL / NOT EXECUTED for every phase and return exact nonsecret evidence for failures. Do not modify application source while testing; report defects back to the main engineering workflow instead.

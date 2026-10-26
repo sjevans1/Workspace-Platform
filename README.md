@@ -1,14 +1,14 @@
 # OpenJM Workspace
 
-A self-hosted, white-label workspace for shared knowledge, collaborative pages and structured work. Built from the OpenJM Workspace Astra handoff as an executable first pass.
+Self-hosted, white-label workspace for shared knowledge, collaborative documents, structured databases, governed connections and deterministic work. Workspace is a standalone product: OpenJM Enterprise AI, LLMs, external SaaS accounts and cloud object storage are **not** required for core operation.
 
-**Status: working alpha, not the completed production MVP.** See the [standalone 1.0 delivery roadmap](docs/ROADMAP_1_0.md) and [live W01–W28 release tracker](https://github.com/sjevans1/Workspace-Platform/issues/62) for outstanding work. The backend, collaboration protocol, tenant isolation and backup round trip have automated coverage. See [acceptance status and remaining work](docs/ACCEPTANCE.md) for the exact verification boundary.
+**Maintainer starting point:** [OpenJM Development Team Handover](docs/TEAM_HANDOVER.md) · [Development guide](docs/DEVELOPMENT.md) · [Architecture](docs/ARCHITECTURE.md) · [Operations](docs/OPERATIONS.md) · [Release gates](docs/RELEASE_1_0_FINAL_GATES.md).
 
-[Latest verified CI gate](https://github.com/sjevans1/Workspace-Platform/actions/runs/36841516660): 59 native PostgreSQL tests passed with the application running as restricted `workspace_runtime` (`NOBYPASSRLS`), plus TypeScript/production build, Docker startup and deployed Chromium workflows. [Build checkpoint](docs/BUILD_CHECKPOINT.md) records the durable handoff. Real Keycloak 26.7.4 login/provisioning and no-workaround back-channel logout have also passed on the disposable WSL2 host. SCIM Users/Groups provisioning, offboarding, membership synchronization and explicit member/guest group-role mapping are verified. Trusted HTTPS is CI-verified with a trusted private CA path, Secure/HttpOnly cookies, HSTS and WSS collaboration. Local filesystem storage is a supported deployment mode and does not require an external S3 provider. For deployments that choose S3-compatible object storage, the provider-safe recovery harness is CI-verified and that selected provider must pass its own operational acceptance run. Required pre-storage malware scanning is now verified with fail-closed ClamAV readiness, real EICAR rejection before publication, aggregate scan metrics, and a hardened scanner image that passes the release Trivy policy.
+**Release status (26 October 2026):** Working application, **not yet approved or tagged as Workspace 1.0**. W01–W28 provide accepted baseline evidence; W29 Connected Work and W30 deterministic workflows were promoted into 1.0. The provider-neutral connector and workflow foundations are merged, but real-provider production readiness, end-to-end feature completion, final NVDA testing and W31 release requalification remain gated. Read the live [roadmap issue #62](https://github.com/sjevans1/Workspace-Platform/issues/62) and [handover snapshot](docs/TEAM_HANDOVER.md) before acting on historical implementation notes.
 
-## Start locally
+## Local development
 
-Use Node.js 24 and npm 11. On Windows, WSL2 is a convenient development environment.
+Use **Node.js 24** and npm with the committed lockfile (CI also uses Node 24); Docker with Compose is needed for deployed validation. On Windows, WSL2 is supported for development.
 
 ```bash
 git clone https://github.com/sjevans1/Workspace-Platform.git
@@ -17,55 +17,32 @@ npm ci
 npm run dev
 ```
 
-Open **http://localhost:3000**. The terminal prints a first-run setup token. Create your own administrator account; there are no default passwords. Enable the starter content checkbox for a company wiki, project pages, leadership meeting and team task tracker.
+Visit http://localhost:3000. First-run setup creates a unique local setup token; create an administrator through the setup flow. Development persists PGlite data under `.data/`. Do not use development configuration for customer production.
 
-Local development starts the API, collaboration server, worker and Next.js together. It uses a persistent PGlite PostgreSQL engine in `.data/dev-postgres`; it is a development convenience, not the production deployment. Keep the terminal running. Production uses native PostgreSQL and Valkey.
-
-## Deploy with Docker Compose
+## Local Docker evaluation
 
 ```bash
 node scripts/init-env.mjs
 docker compose up --build -d
 ```
 
-Open **http://localhost:8080** and use `SETUP_TOKEN` from the generated `.env`. This default is for a trusted local machine. Configure HTTPS and the correct `APP_URL` before allowing remote access. Full instructions: [installation and operations](docs/OPERATIONS.md).
+Visit http://localhost:8080 on the trusted local machine. Use the generated setup token from `.env`. Before remote access, set a correct `APP_URL`, TLS and cookie security as detailed in [operations](docs/OPERATIONS.md). Never commit `.env`, secrets, backups or customer records.
 
-## What is implemented
+## Project layout
 
-- Organisations, multiple workspaces, spaces, nested pages, **per-user recently viewed pages** (recorded on actual open and re-checked against current permissions), favourites, search and trash.
-- BlockNote Core editing, Yjs/Hocuspocus collaboration, presence, durable save acknowledgements and revision restore.
-- Typed databases with table and board views, inline edits, filtering, sorting, column settings and records that open as full pages.
-- Local authentication plus optional OpenID Connect/Keycloak SSO, invitation-backed SSO provisioning, real-provider back-channel logout, tenant-scoped SCIM 2.0 Users/Groups provisioning with explicit member/guest group-role mapping, roles, inherited page permissions, separate service principals and PostgreSQL tenant policies.
-- Page discussions and mentions, searchable internal page links and permission-filtered incoming backlinks, private file attachments, Markdown/CSV imports and Markdown/CSV/JSON exports.
-- Runtime branding and user-selectable Light/Dark/Follow device appearance (including editor; browser-local preference with no server dependency), scoped REST API, transactional event outbox, signed webhooks with retries, and audit records.
-- Pluggable storage: local filesystem for self-contained/on-prem deployments, or S3-compatible object storage for private-object-store/cloud deployments; plus migrations, logical backup/restore, container configuration and CI.
-
-## Link pages without an AI dependency
-
-Open a page with edit permission and choose **Link to page** above the document.
-Search for another page you can access, select it, and the editor inserts a
-normal local page link. Open that destination page to see the permission-filtered
-**Linked from** section. Backlinks update after document changes are durably
-saved; use **Refresh links** for a new read. Only canonical internal links
-created inside Workspace count—plain text containing an ID and external URLs
-do not. Hidden, deleted, cross-tenant, or newly revoked source pages are never
-listed to unauthorized readers. This first-pass implementation scans a bounded
-set of persisted documents; a dedicated scalable link index remains future work.
-
-## Project map
-
-| Path | Purpose |
+| Directory | Responsibility |
 |---|---|
-| `apps/web` | Next.js workspace interface |
-| `apps/api` | Fastify REST API and domain operations |
-| `apps/collab` | Single-writer collaboration service |
-| `apps/worker` | Outbox deliveries and import jobs |
-| `packages` | Authentication, permissions, database, editor, storage, branding and contracts |
-| `infrastructure` | SQL migrations and reverse proxy configuration |
-| `scripts` | Development, backups and license inventory |
-| `tests`, `e2e` | Backend, isolation, backup and browser acceptance checks |
+| `apps/web` | Next.js user-facing workspace |
+| `apps/api` | Fastify API and authorization |
+| `apps/collab` | Yjs / Hocuspocus live collaboration |
+| `apps/worker` | Background work and deterministic execution |
+| `apps/fleet`, `apps/fleet-web` | Optional, separately governed operator fleet service and console |
+| `packages/` | Domain contracts, database, authorization, editor, storage, connectors, automation |
+| `infrastructure/` | SQL migrations, proxy and runtime infrastructure |
+| `tests/`, `e2e*/` | Native, browser and deployment acceptance |
+| `docs/` | Design contracts, operations, security evidence and acceptance |
 
-## Verify
+## Verify a change
 
 ```bash
 npm run typecheck
@@ -75,25 +52,14 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The tests use isolated PGlite instances by default. Set `TEST_DATABASE_URL` to an administrative PostgreSQL connection to run them against native PostgreSQL; each test suite creates and drops its own temporary database. CI exercises native PostgreSQL, two browser sessions, and the Docker deployment.
+Native and browser tests require the environment documented in [Development](docs/DEVELOPMENT.md). GitHub Actions is the acceptance authority for release-class verification. The [FAST / STANDARD / FULL](docs/CI_TIERS.md) tiers have different purposes; a green FAST build alone is not release acceptance.
 
-- [Architecture and security boundaries](docs/ARCHITECTURE.md)
-- [Connected Work connector platform](docs/CONNECTED_WORK_ARCHITECTURE.md)
-- [Deterministic automation engine](docs/AUTOMATION_ARCHITECTURE.md)
-- [Identity and enterprise SSO](docs/IDENTITY.md)
-- [SCIM directory lifecycle](docs/SCIM.md)
-- [API and Intelligence integration](docs/INTEGRATION.md)
-- [Operations and restore procedure](docs/OPERATIONS.md)
-- [Operational tenant provisioning](docs/TENANT_PROVISIONING.md)
-- [External monitoring and alerts](docs/MONITORING.md)
-- [Adversarial security acceptance](docs/SECURITY_ACCEPTANCE.md)
-- [Browser and accessibility acceptance](docs/ACCESSIBILITY_ACCEPTANCE.md)
-- [Release image security acceptance](docs/RELEASE_SECURITY.md)
-- [Encryption at rest](docs/ENCRYPTION_AT_REST.md)
-- [File malware scanning and upload security](docs/FILE_SECURITY.md)
-- [Production S3/object-store acceptance](docs/PRODUCTION_S3_ACCEPTANCE.md)
-- [Acceptance and known gaps](docs/ACCEPTANCE.md)
-- [Repository branch hygiene and protected work audit](docs/BRANCH_HYGIENE_2026_10_01.md)
-- [Third-party licenses](THIRD_PARTY_LICENSES.md) and [CycloneDX SBOM](docs/sbom.cdx.json)
+## Operating principles
 
-No LLM, cloud account, managed database or paid editor package is required. The workspace can run independently and connect to an Intelligence module through its permissioned API.
+- Tenant identity and permissions are authoritative on the server and checked at use time. Never bypass row-level security or rely on UI-only restrictions.
+- External connections are optional and off by default. The customer owns provider credentials and usage charges; no unrestricted provider access.
+- Workflow execution is deterministic, auditable, idempotent and subject to current authority, approvals and retry limits; an LLM is not required.
+- Backups, restores, migration checksums, HTTPS/WSS, scanner readiness, storage modes and release-image security remain non-negotiable acceptance gates.
+- Changes go through reviewed PRs with exact-head CI evidence and explicit merge/release authorization. Do not merge open feature PRs as part of documentation housekeeping.
+
+See [contribution policy](CONTRIBUTING.md), [team handover](docs/TEAM_HANDOVER.md), [connected work architecture](docs/CONNECTED_WORK_ARCHITECTURE.md), [automation architecture](docs/AUTOMATION_ARCHITECTURE.md), [identity](docs/IDENTITY.md), [accessibility](docs/ACCESSIBILITY_ACCEPTANCE.md) and [license inventory](THIRD_PARTY_LICENSES.md).
