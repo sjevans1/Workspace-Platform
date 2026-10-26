@@ -23,7 +23,7 @@
 | Order | Item | Required disposition |
 |---|---|---|
 | 1 | [W29-P0/A3 PR #235](https://github.com/sjevans1/Workspace-Platform/pull/235) | Open at handover; review exact head, CI and security corrections. Do **not** count OAuth UX/token refresh as merged. |
-| 2 | [W29-P0/A4](https://github.com/sjevans1/Workspace-Platform/issues/225) and [deployment egress #234](https://github.com/sjevans1/Workspace-Platform/issues/234) | Provider usage attribution, removal of out-of-scope provider metadata, integrated P0 safety and deployment-scoped egress evidence before any real-provider activation. |
+| 2 | [W29-P0/A4](https://github.com/sjevans1/Workspace-Platform/issues/230) and [deployment egress #234](https://github.com/sjevans1/Workspace-Platform/issues/234) | Provider usage attribution, removal of out-of-scope provider metadata, integrated P0 safety and deployment-scoped egress evidence before any real-provider activation. |
 | 3 | [W29 Connected Work #215](https://github.com/sjevans1/Workspace-Platform/issues/215) and [W29 real-provider tranche](https://github.com/sjevans1/Workspace-Platform/issues/225) | Customer-owned credentials/economics, safe real email/calendar providers, backend + polished Connections UI, end-to-end acceptance. Validate actual provider scope with product owner; do not assume metadata-only adapters are implemented. |
 | 4 | [W30 native workflows #216](https://github.com/sjevans1/Workspace-Platform/issues/216) | Complete scheduled/event triggers, approvals, actions, run histories and integrations beyond the merged foundation. |
 | 5 | [Manual NVDA #211](https://github.com/sjevans1/Workspace-Platform/issues/211) | Human keyboard/screen-reader acceptance on **final W29/W30** surface. |
