@@ -31,19 +31,19 @@
 
 Do not tag the older W27/W28 baseline as final 1.0.
 
-## Open PR triage at handover (not merged by this change)
+## PR triage at handover (product work not merged by this change)
 
 - [#235](https://github.com/sjevans1/Workspace-Platform/pull/235): W29 OAuth substrate, business functionality; review before merging.
-- [#236](https://github.com/sjevans1/Workspace-Platform/pull/236): development-framework reference; draft, optional staged adoption. Keep external build tooling separate from product scope.
+- [#236](https://github.com/sjevans1/Workspace-Platform/pull/236): closed without merge as internal development-workflow material, outside the receiving team's product handover. Do not revive those tooling instructions; any future engineering process should be separately proposed in tool-neutral terms.
 - [#237](https://github.com/sjevans1/Workspace-Platform/pull/237) then [#238](https://github.com/sjevans1/Workspace-Platform/pull/238): stacked docs-only/CI entrypoint proposals; review ordering, then retarget as appropriate. Not active on main.
 - [#190](https://github.com/sjevans1/Workspace-Platform/pull/190): runner/action pin refresh; currently conflicts with other workflow changes, reconcile in an independent CI PR.
-- **Closed as superseded (unmerged, 2026-10-26):** [#159](https://github.com/sjevans1/Workspace-Platform/pull/159) (W18 device-local recovery, replaced by merged #162); [#134](https://github.com/sjevans1/Workspace-Platform/pull/134) (retired agent bridge settings, removed in this handover); [#118](https://github.com/sjevans1/Workspace-Platform/pull/118) (older project/handoff text, replaced here); and [#220](https://github.com/sjevans1/Workspace-Platform/pull/220) (planning superseded by merged #221). Their branches may be removed once repository-level rules permit and any branch-specific deployment references are checked; do not merge these outdated proposals.
+- **Closed as superseded (unmerged, 2026-10-26):** [#159](https://github.com/sjevans1/Workspace-Platform/pull/159) (W18 device-local recovery, replaced by merged #162); [#134](https://github.com/sjevans1/Workspace-Platform/pull/134) (obsolete CI orchestration settings, removed in this handover); [#118](https://github.com/sjevans1/Workspace-Platform/pull/118) (older project/handoff text, replaced here); and [#220](https://github.com/sjevans1/Workspace-Platform/pull/220) (planning superseded by merged #221). Those obsolete branches have been deleted by the repository owner; do not revive or merge these outdated proposals.
 
 ## Branch hygiene after handover
 
-- The 27 confirmed-merged historical branches were deleted by the repository owner before this revision; a fresh repository check found 15 total branches remaining.
-- Retain `main`, the unmerged handover PR branch until merged, active W29 #235, infrastructure/CI proposals #190/#237/#238, and separately review governance #236.
-- Retain the closed-but-unmerged OIDC provenance branch from #42 until its session-state constraints and later migrations are reconciled by the identity owner; older branch PRs #140/#141/#207 may be archived once their changes are confirmed superseded and no ref is consumed externally.
+- The repository owner deleted 34 superseded historical branches in two batches; the verified post-cleanup inventory was eight branches before the internal-workflow draft #236 was closed.
+- Retain `main`, the handover PR branch until approved/merged, active W29 #235, and CI proposals #190/#237/#238. The now-closed #236 branch may be removed after checking external references; its content was never merged.
+- Retain the closed-but-unmerged OIDC provenance branch from #42 until its session-state constraints and later migrations are reconciled by the identity owner. The branches for closed PRs #140/#141/#207 were previously deleted.
 - Git branch deletion rules remain owner-managed; never force-delete or rewrite history to bypass them.
 
 ## Non-negotiable boundaries
