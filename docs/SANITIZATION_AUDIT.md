@@ -12,6 +12,11 @@
 - Retain third-party licenses, SBOM, RLS/security/operations runbooks and original technical evidence references.
 - Keep all unfinished PRs, issues, branch states, production/runtime configuration and release-approval gates unchanged.
 
+## Additional scrub review
+
+- Completed a follow-up scan of the 79 tracked Markdown documents and the repository CI/build/maintenance scripts. Corrected the old acceptance-runbook link in `docs/OPERATIONS.md` and removed unnecessary coding-assistant attribution from the W27 image evidence metadata; retained publication run, image digests and upstream source details.
+- Historical pull request text, Git commit history, archived action logs and unrelated unmerged branches are not modified by this working-tree cleanup. The independent review must validate the final exact-head changes before merging.
+
 ## Verification required on PR
 
 - Diff: check deleted files are exclusively retired tooling and renamed historical runbooks, not product services.
