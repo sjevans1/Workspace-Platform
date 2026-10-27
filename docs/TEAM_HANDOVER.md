@@ -37,7 +37,14 @@ Do not tag the older W27/W28 baseline as final 1.0.
 - [#236](https://github.com/sjevans1/Workspace-Platform/pull/236): development-framework reference; draft, optional staged adoption. Keep external build tooling separate from product scope.
 - [#237](https://github.com/sjevans1/Workspace-Platform/pull/237) then [#238](https://github.com/sjevans1/Workspace-Platform/pull/238): stacked docs-only/CI entrypoint proposals; review ordering, then retarget as appropriate. Not active on main.
 - [#190](https://github.com/sjevans1/Workspace-Platform/pull/190): runner/action pin refresh; currently conflicts with other workflow changes, reconcile in an independent CI PR.
-- [#159](https://github.com/sjevans1/Workspace-Platform/pull/159), [#134](https://github.com/sjevans1/Workspace-Platform/pull/134), [#118](https://github.com/sjevans1/Workspace-Platform/pull/118) and [#220](https://github.com/sjevans1/Workspace-Platform/pull/220): review against already-merged code or newer decisions before closing as superseded. Do not merge historical branches blindly.
+- **Closed as superseded (unmerged, 2026-10-26):** [#159](https://github.com/sjevans1/Workspace-Platform/pull/159) (W18 device-local recovery, replaced by merged #162); [#134](https://github.com/sjevans1/Workspace-Platform/pull/134) (retired agent bridge settings, removed in this handover); [#118](https://github.com/sjevans1/Workspace-Platform/pull/118) (older project/handoff text, replaced here); and [#220](https://github.com/sjevans1/Workspace-Platform/pull/220) (planning superseded by merged #221). Their branches may be removed once repository-level rules permit and any branch-specific deployment references are checked; do not merge these outdated proposals.
+
+## Branch hygiene after handover
+
+- The 27 confirmed-merged historical branches were deleted by the repository owner before this revision; a fresh repository check found 15 total branches remaining.
+- Retain `main`, the unmerged handover PR branch until merged, active W29 #235, infrastructure/CI proposals #190/#237/#238, and separately review governance #236.
+- Retain the closed-but-unmerged OIDC provenance branch from #42 until its session-state constraints and later migrations are reconciled by the identity owner; older branch PRs #140/#141/#207 may be archived once their changes are confirmed superseded and no ref is consumed externally.
+- Git branch deletion rules remain owner-managed; never force-delete or rewrite history to bypass them.
 
 ## Non-negotiable boundaries
 
