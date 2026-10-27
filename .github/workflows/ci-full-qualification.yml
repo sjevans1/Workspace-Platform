@@ -1,4 +1,4 @@
-# Authenticated CI tier identity for framework v1.8.3+.
+# Explicit GitHub Actions identity for independent FULL qualification.
 # Manually dispatch on the frozen candidate ref; no automatic duplicate FULL runs.
 name: Workspace FULL qualification
 on:
