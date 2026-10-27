@@ -2,7 +2,7 @@
 # broke fresh clones, because `node_modules/` matches a directory only. This
 # pattern matches the directory and any file/symlink of the same name.
 node_modules
-.next/
+.next
 .env
 .env.*
 !.env.example

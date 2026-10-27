@@ -1,4 +1,4 @@
-# Hermes Keycloak back-channel logout acceptance
+# Keycloak back-channel logout acceptance
 
 ## Final status — CLOSED
 
@@ -38,7 +38,7 @@ Runtime implementation under test:
 Read first:
 
 - `docs/IDENTITY.md`
-- `docs/HERMES_KEYCLOAK_ACCEPTANCE.md`
+- `docs/KEYCLOAK_OIDC_HOST_ACCEPTANCE.md`
 - `docs/BUILD_CHECKPOINT.md`
 
 ## Status of the first host execution
@@ -120,7 +120,7 @@ The source and recovery projects must remain untouched:
 - `openjm_workspace_source`
 - `openjm_workspace_recovery`
 
-If the disposable SSO/Keycloak environment no longer exists, reconstruct only that environment according to `docs/HERMES_KEYCLOAK_ACCEPTANCE.md`. Do not reuse source/recovery volumes.
+If the disposable SSO/Keycloak environment no longer exists, reconstruct only that environment according to `docs/KEYCLOAK_OIDC_HOST_ACCEPTANCE.md`. Do not reuse source/recovery volumes.
 
 ## Safety
 

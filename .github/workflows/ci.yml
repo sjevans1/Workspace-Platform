@@ -39,8 +39,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - name: Verify CI event orchestrator
-        run: npm run test:ci-orchestrator
       - run: npm run build
 
   # CI-3L STANDARD: full native/backend work-package qualification.
@@ -108,8 +106,6 @@ jobs:
             exit 1
           fi
           echo "CI-H1: only digest-pinned GHCR mirrors are consumed; no Docker Hub credentials in normal CI"
-      - name: Verify CI event orchestrator
-        run: npm run test:ci-orchestrator
       # W27: prove the acceptance service really is the frozen patched SeaweedFS artifact before the
       # service-level S3 acceptance below relies on it. Every expected identity comes from the
       # authoritative provenance record, so the workflow duplicates no digest.

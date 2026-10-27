@@ -114,6 +114,3 @@ Stop and report rather than weakening the test if:
 
 GitHub Actions runs this same harness against two pre-created disposable SeaweedFS buckets. That validates the harness and storage contract continuously, but **does not count as acceptance of the selected production provider**. The production-provider item closes only after this procedure passes against that provider.
 
-## Hermes handoff prompt
-
-> Execute `docs/PRODUCTION_S3_ACCEPTANCE.md` against the selected OpenJM Workspace S3-compatible provider using two dedicated pre-created acceptance buckets and a disposable PostgreSQL server. Do not create or delete buckets, do not use production/customer data, do not print secrets, and do not weaken TLS or immutable-write checks. Record the exact Workspace SHA and return PASS / FAIL with only non-secret evidence. If any safety stop condition is reached, stop the affected step and report it instead of bypassing the check.

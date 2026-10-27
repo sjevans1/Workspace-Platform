@@ -1,9 +1,11 @@
 # Workspace 1.0 — final release gates
 
+> **Handover note (2026-10-26):** This is the release acceptance contract, not a statement that W29, W30, the manual NVDA gate or W31 are finished. See [TEAM_HANDOVER.md](TEAM_HANDOVER.md) for the verified branch/PR snapshot.
+
 **Authoritative checkpoint:** 2026-10-12 — scope rebaseline  
 **Accepted baseline main:** `d9f269e864ab217aca9fde910dfe1fabf3b53b65`
 
-This file is the concise release-state source of truth after Shane explicitly promoted the previously discussed Connected Work and deterministic automation capabilities into the Workspace 1.0 build. Older statements that W29/W30 are post-1.0 are historical and no longer authoritative.
+This file is the concise release-state source of truth after the product owner promoted the previously discussed Connected Work and deterministic automation capabilities into the Workspace 1.0 build. Older statements that W29/W30 are post-1.0 are historical and no longer authoritative.
 
 ## Accepted baseline
 
@@ -39,7 +41,7 @@ First-class governed optional integrations:
 - explicit or policy-approved outbound calendar/email actions;
 - Workspace remains fully functional with all connectors disabled.
 
-Later WhatsApp/Telegram/Discord/standards-based adapters may reuse the contract but are not silently required for W29 closure unless separately promoted.
+Later Telegram/Discord/standards-based adapters may reuse the contract but are not silently required for W29 closure unless separately promoted.
 
 ### W30 — Native deterministic workflows (#216)
 
@@ -76,7 +78,7 @@ After W29, W30 and final NVDA:
 - trusted HTTPS/Secure cookies/WSS;
 - final accessibility/browser/visual/capacity acceptance;
 - changelog/support matrix/runbooks/license/source package;
-- explicit Shane release approval;
+- explicit product-owner release approval;
 - post-merge main verification;
 - Workspace 1.0 tag and handover.
 

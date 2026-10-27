@@ -1,6 +1,6 @@
-# First independent WSL host acceptance — completed except TLS
+# Independent WSL host acceptance — reported results
 
-Final Hermes report received 30 September 2026. This is **Hermes-reported host evidence** from the user's WSL2 workstation, not a second reproduction by the primary engineering environment.
+Host-test operator's report received 30 September 2026. This is **Operator-reported host evidence** from a WSL2 evaluation workstation, not independently reproduced for this handover.
 
 - Tested application commit: `b392f4113099788816250b3ee7e3a1d9573f1d9d`.
 - Host: Ubuntu 24.04 / WSL2, kernel 6.6.87.2-microsoft-standard-WSL2.
@@ -12,7 +12,7 @@ Final Hermes report received 30 September 2026. This is **Hermes-reported host e
 - Recovery used distinct host ports 8081/8444.
 - Source logical backup was reported at approximately 50 KiB. Backup contents and credentials must remain private and must never be committed to this public repository.
 
-## Hermes-reported phase outcomes
+## Operator-reported phase outcomes
 
 | Phase | Outcome |
 |---|---|
@@ -34,7 +34,7 @@ This is classified as a deployment-configuration issue rather than an applicatio
 
 ## What this independently establishes
 
-For the tested WSL2 host and tested application commit, Hermes reported successful:
+For the tested WSL2 host and tested application commit, The operator reported successful:
 
 - fresh Docker Compose installation;
 - service health/readiness;
