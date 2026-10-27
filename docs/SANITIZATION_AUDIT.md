@@ -4,10 +4,10 @@
 
 ## Included in this PR
 
-- Replace initial developer-origin README and stale alpha "latest CI" claim with current team entrypoints and a measured release-status boundary.
+- Replace obsolete README onboarding text and stale alpha "latest CI" claim with current team entrypoints and a measured release-status boundary.
 - Replace obsolete chronological build handoff with a neutral acceptance/evidence index; update old acceptance claims that otherwise masquerade as the latest state.
-- Rename host/SSO validation runbooks as neutral engineering procedures and remove legacy agent-invocation instructions, including the production object-store acceptance footer.
-- Remove the retired event-driven development-agent bridge and its dedicated tests/templates; remove its CI test calls and npm script. Production product workers, connectors, workflows, queues and webhook handling are **not** removed.
+- Rename host/SSO validation runbooks as neutral engineering procedures and remove obsolete maintainer-execution instructions, including the production object-store acceptance footer.
+- Remove the retired event-driven CI orchestration utility and its dedicated tests/templates; remove its CI test calls and npm script. Production product workers, connectors, workflows, queues and webhook handling are **not** removed.
 - Remove the tracked developer-local `.next` symlink (absolute host path) and ignore both file/symlink and directory forms.
 - Retain third-party licenses, SBOM, RLS/security/operations runbooks and original technical evidence references.
 - Preserve product runtime, issues, deployment configuration and release-approval gates. The separate draft PR #236 was closed without merge, and the proposed CI documentation in #238 and descriptions for #237/#238 were made tool-neutral; no CI changes from those PRs are on `main`.
@@ -22,7 +22,7 @@
 - Diff: check deleted files are exclusively retired tooling and renamed historical runbooks, not product services.
 - Static: `npm run typecheck`, `npm test`, `npm run build`, current FAST CI; verify no code imports the retired bridge.
 - Repository: `git ls-files .next tools/ci-orchestrator docs/CI_EVENT_ORCHESTRATION.md` should return no tracked files after this PR; `git check-ignore .next node_modules` should match both.
-- Docs: ensure README/runbook relative links resolve and the new handover/README contain no user-specific credentials, private URLs or agent invocation instructions.
+- Docs: ensure README/runbook relative links resolve and the new handover/README contain no user-specific credentials, private URLs or obsolete internal workflow instructions.
 - Future real-provider activation still requires deployment-scoped egress #234 and the correct release qualification.
 
 ## Limitations and explicit exclusions
