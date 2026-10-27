@@ -300,7 +300,7 @@ Keep PostgreSQL and the object volume on reliable storage, monitor capacity and 
 
 ## Real-host acceptance
 
-For a bounded disposable-host validation outside CI, including WSL/Linux restart persistence, TLS/LAN behavior, migration checksum verification, backup and recovery into a separate target, follow [the Hermes real-host acceptance runbook](HERMES_HOST_ACCEPTANCE.md). The runbook explicitly prohibits destructive testing against the source deployment or production data.
+For a bounded disposable-host validation outside CI, including WSL/Linux restart persistence, TLS/LAN behavior, migration checksum verification, backup and recovery into a separate target, follow [the independent real-host acceptance runbook](HOST_DEPLOYMENT_ACCEPTANCE.md). The runbook explicitly prohibits destructive testing against the source deployment or production data.
 
 ## Repeat the S3 recovery check
 
