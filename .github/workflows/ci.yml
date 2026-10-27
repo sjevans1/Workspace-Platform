@@ -28,6 +28,16 @@ on:
       - 'docs/**/POLICY*.md'
       - 'docs/**/SECURITY*.md'
       - 'SECURITY.md'
+  # Reusable entrypoint for separately identified qualification runs.
+  workflow_call:
+    inputs:
+      suite:
+        required: true
+        type: string
+      update_visual_baselines:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       suite:
@@ -71,7 +81,7 @@ jobs:
   # CI-3L STANDARD: full native/backend work-package qualification.
   # Runs on main after merge and when explicitly dispatched as standard/full.
   backend:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
+    if: ${{ github.event_name == 'push' || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -175,7 +185,7 @@ jobs:
   # CI-3L FULL: expensive frozen-candidate release/deployment acceptance.
   # Never runs automatically for ordinary pull-request iterations or main pushes.
   deployment:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.suite == 'full' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.suite == 'full' }}
     runs-on: ubuntu-latest
     # The deployed acceptance job now hosts the whole-stack W24 qualification in
     # addition to deployment, the browser workflow, the Wave R harness, the
@@ -445,7 +455,7 @@ jobs:
       # It is also the first authenticated step, so the sign-in budget is
       # untouched.
       - name: Regenerate visual baselines (manual dispatch only)
-        if: github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines
+        if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.update_visual_baselines
         env:
           E2E_BASE_URL: http://localhost:8080
         run: |
@@ -456,12 +466,12 @@ jobs:
           # cannot overwrite a real baseline.
           npx playwright test --config=playwright.visual.config.ts --grep-invert "@canary" --update-snapshots
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines
+        if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.update_visual_baselines
         with:
           name: visual-baselines
           path: e2e/visual.spec.ts-snapshots
       - name: Verify visual regression against committed baselines
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.update_visual_baselines) }}
+        if: ${{ !((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.update_visual_baselines) }}
         env:
           E2E_BASE_URL: http://localhost:8080
         run: |

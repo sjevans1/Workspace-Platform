@@ -1,0 +1,14 @@
+# Explicit GitHub Actions identity for independent FULL qualification.
+# Manually dispatch on the frozen candidate ref; no automatic duplicate FULL runs.
+name: Workspace FULL qualification
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      suite: full

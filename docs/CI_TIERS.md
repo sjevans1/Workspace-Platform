@@ -46,3 +46,22 @@ A normal push to `main` runs FAST + STANDARD. Do not automatically repeat FULL m
 While FULL is running, one explicitly authorized independent next package may proceed in a separate worktree/branch from the correct accepted base. Dependent work waits for the merge. Never mutate the frozen acceptance branch.
 
 No security, resilience, capacity, accessibility, deployment or recovery gate has been removed; CI-3L changes **when** the expensive tier runs, not what FULL proves.
+
+## Separate CI qualification workflows (proposed)
+
+This proposal gives GitHub Actions an explicitly named workflow for each acceptance tier. **Nothing in this section is active on `main` until its PR is reviewed and merged.**
+
+| Tier | GitHub Actions workflow name | Trigger |
+| --- | --- | --- |
+| FAST | `Workspace verification` | Automatic pull request verification |
+| STANDARD | `Workspace STANDARD qualification` | Manual dispatch at the reviewed candidate ref |
+| FULL | `Workspace FULL qualification` | Manual dispatch at the frozen candidate ref, after independent acceptance and required security review |
+| Docs-only | `Documentation checks` | Automatic only for qualifying Markdown-only pull requests |
+
+STANDARD and FULL reuse the existing CI workflow with GitHub `workflow_call` and must preserve the existing security, accessibility, offline, browser, deployment and recovery checks. A green FAST run never substitutes for a required STANDARD or FULL gate.
+
+Before adopting the wrappers, verify GitHub's observed workflow names, job identities, suite inputs, dispatch refs and exact-head results. An unverified job name, missing suite identity, skipped required job or SHA mismatch blocks qualification. The original single-workflow manual dispatch remains available for troubleshooting but cannot be misrepresented as a separate qualification workflow.
+
+Docs-only verification requires an exact-head diff containing only Markdown files (`.md` and `.mdx`). Changes to `.github/workflows/`, scripts, application code, configuration, dependencies or security policy always require the normal CI lane. The docs workflow validates UTF-8, conflict markers and whitespace. All merges still require authorized human review.
+
+These workflows change **how acceptance evidence is identified**, not application behavior, reviewer independence, release authority or the required test coverage.
