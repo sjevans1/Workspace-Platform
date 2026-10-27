@@ -1,7 +1,6 @@
 {
   "schemaVersion": "1.0.0",
   "document": "W27 patched-upstream image provenance",
-  "generatedBy": "Hermes (Workspace W27 PR #214)",
   "qualificationDate": "2026-10-12",
   "publicationRun": "38267553760",
   "note": "Patched-upstream rebuilds. These are NOT mirrors and must never be treated as mirror provenance; ci/ghcr-mirror-manifest.json remains the record of byte-for-byte upstream mirrors.",
