@@ -47,21 +47,21 @@ While FULL is running, one explicitly authorized independent next package may pr
 
 No security, resilience, capacity, accessibility, deployment or recovery gate has been removed; CI-3L changes **when** the expensive tier runs, not what FULL proves.
 
-## Identifiable workflow runs for the Framework controller (staged)
+## Separate CI qualification workflows (proposed)
 
-This repository retains its original `Workspace verification` FAST workflow and CI-3L job coverage. For **new owner-authorized work packages** under the risk-qualified Hermes controller, use these distinct workflow identities for the two higher tiers:
+This proposal gives GitHub Actions an explicitly named workflow for each acceptance tier. **Nothing in this section is active on `main` until its PR is reviewed and merged.**
 
-| Tier | GitHub Actions workflow name | Dispatch |
+| Tier | GitHub Actions workflow name | Trigger |
 | --- | --- | --- |
-| FAST | `Workspace verification` | Automatic PR run (or the existing FAST dispatch) |
-| STANDARD | `Workspace STANDARD qualification` | Manual workflow dispatch at the reviewed candidate ref |
-| FULL | `Workspace FULL qualification` | Manual workflow dispatch at the frozen candidate ref **after** independent Haiku acceptance and fresh Luna review |
-| Docs-only | `Documentation checks` | Automatic for Markdown-only PRs; no package build, STANDARD or FULL |
+| FAST | `Workspace verification` | Automatic pull request verification |
+| STANDARD | `Workspace STANDARD qualification` | Manual dispatch at the reviewed candidate ref |
+| FULL | `Workspace FULL qualification` | Manual dispatch at the frozen candidate ref, after independent acceptance and required security review |
+| Docs-only | `Documentation checks` | Automatic only for qualifying Markdown-only pull requests |
 
-The STANDARD and FULL entrypoints reuse the existing CI implementation via GitHub `workflow_call`; they do not duplicate or relax the application, security, build, deployment or offline jobs. The older single-workflow dispatch remains available for legacy/manual troubleshooting but **must not be claimed as an independently identified STANDARD/FULL run** by the new controller.
+STANDARD and FULL reuse the existing CI workflow with GitHub `workflow_call` and must preserve the existing security, accessibility, offline, browser, deployment and recovery checks. A green FAST run never substitutes for a required STANDARD or FULL gate.
 
-The controller's `ci_workflows` values must match the actual GitHub `workflowName`. Its per-tier `ci_tiers` job-name manifests must be captured from a real successful run of each wrapper because reusable job names may have a qualified prefix. An unverified job name, dispatch context, missing suite identity or mismatched SHA blocks activation.
+Before adopting the wrappers, verify GitHub's observed workflow names, job identities, suite inputs, dispatch refs and exact-head results. An unverified job name, missing suite identity, skipped required job or SHA mismatch blocks qualification. The original single-workflow manual dispatch remains available for troubleshooting but cannot be misrepresented as a separate qualification workflow.
 
-Docs-only qualification is permitted only for an exact-head GitHub diff consisting entirely of literal Markdown files (`.md`/`.mdx`), with verified independent Haiku/Luna stages and a human merge decision. Changes to `framework.lock`, `.github/workflows/`, scripts, application code or security configuration cannot claim docs-only. The dedicated documentation workflow checks UTF-8, conflict markers and diff whitespace. Non-Markdown changes continue to run the main CI.
+Docs-only verification requires an exact-head diff containing only Markdown files (`.md` and `.mdx`). Changes to `.github/workflows/`, scripts, application code, configuration, dependencies or security policy always require the normal CI lane. The docs workflow validates UTF-8, conflict markers and whitespace. All merges still require authorized human review.
 
-**Important:** These entries introduce a CI transport compatible with future controller activation; they do not activate or re-admit currently running Hermes work packages, alter a reserved correction allowance, change model routing or authorize a merge. See [framework adoption](FRAMEWORK_ADOPTION.md).
+These workflows change **how acceptance evidence is identified**, not application behavior, reviewer independence, release authority or the required test coverage.
