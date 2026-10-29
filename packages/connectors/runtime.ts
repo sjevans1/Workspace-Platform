@@ -379,6 +379,13 @@ export async function connectConnection(
     "A revoked connection cannot be reconnected",
   );
   const definition = providerDefinition(row.provider_key);
+  // W29-P0/A3: an OAuth provider is authorized through its provider, never by
+  // pasting a secret into this route. The two paths must not be interchangeable.
+  assert(
+    !definition.auth_modes.some((mode) => mode.startsWith("oauth2")),
+    409,
+    "This provider is authorized with the provider, not with a pasted secret",
+  );
   const kind = definition.credential_kinds[0];
   const secret = String(input.secret || "");
   assert(

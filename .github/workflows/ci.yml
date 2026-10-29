@@ -421,6 +421,10 @@ jobs:
           E2E_BASE_URL: http://localhost:8080
         run: |
           export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
+              # W29-P0/A3: the deterministic acceptance OAuth provider is enabled for the
+              # disposable acceptance API/worker services only. Production refuses it.
+              CONNECTOR_OAUTH_TEST_PROVIDER=1
+              APP_URL=http://localhost:8080
           # Explicit, human-triggered baseline update. A normal CI run never
           # updates baselines; the regenerated files are uploaded for review and
           # commit (see docs/VISUAL_REGRESSION.md). The canary is excluded so it
@@ -612,6 +616,10 @@ jobs:
       - name: Verify Connected Work and Automations browser workflow
         env:
           E2E_BASE_URL: http://localhost:8080
+          # W29-P0/A3: the deterministic OAuth acceptance provider is enabled for the
+          # acceptance deployment only. It is refused in production mode.
+          CONNECTOR_OAUTH_TEST_PROVIDER: "1"
+          APP_URL: http://localhost:8080
         run: |
           export E2E_SETUP_TOKEN="$(sed -n 's/^SETUP_TOKEN=//p' .env)"
           # W29-A/W30-A: the Connected Work browser lane is a BLOCKING gate on the

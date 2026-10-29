@@ -200,6 +200,17 @@ export default function Workspace() {
       el.href = brand.favicon;
     }
   }, [brand, resolvedTheme]);
+  // W29-P0/A3: a provider callback lands on a clean application URL carrying only an
+  // outcome marker. The user returns to the Connections surface that explains it,
+  // rather than to Home with the result nowhere in sight.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("oauth")) return;
+    // The outcome marker stays in the address until the Connections surface has read
+    // it (that surface owns the cleanup), so the Settings tab can also see it.
+    setScreen("settings");
+  }, []);
+
   const navigate = (s: string) => {
     setScreen(s);
     setCurrent("");
